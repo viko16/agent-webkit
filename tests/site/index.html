@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Agent WebKit Fixture</title>
+<style>
+body{font:18px system-ui;margin:48px;background:#f4f7fc;color:#18304e}
+main{max-width:650px;padding:32px;background:white;border-radius:16px;border:1px solid #ccd8eb}
+input,button{font:inherit;padding:10px;margin:10px 0} input{display:block}
+output{display:block;padding:20px;background:#dcefe2;border-radius:8px}
+</style>
+<main><h1>Agent WebKit Fixture</h1><p>Independent sessions · DOM synthetic input</p>
+<label for="message">Message</label><input id="message" placeholder="Type a message">
+<button id="save">Save message</button><output id="result">Ready</output>
+<p id="route">Peer: __PEER_PORT__</p></main>
+<script>
+window.fixturePeerPort=__PEER_PORT__;
+window.fixtureNonce='__FIXTURE_NONCE__';
+window.lastTrusted=null;
+document.querySelector('#save').addEventListener('click',e=>{
+  window.lastTrusted=e.isTrusted;
+  document.querySelector('#result').textContent=document.querySelector('#message').value;
+});
+setTimeout(()=>{const el=document.createElement('p');el.id='later';el.textContent='Delayed element';document.querySelector('main').append(el)},250);
+</script></html>
