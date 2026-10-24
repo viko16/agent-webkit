@@ -11,6 +11,7 @@ import time
 from fixtures import origin
 from popup_cases import verify_popups
 from context_cases import verify_contexts
+from wait_cases import verify_waits
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -109,6 +110,7 @@ def main():
             return cli(*args, error=code)['error']
         checks.append(verify_popups(popup_cli, base, lambda: (stop(), start())))
         checks.append(verify_contexts(cli, base))
+        checks.append(verify_waits(cli, base))
         # Raw IPC gets the same validation as the CLI parser.
         with socket.socket(socket.AF_UNIX) as client:
             client.connect(str(state / 'browser.sock'))

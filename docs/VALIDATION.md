@@ -1,5 +1,11 @@
 # 实际验收记录
 
+## Issue #1：P1 操作结果等待（2026-10-24）
+
+`zsh scripts/build.sh` 和 `python3 tests/reliability.py` 通过：[报告](../.artifacts/reliability-20261024-191126/report.json)。新增 URL 精确匹配、文本子串、六类 DOM 状态等待，覆盖延迟完成、SPA/完整导航、缺失/隐藏/多匹配/过期引用、frame/shadow 作用域和参数冲突。原有 bridge、弹窗、作用域、死循环与 Promise 恢复、持久化、清理和 16 项计时均通过。
+
+等待只验证指定页面条件，不证明业务成功；URL 匹配不等于文档加载完成。此批尚未完成 React/Vue 表单实测，Issue 的复杂表单整项保持未勾选。
+
 ## Issue #1：P1 首批与最终回归（2026-10-24）
 
 本轮在原有 Swift/AppKit/WKWebView、CLI + Unix Socket 架构内完成三项 P0 的实现，并推进 P1 的开放 Shadow DOM / 同源 iframe 支持；真实 OS 代理切换仍保留为未完成验收。以下为最终源码的运行记录，旧章节的能力限制以本节及 P0 各节更新为准。

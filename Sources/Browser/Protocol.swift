@@ -35,6 +35,19 @@ struct Request: Codable {
             throw BrowserError("invalid_arguments", "--wait-for-navigation 与 --wait-for-popup 不能同时使用")
         }
         if command == "evaluate" { allowed.insert("await") }
+        if command == "wait" {
+            allowed.formUnion(["url", "text", "state"])
+            let conditions = ["url", "text", "state"].filter { options[$0] != nil }
+            guard conditions.count <= 1,
+                  options["url"] == nil || args.isEmpty,
+                  options["state"] == nil || !args.isEmpty,
+                  options["url"] != "", options["text"] != "" else {
+                throw BrowserError("invalid_arguments", "wait 的 --url / --text / --state 只能选一个；--url 不带选择器，--state 需要选择器，URL 和文本不能为空")
+            }
+            if let state = options["state"], !["visible", "hidden", "attached", "detached", "enabled", "disabled"].contains(state) {
+                throw BrowserError("invalid_arguments", "wait --state 支持 visible、hidden、attached、detached、enabled、disabled")
+            }
+        }
         if command == "screenshot" { allowed.insert("out") }
         if let key = options.keys.sorted().first(where: { !allowed.contains($0) }) {
             throw BrowserError("invalid_arguments", "\(command) 不支持 --\(key)")
@@ -74,7 +87,7 @@ struct Options {
         var options: [String: String] = [:]
         var i = 0
         var literal = false
-        let allowed = Set(["space", "tab", "proxy", "ca-cert", "out", "timeout", "socket", "data-dir"])
+        let allowed = Set(["space", "tab", "proxy", "ca-cert", "out", "timeout", "socket", "data-dir", "url", "text", "state"])
         while i < arguments.count {
             let arg = arguments[i]
             if arg == "--", !literal { literal = true; i += 1; continue }
@@ -124,6 +137,9 @@ browser fill SELECTOR_OR_REF VALUE --space NAME_OR_ID [--tab ID]
 browser evaluate JAVASCRIPT --space NAME_OR_ID [--tab ID] [--await] [--timeout 15000]
 browser screenshot --space NAME_OR_ID [--tab ID] --out PATH
 browser wait [SELECTOR_OR_REF] --space NAME_OR_ID [--tab ID] [--timeout 15000]
+browser wait --url EXACT_URL --space NAME_OR_ID
+browser wait [SELECTOR_OR_REF] --text TEXT --space NAME_OR_ID
+browser wait SELECTOR_OR_REF --state visible|hidden|attached|detached|enabled|disabled --space NAME_OR_ID
 所有命令支持 --socket PATH。页面命令必须指定 Space；默认标签页固定，与 GUI 无关。
 WebKit 操作支持 --timeout 1–60000；--await 等待 Promise；-- 后的参数按字面值处理。
 browser --help | --version 无需启动服务。reload 恢复异常页面，保留 Tab ID 和 Space 网站数据。

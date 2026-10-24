@@ -9,6 +9,12 @@ python3 tests/reliability.py  # 独立应用、本地页面、超时恢复和计
 
 Swift Package 无第三方包。`scripts/build.sh` 生成 `.build/Agent WebKit.app`，包含固定 Bundle ID、原生绘制的图标和允许 Web 内容联网的 ATS 配置。签名仅供本机开发，不包含公证或分发证书。测试使用 `.build/debug/browser` 作客户端，使用应用包中的 `browser daemon` 启动服务；测试前至少构建一次 debug，并确保客户端与应用包来自相同源码。`scripts/make_icon.swift` 以 AppKit 绘制各尺寸图标，再由系统 iconutil 打包，不需要图片生成服务或外部依赖。
 
+## 操作结果等待
+
+`wait` 的 `--url`、`--text`、`--state` 互斥，CLI 和原始 IPC 均校验。URL 精确匹配 `location.href`，包括 SPA history/hash；它不保证文档已加载，也不代表服务器完成业务。文本为可见目标的 `innerText` 子串，不带选择器时只查主 frame 的 body。元素状态沿用唯一选择器、`>>>` 和引用作用域：hidden 包含节点不存在，attached/detached 只判断是否存在；enabled/disabled 要求元素可见，并检查原生禁用及 `aria-disabled`，readOnly 不算 disabled。过期引用始终报 `stale_ref`，要等节点被删除应使用选择器。
+
+所有等待都在原有命令期限内轮询，不重复 click/fill；输入和点击仍返回 `businessOutcomeVerified: false`。用业务结果文本或 URL 独立核对结果，不能把 DOM 操作成功当成提交成功。`tests/wait_cases.py` 随可靠性套件验证延迟状态变化、SPA/完整导航、作用域、失败与超时。
+
 ## 复现域名代理路径
 
 默认的 `python3 tests/acceptance.py` 会使用本机已安装的 `whistle` / `w2`，在 8899 启动前台测试实例。规则通过 `--shadowRules` 传入，`--baseDir` / `--storage` 隔离测试数据，`--certDir` 指向临时 CA；不运行 `w2 proxy`、`w2 ca` 或 `--init`。其中 `--baseDir` 只隔离规则等数据，不隔离 Whistle 默认 CA，所以测试还显式提供临时证书目录。已有实例占用端口时不会覆盖或停止它。

@@ -61,11 +61,19 @@ enum DOM {
         if(el.shadowRoot) return el.shadowRoot;
         throw new Error('unsupported_context: closed or absent shadow root');
       }
-      function exists(target) {
-        if (target.startsWith('@')) return visible(resolve(target));
-        const matches = query(target);
+      function matchesCondition(target,state,text) {
+        const matches = target===null ? (document.body?[document.body]:[]) : target.startsWith('@') ? [resolve(target)] : query(target);
         if (matches.length > 1) throw new Error(`selector_count: expected 1, found ${matches.length}`);
-        return matches.length === 1 && visible(matches[0]);
+        const el=matches[0];
+        if(text!==null) return Boolean(el && visible(el) && (el.innerText||'').includes(text));
+        if(state==='attached') return Boolean(el);
+        if(state==='detached') return !el;
+        if(state==='hidden') return !el || !visible(el);
+        if(!el || !visible(el)) return false;
+        const disabled=el.matches(':disabled') || el.getAttribute('aria-disabled')==='true';
+        if(state==='disabled') return disabled;
+        if(state==='enabled') return !disabled;
+        return true;
       }
       function visible(el) {
         const r=el.getBoundingClientRect(), s=el.ownerDocument.defaultView.getComputedStyle(el);
@@ -136,7 +144,7 @@ enum DOM {
         }
         return {method:'dom',nativeVerified:false,businessOutcomeVerified:false,requiresForeground:false,target};
       }
-      window.__agentWebKit={snapshot,resolve,act,visible,exists};
+      window.__agentWebKit={snapshot,resolve,act,visible,matchesCondition};
     })();
     """#
 }

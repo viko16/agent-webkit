@@ -261,13 +261,17 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         throw BrowserError("popup_not_opened", "期限内未观察到新 Tab；DOM 合成点击不是可信用户激活，网站或 WebKit 可能拒绝弹窗。请核对页面状态，必要时手动点击；不会自动重试")
     }
 
-    func wait(selector: String?, timeout: Int) async throws {
+    func wait(selector: String?, timeout: Int, state: String = "visible", text: String? = nil, url: String? = nil) async throws {
         let start = monotonicNow()
         repeat {
             if let navigationError { throw navigationError }
             if let certificateError { throw certificateError }
-            if let selector {
-                let script = "Boolean(window.__agentWebKit && window.__agentWebKit.exists(\(try quoteJS(selector))))"
+            if let url {
+                if (try await runJS("location.href === \(try quoteJS(url))", world: DOM.world) as? Bool) == true { return }
+            } else if selector != nil || text != nil {
+                let target = try selector.map { try quoteJS($0) } ?? "null"
+                let expected = try text.map { try quoteJS($0) } ?? "null"
+                let script = "Boolean(window.__agentWebKit && window.__agentWebKit.matchesCondition(\(target),\(try quoteJS(state)),\(expected)))"
                 if (try await runJS(script, world: DOM.world) as? Bool) == true { return }
             } else if !webView.isLoading, !navigationPending, navigationSequence == completedNavigationSequence,
                       (try await runJS("document.readyState", world: DOM.world) as? String) == "complete" {
@@ -277,7 +281,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
             }
             try await Task.sleep(nanoseconds: 50_000_000)
         } while milliseconds(from: start) < Double(timeout)
-        throw BrowserError("timeout", "等待\(selector ?? "页面加载")超时（\(timeout) ms）")
+        throw BrowserError("timeout", "等待页面条件超时（\(timeout) ms）")
     }
 
     func screenshot(path: String) async throws -> [String: Any] {
@@ -752,7 +756,8 @@ final class BrowserModel {
                 var action = value as? [String: Any] ?? [:]
                 action["newTabId"] = popupID; value = action
             }
-        case "wait": try await tab.wait(selector: r.args.first, timeout: timeout)
+        case "wait":
+            try await tab.wait(selector: r.args.first, timeout: timeout, state: r.options["state"] ?? "visible", text: r.options["text"], url: r.options["url"])
         case "screenshot":
             guard let path = r.options["out"] else { throw BrowserError("invalid_arguments", "截图需要 --out PATH") }
             value = try await tab.screenshot(path: path)
