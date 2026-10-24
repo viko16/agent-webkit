@@ -70,6 +70,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     private var navigationSpans: [ObjectIdentifier: NavigationSpan] = [:]
     private(set) var navigationSequence = 0
     private var completedNavigationSequence = 0
+    private var navigationPending = false
 
     init(record: TabRecord, store: WKWebsiteDataStore, tls: TLSConfiguration?, configuration supplied: WKWebViewConfiguration? = nil) {
         id = record.id
@@ -99,7 +100,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
             },
             webView.observe(\.url) { [weak self] _, _ in
                 Task { @MainActor in
-                    guard let self, !self.webView.isLoading,
+                    guard let self, !self.webView.isLoading, !self.navigationPending,
                           self.navigationSequence == self.completedNavigationSequence,
                           let url = self.webView.url else { return }
                     self.persistedURL = url.absoluteString
@@ -207,6 +208,9 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     func load(_ url: URL) {
         persistedURL = url.absoluteString
         navigationError = nil; lastNavigationRejection = nil; certificateError = nil; tlsChallenge = [:]; terminated = false
+        // A repeated failed load can return nil and still deliver a terminal delegate callback.
+        // Never treat the previous document's readyState as completion of this request.
+        navigationPending = true
         let start = monotonicNow()
         if let navigation = webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)) {
             trackNavigation(navigation, start: start)
@@ -222,10 +226,16 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
             token: operationTiming?.begin("navigation", from: start), sequence: navigationSequence)
     }
 
-    private func finishNavigation(_ navigation: WKNavigation?) {
-        guard let navigation, let span = navigationSpans.removeValue(forKey: ObjectIdentifier(navigation)) else { return }
-        if let token = span.token { span.timing?.finish(token) }
-        completedNavigationSequence = max(completedNavigationSequence, span.sequence)
+    @discardableResult
+    private func finishNavigation(_ navigation: WKNavigation?) -> Bool {
+        let span = navigation.flatMap { navigationSpans.removeValue(forKey: ObjectIdentifier($0)) }
+        if let token = span?.token { span?.timing?.finish(token) }
+        let latest = span.map { $0.sequence == navigationSequence } ?? navigationPending
+        if latest {
+            completedNavigationSequence = navigationSequence
+            navigationPending = false
+        }
+        return latest
     }
 
     func waitForNavigation(after sequence: Int, timeout: Int) async throws {
@@ -234,7 +244,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
             if terminated { throw BrowserError("web_content_terminated", "WebContent 进程已退出，请 reload") }
             if let navigationError { throw navigationError }
             if let lastNavigationRejection { throw lastNavigationRejection }
-            if navigationSequence > sequence, completedNavigationSequence == navigationSequence { return }
+            if navigationSequence > sequence, !navigationPending, completedNavigationSequence == navigationSequence { return }
             try await Task.sleep(nanoseconds: 50_000_000)
         } while milliseconds(from: start) < Double(timeout) && (deadline.map { monotonicNow() < $0 } ?? true)
         throw BrowserError("timeout", "点击后等待新导航完成超时（\(timeout) ms）；同页锚点或 SPA 跳转不会触发完整导航")
@@ -255,13 +265,15 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         let start = monotonicNow()
         repeat {
             if let navigationError { throw navigationError }
+            if let certificateError { throw certificateError }
             if let selector {
                 let script = "Boolean(window.__agentWebKit && window.__agentWebKit.exists(\(try quoteJS(selector))))"
                 if (try await runJS(script, world: DOM.world) as? Bool) == true { return }
-            } else if !webView.isLoading, navigationSequence == completedNavigationSequence,
+            } else if !webView.isLoading, !navigationPending, navigationSequence == completedNavigationSequence,
                       (try await runJS("document.readyState", world: DOM.world) as? String) == "complete" {
                 if let navigationError { throw navigationError }
-                if !webView.isLoading, navigationSequence == completedNavigationSequence { return }
+                if let certificateError { throw certificateError }
+                if !webView.isLoading, !navigationPending, navigationSequence == completedNavigationSequence { return }
             }
             try await Task.sleep(nanoseconds: 50_000_000)
         } while milliseconds(from: start) < Double(timeout)
@@ -290,6 +302,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         navigationError = nil
         certificateError = nil
+        navigationPending = true
         if let navigation { trackNavigation(navigation, start: monotonicNow()) }
         changed?()
     }
@@ -298,8 +311,8 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         changed?()
     }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        if let url = webView.url { persistedURL = url.absoluteString }
-        finishNavigation(navigation); changed?()
+        if finishNavigation(navigation), let url = webView.url { persistedURL = url.absoluteString }
+        changed?()
     }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         failNavigation(navigation, error: error)
@@ -308,8 +321,10 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         failNavigation(navigation, error: error)
     }
     private func failNavigation(_ navigation: WKNavigation?, error: Error) {
-        let latest = navigation.flatMap { navigationSpans[ObjectIdentifier($0)] }?.sequence == navigationSequence
-        finishNavigation(navigation)
+        // Unknown cancelled callbacks may belong to a superseded navigation.
+        if navigation.flatMap({ navigationSpans[ObjectIdentifier($0)] }) == nil,
+           (error as NSError).domain == NSURLErrorDomain, (error as NSError).code == NSURLErrorCancelled { return }
+        let latest = finishNavigation(navigation)
         // A replacement load cancels the previous request. Its late failure must not poison the new one.
         if latest { navigationError = certificateError ?? error; changed?() }
     }

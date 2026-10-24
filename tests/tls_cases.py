@@ -58,7 +58,10 @@ def verify_tls_cases(out, cli, restart):
                 results[name] = error
                 insecure = cli('open', url, '--space', 'tls-insecure')
                 assert insecure['page']['lastTLSChallenge']['certificateErrorsIgnored'] is True
-                assert cli('open', url, '--space', 'tls-local', ok=False)['code'] == 'certificate_rejected'
+                # Repeating a rejected URL can make WKWebView.load return no navigation token.
+                # It must never report success from the still-visible previous document.
+                for _ in range(3):
+                    assert cli('open', url, '--space', 'tls-local', ok=False)['code'] == 'certificate_rejected'
                 results[name + 'AcceptedOnlyWithInsecureFlag'] = True
             # The exact WebKit-provided popup configuration must retain the Space's TLS policy.
             parent = cli('space', 'info', 'tls-local')['defaultTabId']
