@@ -1,5 +1,7 @@
 """Local origin and an observable HTTP CONNECT proxy; no third-party dependencies."""
 import argparse
+import base64
+import hashlib
 import http.server
 import json
 from pathlib import Path
@@ -42,6 +44,29 @@ def origin(port=0, events=None, tls_context=None):
             query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             time.sleep(min(float(query.get('delay', ['0'])[0]), 3))
             events.add(kind='origin', path=self.path, peerPort=self.client_address[1], cookie=self.headers.get('Cookie'), host=self.headers.get('Host'), nonce=nonce)
+            if self.path.startswith('/echo?') and self.headers.get('Upgrade', '').lower() == 'websocket':
+                key = self.headers['Sec-WebSocket-Key']
+                accept = base64.b64encode(hashlib.sha1((key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').encode()).digest()).decode()
+                self.request.sendall(('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n').encode())
+                self.request.settimeout(5)
+                header = self.rfile.read(2)
+                if len(header) != 2 or header[0] != 0x81 or not header[1] & 0x80 or header[1] & 0x7f > 125:
+                    return
+                mask = self.rfile.read(4)
+                payload = self.rfile.read(header[1] & 0x7f)
+                message = bytes(value ^ mask[index % 4] for index, value in enumerate(payload)).decode()
+                events.add(kind='websocket', path=self.path, nonce=nonce, message=message)
+                reply = (nonce + ':' + message).encode()
+                self.request.sendall(bytes([0x81, len(reply)]) + reply + b'\x88\x02\x03\xe8')
+                self.close_connection = True
+                return
+            if self.path.startswith('/resource?'):
+                body = json.dumps({'nonce': nonce, 'path': self.path}).encode()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers(); self.wfile.write(body)
+                return
             body = html.replace('__PEER_PORT__', str(self.client_address[1])).encode()
             self.send_response(200)
             self.send_header('Content-Type', 'text/html; charset=utf-8')

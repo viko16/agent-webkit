@@ -41,6 +41,7 @@ private func readMessage(_ fd: Int32) throws -> Data {
         if n < 0 && errno == EINTR { continue }
         guard n > 0 else { throw socketError("read / incomplete response") }
         if let end = buffer[..<n].firstIndex(of: 10) {
+            guard data.count + end <= maxMessage else { throw BrowserError("message_too_large", "IPC 消息超过 8 MiB") }
             data.append(contentsOf: buffer[..<end]); return data
         }
         data.append(contentsOf: buffer[..<n])

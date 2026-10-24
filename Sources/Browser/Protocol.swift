@@ -12,7 +12,37 @@ struct Request: Codable {
     var command: String
     var args: [String]
     var options: [String: String]
+
+    func validate() throws {
+        let arities: [String: ClosedRange<Int>] = ["help":0...0, "version":0...0, "daemon":0...0,
+            "status":0...0, "shutdown":0...0, "space.list":0...0, "space.create":1...1,
+            "space.info":1...1, "space.delete":1...1, "tab.list":0...0, "tab.new":0...1,
+            "tab.close":1...1, "tab.default":1...1, "open":1...1, "reload":0...0,
+            "snapshot":0...0, "state":0...0, "evaluate":1...1, "click":1...1,
+            "fill":2...2, "screenshot":0...0, "wait":0...1]
+        guard let arity = arities[command], arity.contains(args.count) else {
+            throw BrowserError("invalid_arguments", "未知命令或参数数量不正确：\(command)；browser help 查看用法")
+        }
+        var allowed: Set<String> = ["socket", "data-dir"]
+        if !["help", "version", "daemon", "status", "shutdown"].contains(command), !command.hasPrefix("space.") {
+            allowed.insert("space")
+            if !command.hasPrefix("tab.") { allowed.insert("tab") }
+        }
+        if ["open", "reload", "tab.new", "snapshot", "evaluate", "click", "fill", "screenshot", "wait"].contains(command) { allowed.insert("timeout") }
+        if command == "space.create" { allowed.formUnion(["proxy", "ca-cert", "ignore-certificate-errors"]) }
+        if command == "click" { allowed.insert("wait-for-navigation") }
+        if command == "evaluate" { allowed.insert("await") }
+        if command == "screenshot" { allowed.insert("out") }
+        if let key = options.keys.sorted().first(where: { !allowed.contains($0) }) {
+            throw BrowserError("invalid_arguments", "\(command) 不支持 --\(key)")
+        }
+        for key in ["await", "wait-for-navigation", "ignore-certificate-errors"] {
+            if let value = options[key], value != "true" { throw BrowserError("invalid_arguments", "--\(key) 是无值开关") }
+        }
+    }
 }
+
+let productVersion = "0.2.0"
 
 func jsonData(_ value: Any) throws -> Data {
     // Foundation can raise an Objective-C exception for non-finite JS numbers.
@@ -40,12 +70,17 @@ struct Options {
         var positionals: [String] = []
         var options: [String: String] = [:]
         var i = 0
+        var literal = false
         let allowed = Set(["space", "tab", "proxy", "ca-cert", "out", "timeout", "socket", "data-dir"])
         while i < arguments.count {
             let arg = arguments[i]
-            if arg.hasPrefix("--") {
+            if arg == "--", !literal { literal = true; i += 1; continue }
+            if !literal, ["--help", "-h", "--version"].contains(arg), arguments.count == 1 {
+                positionals = [arg == "--version" ? "version" : "help"]; break
+            }
+            if arg.hasPrefix("--"), !literal {
                 let key = String(arg.dropFirst(2))
-                if ["ignore-certificate-errors", "wait-for-navigation"].contains(key), options[key] == nil {
+                if ["ignore-certificate-errors", "wait-for-navigation", "await"].contains(key), options[key] == nil {
                     options[key] = "true"; i += 1; continue
                 }
                 guard allowed.contains(key), i + 1 < arguments.count, options[key] == nil else {
@@ -64,6 +99,7 @@ struct Options {
             FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/AgentWebKit").path)
         socketPath = options["socket"] ?? ProcessInfo.processInfo.environment["BROWSER_SOCKET"] ?? dataDirectory.appendingPathComponent("browser.sock").path
         request = Request(command: command, args: positionals, options: options)
+        try request.validate()
     }
 }
 
@@ -77,12 +113,16 @@ browser open URL --space NAME_OR_ID [--tab ID]
 browser tab new [URL] --space NAME_OR_ID
 browser tab list --space NAME_OR_ID
 browser tab close ID --space NAME_OR_ID
+browser tab default ID --space NAME_OR_ID
+browser reload --space NAME_OR_ID [--tab ID] [--timeout 15000]
 browser snapshot|state --space NAME_OR_ID [--tab ID]
 browser click SELECTOR_OR_REF --space NAME_OR_ID [--tab ID] [--wait-for-navigation] [--timeout 15000]
 browser fill SELECTOR_OR_REF VALUE --space NAME_OR_ID [--tab ID]
-browser evaluate JAVASCRIPT --space NAME_OR_ID [--tab ID]
+browser evaluate JAVASCRIPT --space NAME_OR_ID [--tab ID] [--await] [--timeout 15000]
 browser screenshot --space NAME_OR_ID [--tab ID] --out PATH
 browser wait [SELECTOR_OR_REF] --space NAME_OR_ID [--tab ID] [--timeout 15000]
 所有命令支持 --socket PATH。页面命令必须指定 Space；默认标签页固定，与 GUI 无关。
+WebKit 操作支持 --timeout 1–60000；--await 等待 Promise；-- 后的参数按字面值处理。
+browser --help | --version 无需启动服务。reload 恢复异常页面，保留 Tab ID 和 Space 网站数据。
 响应 timing 包含 cliMs、ipcRoundTripMs、serverMs、webkitMs；完整 CLI 进程耗时需由调用方测量。
 """

@@ -34,7 +34,12 @@ def main():
         assert response['ok'] == ok and (process.returncode == 0) == ok, response
         timing = response['timing']
         # These nested intervals use one host's monotonic clock, with no precision rounding.
-        assert external >= timing['cliMs'] >= timing['ipcRoundTripMs'] >= timing['serverMs'] >= timing['webkitMs'] >= 0, (arguments, external, timing)
+        if 'ipcRoundTripMs' in timing:
+            assert external >= timing['cliMs'] >= timing['ipcRoundTripMs'] >= timing['serverMs'] >= timing['webkitMs'] >= 0, (arguments, external, timing)
+        else:
+            # Invalid command-specific flags are rejected before contacting the daemon.
+            assert not ok and response['error']['code'] == 'invalid_arguments', response
+            assert external >= timing['cliMs'] >= 0, (external, timing)
         count += 1
         return response
 

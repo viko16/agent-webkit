@@ -1,5 +1,32 @@
 # 实际验收记录
 
+## 0.2.0：2026-10-24
+
+在同一台 macOS 27.0.1 / Apple Silicon 机器上完成 Debug 与 Release 构建。最终应用包为 Release，`codesign --verify --deep --strict` 通过。下面两套测试均以最终应用包运行并退出 0：
+
+- `python3 tests/acceptance.py`：[完整报告](../.artifacts/20261024-014112/report.json)、[逐条命令](../.artifacts/20261024-014112/commands.jsonl)、[Whistle 会话](../.artifacts/20261024-014112/whistle-sessions.json)、[来源站点日志](../.artifacts/20261024-014112/origin.jsonl)。
+- `python3 tests/reliability.py`：[恢复与边界测试报告](../.artifacts/reliability-20261024-014208/report.json)、[逐条命令](../.artifacts/reliability-20261024-014208/commands.jsonl)、[恢复后的真实截图](../.artifacts/reliability-20261024-014208/recovered.png)。该脚本还运行了原有的 16 项计时检查。
+
+| 项目 | 本轮结果 |
+| --- | --- |
+| 原有 A / B / C / D 与 TLS | 全部通过：Cookie / LocalStorage 隔离及重启持久化、真实域名分流、证书正反用例、并发、截图与资源回收 |
+| fetch 与 WSS | 代理 Space 收到本地服务的随机 nonce 与 WebSocket echo；Whistle 与来源日志均有对应请求。direct 未新增代理会话、未命中本地服务。公网上的 example.com 不提供测试 echo，direct WSS 超时，不将其当成可用性证明 |
+| 真正卡住的 JavaScript | `while(true) {}` 和永不完成的 Promise 均按期限返回；Space 锁释放；另一个 Space 仍可操作。显式 reload / open 恢复后保留 Tab ID 和 LocalStorage |
+| 查询与标签页 | 忙碌时 state / tab list 可读；tab default 持久化；关闭默认页后选择剩余页；SPA URL 及元素引用失效行为通过 |
+| DOM 与参数 | 禁用字段、不可用 select 选项、密码隐藏、元素可见性、无效／多重选择器、字面值参数、CLI 与原始 IPC 选项校验通过 |
+| 删除与恢复 | 故障恢复后立即删除可清除并核对网站数据；若空容器仍被 WebKit 占用，则准确返回 cleanupPending。同名重建不读取旧数据；重启后 pendingStoreCleanup 归零、旧记录清除 |
+| 前台 | 启动前后及两 Agent 并发操作前后，前台 PID 均保持 56420 |
+
+原生窗口用 UI 自动化实查了 Space 搜索与切换、标签页切换、快捷键、选择恢复、信息弹层、空白页引导和错误提示。窗口选中第二个 Tab 时，CLI 在固定默认 Tab 完成填写和点击，GUI 未被切走；切回后能看到结果。另将页面置于真实死循环，通过窗口的“重新加载”按钮恢复，再用 CLI 读回正常标题。初版紧凑尺寸和最终 1220 × 800 布局均检查过；最终版本的最小尺寸、深色外观和不同显示缩放还未逐项实测。
+
+本轮资源样本：空应用 RSS 合计 97.52 MiB；5 个 Space 393.14 MiB；重启恢复后 314.64 MiB；删除全部 Space 后 151.75 MiB；退出后测试进程全部回收。RSS 含共享页重复计算，短时采样不代表长期运行上限。
+
+仍有边界：Snapshot 仅主 frame 普通 DOM，截图仅视口，输入为 DOM 合成事件；loopback 代理、原生输入、MCP 等仍按原约定暂缓。WebContent 终止回调与恢复路径已实现，但尚未单独注入系统进程崩溃测试；媒体、Service Worker、旧版 macOS、长期运行和断电恢复未全面验证。应用仍使用本机 ad-hoc 签名，未做分发签名与公证。
+
+## 0.1.0 历史记录
+
+以下保留上一版测试证据。其“未实现”和后续建议反映当时状态，当前能力以上面的 0.2.0 记录为准。
+
 2026-10-23，在本机 macOS 27.0.1（26A434、Apple Silicon）、Swift 6.4、macOS 27 SDK 上构建并运行。未安装完整 Xcode，使用 Command Line Tools 完成构建和应用包 ad-hoc 签名校验。
 
 **结论：A、B、C、D 和新增 TLS 测试通过。B 按用户调整后的范围，验证真实域名经 Whistle 映射到本地服务；loopback 代理路由暂不纳入验收。**

@@ -23,8 +23,11 @@
 | [proxyConfigurations](https://developer.apple.com/documentation/webkit/wkwebsitedatastore/proxyconfigurations) | 14.0 | 同一 Store 的全部 WebView 使用相同配置。创建后不提供热切换代理。空数组清除覆盖配置，不能证明绕过系统代理 |
 | [evaluateJavaScript](https://developer.apple.com/documentation/webkit/wkwebview/evaluatejavascript(_:completionhandler:)) | 10.10 | completionHandler 版本返回值或错误；本项目使用主 frame / page world。并非真实输入。content world / frame 重载最低为 11.0 |
 | [takeSnapshot](https://developer.apple.com/documentation/webkit/wkwebview/takesnapshot(with:completionhandler:)) | 10.13 | 截取当前 WebView 视口，不依赖系统屏幕截图权限。后台 Tab 在未显示的非激活 Panel 中保留视图；已检查实际图像内容 |
+| [callAsyncJavaScript](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/API/Cocoa/WKWebView.h) | 11.0 | 0.2.0 的 `evaluate --await` 等待表达式返回的 Promise；宿主另设截止时间，不将超时解释为 JS 已取消 |
 
-SDK 的 `WKWebsiteDataStore.h` 明确要求先释放使用该 Store 的 WKWebView 再调用 `remove(forIdentifier:)`。删除流程先持久化 tombstone，解除 WebView/窗口引用，跨过一次 AppKit autorelease 周期，再调用公开删除 API；重启时重试未完成的删除。返回成功后才报告 `websiteDataRemoved: true`。
+SDK 的 `WKWebsiteDataStore.h` 明确要求先释放使用该 Store 的 WKWebView 再调用 `remove(forIdentifier:)`。删除流程先持久化 tombstone，解除 WebView/窗口引用，跨过一次 AppKit autorelease 周期，再调用公开删除 API；重启时重试未完成的删除。
+
+2026-10-24 的恢复测试发现，即使 Tab 与 Space 对象已经释放，WebKit 仍可能保留空网络会话。[WebKit 的容器删除实现](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/WebsiteData/Cocoa/WebsiteDataStoreCocoa.mm)会分别拒绝活动页面和仍有网络进程的 Store。0.2.0 因此区分网站数据清除与容器移除：先通过公开 removeData / fetchDataRecords 清除并核对，容器清理失败则返回 cleanupPending，保留 tombstone。只有数据确实清除才返回 websiteDataRemoved，只有公开容器删除成功才返回 dataStoreRemoved。
 
 Apple 的 [WWDC23 Network Relay 介绍](https://developer.apple.com/videos/play/wwdc2023/10002/) 展示了同一个 `ProxyConfiguration` 用于 Network、URLSession 与 WebKit。HTTP CONNECT 支持 TCP；`allowFailover=false` 禁止代理失败后改走直连。以上说明不能替代路径验证：本机的 loopback 流量没有采用该代理。
 

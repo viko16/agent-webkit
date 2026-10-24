@@ -42,8 +42,15 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     let backingWindow: NSPanel
     var navigationError: Error?
     var changed: (() -> Void)?
+    var statusChanged: (() -> Void)?
     var suppressedDialogs = 0
     var terminated = false
+    var unresponsive = false
+    private(set) var closed = false
+    private(set) var persistedURL: String
+    var deadline: UInt64?
+    private var observations: [NSKeyValueObservation] = []
+    private var pending: [UUID: (Error) -> Void] = [:]
     let tls: TLSConfiguration?
     var tlsChallenge: [String: Any] = [:]
     var certificateError: BrowserError?
@@ -59,6 +66,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
 
     init(record: TabRecord, store: WKWebsiteDataStore, tls: TLSConfiguration?) {
         id = record.id
+        persistedURL = record.url
         self.tls = tls
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = store
@@ -70,9 +78,29 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         backingWindow.isReleasedWhenClosed = false
         backingWindow.contentView = webView
         webView.navigationDelegate = self; webView.uiDelegate = self
+        observations = [
+            webView.observe(\.estimatedProgress) { [weak self] _, _ in
+                Task { @MainActor in self?.statusChanged?() }
+            },
+            webView.observe(\.isLoading) { [weak self] _, _ in
+                Task { @MainActor in self?.statusChanged?() }
+            },
+            webView.observe(\.title) { [weak self] _, _ in
+                Task { @MainActor in self?.changed?() }
+            },
+            webView.observe(\.url) { [weak self] _, _ in
+                Task { @MainActor in
+                    guard let self, !self.webView.isLoading, let url = self.webView.url else { return }
+                    self.persistedURL = url.absoluteString
+                    self.changed?()
+                }
+            }
+        ]
     }
 
     func park() {
+        guard !closed else { return }
+        webView.isHidden = false
         webView.removeFromSuperview()
         backingWindow.contentView = webView
         webView.frame = NSRect(x: 0, y: 0, width: 1000, height: 700)
@@ -80,44 +108,89 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
 
     func close() {
+        closed = true
+        failPending(BrowserError("tab_closed", "标签页已关闭"))
+        observations.removeAll()
         webView.stopLoading(); webView.navigationDelegate = nil; webView.uiDelegate = nil
         webView.removeFromSuperview(); backingWindow.contentView = nil; backingWindow.close()
         changed = nil
+        statusChanged = nil
         navigationSpans.removeAll()
     }
 
     var state: [String: Any] {
-        ["tabId": id.uuidString, "url": webView.url?.absoluteString ?? "about:blank", "title": webView.title ?? "",
+        ["tabId": id.uuidString, "url": persistedURL, "title": webView.title ?? "",
          "loading": webView.isLoading, "webContentTerminated": terminated, "suppressedDialogs": suppressedDialogs,
+         "unresponsive": unresponsive, "lastError": navigationError.map { failure($0)["error"]! } ?? NSNull(),
          "requiresForeground": false, "tls": tls?.summary ?? TLSConfiguration.systemSummary,
          "lastTLSChallenge": tlsChallenge]
     }
 
-    func runJS(_ script: String) async throws -> Any {
+    private func failPending(_ error: Error) {
+        let callbacks = Array(pending.values)
+        pending.removeAll()
+        callbacks.forEach { $0(error) }
+    }
+
+    private func perform<Value>(_ operation: String, body: (@escaping (Result<Value, Error>) -> Void) -> Void) async throws -> Value {
+        guard !closed else { throw BrowserError("tab_closed", "标签页已关闭") }
         guard !terminated else { throw BrowserError("web_content_terminated", "WebContent 进程已退出，请重新 open") }
+        guard !unresponsive else { throw BrowserError("web_content_unresponsive", "上次 WebKit 调用超时，请先 reload 恢复标签页") }
+        let now = monotonicNow()
+        let remaining = deadline.map { Double($0 > now ? $0 - now : 0) / 1_000_000 } ?? 15000
+        guard remaining > 0 else { throw BrowserError("timeout", "命令执行超时") }
         let timing = operationTiming
-        let start = monotonicNow()
+        let token = timing?.begin(operation, from: monotonicNow())
+        let id = UUID()
+        defer { pending[id] = nil }
         return try await withCheckedThrowingContinuation { continuation in
-            webView.evaluateJavaScript(script) { result, error in
-                timing?.record("evaluateJavaScript", from: start)
+            let call = PendingOperation(continuation)
+            pending[id] = { call.finish(.failure($0)) }
+            call.arm(milliseconds: remaining) { [weak self] in
+                self?.unresponsive = true
+                self?.changed?()
+            }
+            body { result in
+                if let token { timing?.finish(token) }
+                call.finish(result)
+            }
+        }
+    }
+
+    func runJS(_ script: String, awaitPromise: Bool = false) async throws -> Any {
+        try await perform(awaitPromise ? "callAsyncJavaScript" : "evaluateJavaScript") { complete in
+            let callback: (Any?, Error?) -> Void = { result, error in
                 if let error {
                     let nsError = error as NSError
                     if let message = nsError.userInfo["WKJavaScriptExceptionMessage"] as? String {
-                        let code = message.contains("stale_ref:") ? "stale_ref" : "javascript_error"
-                        continuation.resume(throwing: BrowserError(code, message))
-                    } else { continuation.resume(throwing: error) }
+                        let codes = ["stale_ref", "selector_count", "invalid_selector", "element_not_actionable", "element_readonly", "unsupported_fill_type", "element_not_editable", "invalid_option"]
+                        let code = codes.first { message.contains($0) } ?? "javascript_error"
+                        complete(.failure(BrowserError(code, message)))
+                    } else { complete(.failure(error)) }
                 }
-                else { continuation.resume(returning: result ?? NSNull()) }
+                else { complete(.success(result ?? NSNull())) }
+            }
+            if awaitPromise {
+                webView.callAsyncJavaScript("return await (0, eval)(source)", arguments: ["source": script], in: nil, in: .page) { result in
+                    switch result {
+                    case .success(let value): callback(value, nil)
+                    case .failure(let error): callback(nil, error)
+                    }
+                }
+            } else {
+                webView.evaluateJavaScript(script) { value, error in callback(value, error) }
             }
         }
     }
 
     func load(_ url: URL) {
+        persistedURL = url.absoluteString
         navigationError = nil; certificateError = nil; tlsChallenge = [:]; terminated = false
         let start = monotonicNow()
         if let navigation = webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)) {
             trackNavigation(navigation, start: start)
         }
+        changed?()
     }
 
     private func trackNavigation(_ navigation: WKNavigation, start: UInt64) {
@@ -137,37 +210,35 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     func waitForNavigation(after sequence: Int, timeout: Int) async throws {
         let start = monotonicNow()
         repeat {
+            if terminated { throw BrowserError("web_content_terminated", "WebContent 进程已退出，请 reload") }
             if let navigationError { throw navigationError }
             if navigationSequence > sequence, completedNavigationSequence == navigationSequence { return }
             try await Task.sleep(nanoseconds: 50_000_000)
-        } while milliseconds(from: start) < Double(timeout)
+        } while milliseconds(from: start) < Double(timeout) && (deadline.map { monotonicNow() < $0 } ?? true)
         throw BrowserError("timeout", "点击后等待新导航完成超时（\(timeout) ms）；同页锚点或 SPA 跳转不会触发完整导航")
     }
 
     func wait(selector: String?, timeout: Int) async throws {
-        let deadline = Date().addingTimeInterval(Double(timeout) / 1000)
+        let start = monotonicNow()
         repeat {
             if let navigationError { throw navigationError }
             if let selector {
-                let script = "(() => { try { return !!window.__agentWebKit.resolve(\(try quoteJS(selector))); } catch(e) { return false; } })()"
+                let script = "window.__agentWebKit.exists(\(try quoteJS(selector)))"
                 if (try await runJS(script) as? Bool) == true { return }
             } else if !webView.isLoading, (try await runJS("document.readyState") as? String) == "complete" { return }
             try await Task.sleep(nanoseconds: 50_000_000)
-        } while Date() < deadline
+        } while milliseconds(from: start) < Double(timeout)
         throw BrowserError("timeout", "等待\(selector ?? "页面加载")超时（\(timeout) ms）")
     }
 
     func screenshot(path: String) async throws -> [String: Any] {
         let configuration = WKSnapshotConfiguration()
         configuration.rect = webView.bounds
-        let timing = operationTiming
-        let start = monotonicNow()
-        let image: NSImage = try await withCheckedThrowingContinuation { continuation in
+        let image: NSImage = try await perform("takeSnapshot") { complete in
             webView.takeSnapshot(with: configuration) { image, error in
-                timing?.record("takeSnapshot", from: start)
-                if let error { continuation.resume(throwing: error) }
-                else if let image { continuation.resume(returning: image) }
-                else { continuation.resume(throwing: BrowserError("snapshot_failed", "WebKit 未返回图像")) }
+                if let error { complete(.failure(error)) }
+                else if let image { complete(.success(image)) }
+                else { complete(.failure(BrowserError("snapshot_failed", "WebKit 未返回图像"))) }
             }
         }
         guard let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
@@ -181,14 +252,29 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         navigationError = nil
+        certificateError = nil
         if let navigation { trackNavigation(navigation, start: monotonicNow()) }
+        changed?()
     }
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { finishNavigation(navigation); changed?() }
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        if let url = webView.url { persistedURL = url.absoluteString }
+        changed?()
+    }
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        if let url = webView.url { persistedURL = url.absoluteString }
+        finishNavigation(navigation); changed?()
+    }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        finishNavigation(navigation); navigationError = certificateError ?? error; changed?()
+        failNavigation(navigation, error: error)
     }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        finishNavigation(navigation); navigationError = certificateError ?? error; changed?()
+        failNavigation(navigation, error: error)
+    }
+    private func failNavigation(_ navigation: WKNavigation?, error: Error) {
+        let latest = navigation.flatMap { navigationSpans[ObjectIdentifier($0)] }?.sequence == navigationSequence
+        finishNavigation(navigation)
+        // A replacement load cancels the previous request. Its late failure must not poison the new one.
+        if latest { navigationError = certificateError ?? error; changed?() }
     }
     func webView(_ webView: WKWebView, didReceive challenge: URLAuthenticationChallenge,
                  completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
@@ -226,7 +312,13 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
             completionHandler(.cancelAuthenticationChallenge, nil)
         }
     }
-    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { terminated = true }
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        terminated = true
+        let error = BrowserError("web_content_terminated", "WebContent 进程已退出；reload 可恢复页面，未提交的表单不会保留")
+        navigationError = error
+        failPending(error)
+        changed?()
+    }
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         let scheme = navigationAction.request.url?.scheme?.lowercased() ?? ""
         // Do not launch external applications or create windows from page content.
@@ -285,8 +377,10 @@ final class BrowserModel {
     var changed: (() -> Void)?
     var willRemove: ((Space) -> Void)?
     private let file: URL
+    var storagePath: String { file.deletingLastPathComponent().path }
     private var lockFD: Int32 = -1
     var shuttingDown = false
+    private(set) var restoring = true
 
     init(directory: URL) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -301,14 +395,16 @@ final class BrowserModel {
 
     func restore() async throws {
         for record in records.filter(\.deleting) {
-            try await removeStore(record.id)
-            records.removeAll { $0.id == record.id }; try persist()
+            if try await removeStore(record.id) {
+                records.removeAll { $0.id == record.id }; try persist()
+            }
         }
         for space in spaces {
             for (tab, record) in zip(space.tabs, space.record.tabs) {
                 if record.url != "about:blank", let url = URL(string: record.url) { tab.load(url) }
             }
         }
+        restoring = false
         changed?()
     }
 
@@ -318,6 +414,7 @@ final class BrowserModel {
 
     private func bind(_ space: Space) {
         for tab in space.tabs {
+            tab.statusChanged = { [weak self] in self?.changed?() }
             tab.changed = { [weak self, weak space] in
                 guard let self, let space, !self.shuttingDown else { return }
                 do { try self.save(space) } catch { fputs("Persistence error: \(error)\n", stderr) }
@@ -327,12 +424,42 @@ final class BrowserModel {
     }
 
     func save(_ space: Space) throws {
-        space.record.tabs = space.tabs.map { TabRecord(id: $0.id, url: $0.webView.url?.absoluteString ?? "about:blank") }
+        space.record.tabs = space.tabs.map { TabRecord(id: $0.id, url: $0.persistedURL) }
         if let index = records.firstIndex(where: { $0.id == space.record.id }) { records[index] = space.record }
         try persist()
     }
 
-    private func removeStore(_ id: UUID) async throws {
+    private func removeStore(_ id: UUID) async throws -> Bool {
+        do { try await removeStoreOnce(id); return true }
+        catch {
+            // WebKit may retain an idle network session after a stalled view is replaced.
+            // Clear and verify the website data through the public API; keep the tombstone
+            // if the empty store container cannot yet be removed in this process.
+            try await clearStoreContents(id)
+            for delay in [100, 200, 400] {
+                try await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000)
+                do { try await removeStoreOnce(id); return true } catch { continue }
+            }
+            return false
+        }
+    }
+
+    private func clearStoreContents(_ id: UUID) async throws {
+        let store = WKWebsiteDataStore(forIdentifier: id)
+        let types = WKWebsiteDataStore.allWebsiteDataTypes()
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let operation = PendingOperation(continuation)
+            operation.arm(milliseconds: 5000, error: BrowserError("data_removal_timeout", "网站数据清理超时；已保留删除标记，下次启动会重试"), onTimeout: {})
+            store.removeData(ofTypes: types, modifiedSince: .distantPast) {
+                store.fetchDataRecords(ofTypes: types) { records in
+                    if records.isEmpty { operation.finish(.success(())) }
+                    else { operation.finish(.failure(BrowserError("data_removal_failed", "网站数据仍存在；已保留删除标记，下次启动会重试"))) }
+                }
+            }
+        }
+    }
+
+    private func removeStoreOnce(_ id: UUID) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             WKWebsiteDataStore.remove(forIdentifier: id) { error in
                 if let error { continuation.resume(throwing: error) } else { continuation.resume() }
@@ -359,7 +486,11 @@ final class BrowserModel {
 
     private func execute(_ r: Request, timing: RequestTiming) async throws -> Any {
         guard !shuttingDown else { throw BrowserError("shutting_down", "应用正在退出") }
+        try r.validate()
         let command = r.command
+        guard !restoring || ["status", "help", "version"].contains(command) else {
+            throw BrowserError("not_ready", "应用正在恢复会话；请等待 status.ready 为 true")
+        }
         if command != "click", r.options["wait-for-navigation"] != nil {
             throw BrowserError("invalid_arguments", "--wait-for-navigation 只能用于 click")
         }
@@ -370,10 +501,12 @@ final class BrowserModel {
             guard r.args.indices.contains(index) else { throw BrowserError("invalid_arguments", "缺少参数；browser help 查看用法") }
             return r.args[index]
         }
-        let arities: [String: ClosedRange<Int>] = ["status":0...0,"shutdown":0...0,"space.list":0...0,"space.create":1...1,"space.info":1...1,"space.delete":1...1,"tab.list":0...0,"tab.new":0...1,"tab.close":1...1,"open":1...1,"snapshot":0...0,"state":0...0,"evaluate":1...1,"click":1...1,"fill":2...2,"screenshot":0...0,"wait":0...1]
-        guard let arity = arities[command], arity.contains(r.args.count) else { throw BrowserError("invalid_arguments", "未知命令或参数数量不正确：\(command)") }
+        if command == "help" { return ["usage": usage] }
+        if command == "version" { return ["version": productVersion] }
         if command == "status" {
-            return ["pid": ProcessInfo.processInfo.processIdentifier, "spaces": spaces.count,
+            return ["version": productVersion, "pid": ProcessInfo.processInfo.processIdentifier, "spaces": spaces.count,
+                    "ready": !restoring,
+                    "pendingStoreCleanup": records.filter(\.deleting).count,
                     "systemProxy": systemProxyState(), "frontmostPid": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1,
                     "capabilities": ["input":"dom-synthetic", "snapshot":"main-frame", "screenshot":"viewport", "foregroundRequired":false],
                     "directPolicy":"reject-enabled-system-proxy; no VPN/content-filter bypass guarantee"] as [String: Any]
@@ -390,7 +523,7 @@ final class BrowserModel {
         if command == "space.create" {
             let name = try arg(0)
             guard name.range(of: "^[A-Za-z][A-Za-z0-9_-]{0,63}$", options: .regularExpression) != nil else { throw BrowserError("invalid_name", "名称需为字母开头的 1–64 位字母、数字、下划线或连字符") }
-            guard !records.contains(where: { $0.name == name }) else { throw BrowserError("space_exists", "Space 已存在") }
+            guard !records.contains(where: { $0.name == name && !$0.deleting }) else { throw BrowserError("space_exists", "Space 已存在") }
             guard let proxy = r.options["proxy"] else { throw BrowserError("proxy_required", "创建 Space 必须显式指定 --proxy") }
             guard r.options["ca-cert"] == nil || r.options["ignore-certificate-errors"] == nil else {
                 throw BrowserError("invalid_arguments", "--ca-cert 和 --ignore-certificate-errors 不能同时使用")
@@ -406,37 +539,56 @@ final class BrowserModel {
         }
         let target = command.hasPrefix("space.") ? try arg(0) : r.options["space"]
         guard let target else { throw BrowserError("space_required", "所有页面操作必须指定 --space") }
-        guard let id = spaces.first(where: { $0.record.name == target || $0.record.id.uuidString.lowercased() == target.lowercased() })?.record.id else {
+        let pendingID = command == "space.delete" ? records.first(where: { $0.deleting && ($0.name == target || $0.id.uuidString.lowercased() == target.lowercased()) })?.id : nil
+        guard let id = spaces.first(where: { $0.record.name == target || $0.record.id.uuidString.lowercased() == target.lowercased() })?.record.id ?? pendingID else {
             throw BrowserError("space_not_found", "Space 不存在：\(target)")
         }
         if command == "space.delete" {
             // Avoid retaining the Space/DataStore across the asynchronous removal API.
-            guard spaces.first(where: { $0.record.id == id })?.busy == false else { throw BrowserError("space_busy", "Space 正在操作中") }
+            guard spaces.first(where: { $0.record.id == id })?.busy != true else { throw BrowserError("space_busy", "Space 正在操作中") }
             if let index = records.firstIndex(where: { $0.id == id }) { records[index].deleting = true }
             try persist(); detach(id); changed?()
             // Let AppKit's autorelease pool release the detached WKWebViews before removing their store.
             try await Task.sleep(nanoseconds: 100_000_000)
-            try await removeStore(id)
-            records.removeAll { $0.id == id }; try persist()
-            return ["deleted": true, "spaceId": id.uuidString, "websiteDataRemoved": true]
+            let removed = try await removeStore(id)
+            if removed { records.removeAll { $0.id == id }; try persist() }
+            return ["deleted": true, "spaceId": id.uuidString, "websiteDataRemoved": true,
+                    "dataStoreRemoved": removed, "cleanupPending": !removed]
         }
         guard let space = spaces.first(where: { $0.record.id == id }) else { throw BrowserError("space_not_found", "Space 已删除") }
         if command == "space.info" { return space.summary }
+        if command == "tab.list" { return space.tabs.map(\.state) }
+        if command == "state" {
+            let tabID = r.options["tab"] ?? space.record.defaultTab.uuidString
+            guard let tab = space.tabs.first(where: { $0.id.uuidString.lowercased() == tabID.lowercased() }) else {
+                throw BrowserError("tab_not_found", "Space 中不存在该标签页")
+            }
+            return ["spaceId": id.uuidString, "space": space.record.name, "proxy": space.record.proxy,
+                    "network": space.networkState, "page": tab.state, "busy": space.busy, "value": NSNull()] as [String: Any]
+        }
         guard !space.busy else { throw BrowserError("space_busy", "同一 Space 已有操作；请在该 Agent 内顺序执行") }
-        space.busy = true; defer { space.busy = false }
+        space.busy = true; changed?()
+        defer { space.busy = false; changed?() }
         if space.record.proxy == "direct" { try requireDirectAvailable() }
         let timeout: Int
         if let raw = r.options["timeout"] {
             guard let value = Int(raw), (1...60000).contains(value) else { throw BrowserError("invalid_timeout", "timeout 必须为 1–60000 ms") }; timeout = value
         } else { timeout = 15000 }
-        if command == "tab.list" { return space.tabs.map(\.state) }
         if command == "tab.new" {
             let url = try validateURL(r.args.first ?? "about:blank")
             let tab = Tab(record: TabRecord(id: UUID(), url: "about:blank"), store: space.store, tls: space.record.tls)
-            tab.operationTiming = timing; defer { tab.operationTiming = nil }
+            tab.operationTiming = timing; tab.deadline = monotonicNow() + UInt64(timeout) * 1_000_000
+            defer { tab.operationTiming = nil; tab.deadline = nil }
             space.tabs.append(tab); bind(space); try save(space); changed?()
             tab.load(url); try await tab.wait(selector: nil, timeout: timeout); try save(space)
             return tab.state
+        }
+        if command == "tab.default" {
+            let tabID = try arg(0)
+            guard let tab = space.tabs.first(where: { $0.id.uuidString.lowercased() == tabID.lowercased() }) else { throw BrowserError("tab_not_found", "标签页不存在") }
+            space.record.defaultTab = tab.id
+            try save(space); changed?()
+            return ["defaultTabId": tab.id.uuidString]
         }
         if command == "tab.close" {
             let tabID = try arg(0)
@@ -447,16 +599,27 @@ final class BrowserModel {
             try save(space); changed?(); return ["closed": tabID, "defaultTabId": space.record.defaultTab.uuidString]
         }
         let tabID = r.options["tab"] ?? space.record.defaultTab.uuidString
-        guard let tab = space.tabs.first(where: { $0.id.uuidString.lowercased() == tabID.lowercased() }) else { throw BrowserError("tab_not_found", "Space 中不存在该标签页") }
-        tab.operationTiming = timing; defer { tab.operationTiming = nil }
+        guard var tab = space.tabs.first(where: { $0.id.uuidString.lowercased() == tabID.lowercased() }) else { throw BrowserError("tab_not_found", "Space 中不存在该标签页") }
+        // Replace a stalled view only on explicit navigation. Never replay an Agent action.
+        if ["open", "reload"].contains(command), tab.terminated || tab.unresponsive {
+            let replacement = Tab(record: TabRecord(id: tab.id, url: tab.persistedURL), store: space.store, tls: space.record.tls)
+            let index = space.tabs.firstIndex(where: { $0 === tab })!
+            tab.close(); space.tabs[index] = replacement; tab = replacement
+            bind(space); changed?()
+        }
+        tab.operationTiming = timing; tab.deadline = monotonicNow() + UInt64(timeout) * 1_000_000
+        defer { tab.operationTiming = nil; tab.deadline = nil }
         var value: Any = NSNull()
         switch command {
         case "open":
             let url = try validateURL(arg(0)); tab.load(url)
             try await tab.wait(selector: nil, timeout: timeout); try save(space)
+        case "reload":
+            tab.load(try validateURL(tab.persistedURL))
+            try await tab.wait(selector: nil, timeout: timeout); try save(space)
         case "state": break
         case "snapshot": value = try await tab.runJS("window.__agentWebKit.snapshot()")
-        case "evaluate": value = try await tab.runJS(arg(0))
+        case "evaluate": value = try await tab.runJS(arg(0), awaitPromise: r.options["await"] == "true")
         case "click", "fill":
             let before = tab.navigationSequence
             value = try await tab.runJS("window.__agentWebKit.act(\(try quoteJS(command)),\(try quoteJS(arg(0))),\(try quoteJS(command == "fill" ? arg(1) : "")))")

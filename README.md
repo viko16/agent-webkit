@@ -1,6 +1,11 @@
 # Agent WebKit
 
-一个供本机 AI Agent 共用的原生 macOS 浏览器原型。每个 Space 有自己的持久化 WebKit 数据、代理配置和标签页，CLI 通过 Unix Socket 操作页面，窗口只用于观察。
+一个供本机 AI Agent 共用的原生 macOS 浏览器。每个 Space 独立保存登录状态、网站数据、代理配置和标签页。Agent 通过 CLI 操作页面，你可以在原生窗口中查看进展。
+
+- 多个 Agent 可同时使用不同 Space，页面操作不会串到当前窗口选中的标签页。
+- 支持 DOM 结构、稳定元素引用、点击、填写、JavaScript、元素等待和截图。
+- 支持 Whistle 代理、Space 独立证书策略，以及重启后恢复标签页和网站数据。
+- WebKit 调用有执行期限；页面卡住后可重新加载，保留 Tab ID 和持久化数据。
 
 代理验收使用实际域名：代理 Space 经本机 Whistle 将 `https://example.com` 映射到本地开发页，direct Space 访问同一 URL 时显示公网页面。localhost / 127.0.0.1 的代理路由暂不纳入验收，不能据此保证 loopback 流量经过 Whistle。详见[实际测试结果](docs/VALIDATION.md)。
 
@@ -38,17 +43,46 @@ browser screenshot --space admin --out /tmp/admin.png
 browser tab new https://example.com --space user
 browser tab list --space user
 browser snapshot --space user --tab '返回的完整 Tab UUID'
+browser tab default '返回的完整 Tab UUID' --space user
 browser tab close '返回的完整 Tab UUID' --space user
+browser evaluate 'fetch("/api/status").then(r => r.json())' --space user --await
+browser reload --space user
 browser space info admin
 browser space delete admin
 browser shutdown
 ```
 
-所有页面命令必须指定 `--space`，支持名称或 UUID。省略 `--tab` 时使用该 Space 的固定默认标签页，与 GUI 显示哪个页面无关。不同 Agent 使用不同 Space；同一 Space 的重叠操作返回 `space_busy`，由调用方顺序执行。
+所有页面命令必须指定 `--space`，支持名称或 UUID。省略 `--tab` 时使用该 Space 的固定默认标签页，与 GUI 显示哪个页面无关；`tab default` 可显式修改并持久化这个默认值。不同 Agent 使用不同 Space；同一 Space 的重叠操作返回 `space_busy`，由调用方顺序执行。`state`、`tab list` 和 `space info` 在操作进行中仍可查询。
+
+WebKit 操作默认超时为 15000 ms，可用 `--timeout 1–60000` 调整。`evaluate --await` 等待 Promise 返回结果。`wait SELECTOR` 等待唯一匹配的元素可见；无效选择器、匹配多个元素和过期引用会直接报错。值以 `--` 开头时，先写选项，再用 `--` 分隔，例如 `browser fill --space user -- '#message' '--hello'`。`browser --help` 和 `browser --version` 无需启动服务。
 
 每条命令返回一行 JSON，成功为 `{"ok":true,"result":...}`，失败为 `{"ok":false,"error":{"code":...,"message":...}}`，退出码分别为 0 / 1。页面结果包含 Space ID、Tab ID、URL、加载状态和代理限制。`click` / `fill` 使用 DOM 合成事件，返回 `method: "dom"`、`nativeVerified: false`；不提供原生输入或剪贴板模拟。
 
 默认数据目录为 `~/Library/Application Support/AgentWebKit`。`BROWSER_DATA_DIR` 可指定独立注册表目录，`BROWSER_SOCKET` 或 `--socket` 可指定 Socket；daemon 和客户端需使用相同设置。WebKit 网站数据由系统管理，`--data-dir` 不会把这些数据搬进该目录。`space delete` 会删除该 Space 的网站数据；普通关闭和重启保留数据及标签页 URL。
+
+删除后若 WebKit 仍占用空的存储容器，结果会注明 `cleanupPending: true`：网站数据已清除并核对，容器将在下次启动时继续删除。新建同名 Space 会使用新的 ID。`status` 可查询 `pendingStoreCleanup`；启动恢复完成后 `ready` 为 `true`，之前的页面命令会返回 `not_ready`。
+
+## 手动浏览与 Agent 接管
+
+点击工具栏右侧的 **＋** 新建标签页，在地址栏输入网址并按回车。新标签页沿用当前 Space 的登录状态和网络设置；第一次使用时会自动创建直连的 `personal` Space。省略协议的网址会使用 HTTPS，本地 HTTP 页面需输入 `http://`。
+
+你可以先打开网页、登录或填写内容，再点击工具栏的分享按钮，复制接管命令并交给 Agent。命令明确指定当前 Space 和 Tab ID，Agent 会读取同一个页面并继续操作，保留登录状态和页面内容。
+
+窗口采用 Safari 风格的原生侧边栏与工具栏，随系统外观显示。左侧搜索和切换 Space，顶部标签栏切换页面；图钉标记 CLI 默认标签页。底部显示代理和证书策略，忽略证书错误的 Space 会显示橙色提示。
+
+每个 Space 会记住上次查看的标签页。窗口大小和观察选择会恢复，但不会改变 Agent 的操作目标。关闭窗口后服务继续运行；退出应用才会停止服务。
+
+| 快捷键 | 操作 |
+| --- | --- |
+| ⌘T | 新建标签页 |
+| ⌘L | 选中地址栏 |
+| ⌃⌘S | 显示／隐藏侧边栏 |
+| ⇧⌘F | 搜索 Space |
+| ⇧⌘[ / ⇧⌘] | 上一个／下一个标签页 |
+| ⌘W | 关闭观察窗口 |
+| ⌘Q | 退出应用 |
+
+页面加载失败会显示原因。若 `state` 返回 `unresponsive: true` 或 `webContentTerminated: true`，可通过 `browser reload --space NAME` 或窗口的重新加载按钮恢复。恢复会重新打开 URL，保留 Tab ID、Cookie 和 LocalStorage；未提交的表单和 JavaScript 内存状态不会保留。超时操作可能已经部分生效，应先核对页面状态，不要直接重试付款、提交等有副作用的动作。
 
 ## Whistle 与 direct
 
@@ -82,9 +116,10 @@ browser space create dev --proxy http://127.0.0.1:8899 --ignore-certificate-erro
 
 ```sh
 python3 tests/acceptance.py
+python3 tests/reliability.py
 ```
 
-测试会启动真实应用、本地 HTML 站点和本机已安装的 Whistle，在 8899 使用临时规则、独立数据目录及测试 CA；不改动已有规则、系统代理或钥匙串。它检查域名分流、HTTPS 证书策略、会话持久化、并发、截图与资源回收，并保存 Whistle 会话和来源站点日志。测试结束会停止自己启动的 Whistle。
+测试会启动真实应用、本地 HTML 站点和本机已安装的 Whistle，在 8899 使用临时规则、独立数据目录及测试 CA；不改动已有规则、系统代理或钥匙串。它检查主页面、fetch 与 WSS 的域名分流、HTTPS 证书策略、会话持久化、并发、截图与资源回收，并保存 Whistle 会话和来源站点日志。测试结束会停止自己启动的 Whistle。`reliability.py` 无需 Whistle，验证真实死循环、Promise、超时恢复、参数校验、DOM 边界及计时。
 
 若 8899 已被占用，测试不会停止该服务。已有 Whistle 时，配置好域名规则后运行 `python3 tests/acceptance.py --whistle-existing --origin-port 5173`，测试会直接核对 Whistle 会话，无需只凭界面人工判断。完整复现步骤见[开发说明](docs/DEVELOPMENT.md)。
 

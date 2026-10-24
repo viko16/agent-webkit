@@ -20,15 +20,29 @@ enum DOM {
           el = nodes.get(target);
           if (!el || !el.isConnected) throw new Error('stale_ref: take a new snapshot');
         } else {
-          const matches = document.querySelectorAll(target);
+          const matches = query(target);
           if (matches.length !== 1) throw new Error(`selector_count: expected 1, found ${matches.length}`);
           el = matches[0];
         }
         return el;
       }
+      function query(target) {
+        try { return document.querySelectorAll(target); }
+        catch (_) { throw new Error('invalid_selector: invalid CSS selector'); }
+      }
+      function exists(target) {
+        if (target.startsWith('@')) return visible(resolve(target));
+        const matches = query(target);
+        if (matches.length > 1) throw new Error(`selector_count: expected 1, found ${matches.length}`);
+        return matches.length === 1 && visible(matches[0]);
+      }
       function visible(el) {
         const r=el.getBoundingClientRect(), s=getComputedStyle(el);
-        return r.width>0 && r.height>0 && s.display!=='none' && s.visibility!=='hidden' && Number(s.opacity)>0;
+        if (r.width<=0 || r.height<=0 || s.display==='none' || s.visibility!=='visible') return false;
+        for (let node=el; node; node=node.parentElement) {
+          if (Number(getComputedStyle(node).opacity)===0 || node.hidden || node.inert) return false;
+        }
+        return true;
       }
       function snapshot() {
         for (const [ref, el] of nodes) if (!el.isConnected) nodes.delete(ref);
@@ -36,37 +50,44 @@ enum DOM {
         const elements=[];
         for (const el of candidates) {
           if (!visible(el)) continue;
-          const tag=el.tagName.toLowerCase(), type=el.getAttribute('type')||'';
-          const name=el.getAttribute('aria-label') || Array.from(el.labels||[]).map(l=>l.innerText).join(' ') || el.getAttribute('placeholder') || el.innerText || el.getAttribute('name') || '';
-          const role=el.getAttribute('role') || ({a:'link',button:'button',textarea:'textbox',select:'combobox',input:type==='checkbox'?'checkbox':'textbox'})[tag] || tag;
+          const tag=el.tagName.toLowerCase(), type=el.type||'';
+          const labelled=(el.getAttribute('aria-labelledby')||'').split(/\s+/).map(id=>document.getElementById(id)?.textContent||'').join(' ').trim();
+          const name=labelled || el.getAttribute('aria-label') || Array.from(el.labels||[]).map(l=>l.innerText).join(' ') || el.getAttribute('placeholder') || el.innerText || el.getAttribute('name') || '';
+          const inputRole=({checkbox:'checkbox',radio:'radio',range:'slider',number:'spinbutton',button:'button',submit:'button',reset:'button'})[type]||'textbox';
+          const role=el.getAttribute('role') || ({a:'link',button:'button',textarea:'textbox',select:'combobox',input:inputRole})[tag] || tag;
           const r=el.getBoundingClientRect();
           elements.push({ref:refFor(el), tag, role, name:name.replace(/\s+/g,' ').trim().slice(0,200),
             value:type==='password'?'[redacted]':String(el.value||'').slice(0,200),
-            disabled:Boolean(el.disabled||el.getAttribute('aria-disabled')==='true'),
+            disabled:Boolean(el.matches(':disabled')||el.getAttribute('aria-disabled')==='true'),
+            ...(type==='checkbox'||type==='radio'?{checked:el.checked}:{}),
+            ...(el instanceof HTMLSelectElement?{options:Array.from(el.options).map(o=>({value:o.value,label:o.label,selected:o.selected,disabled:o.disabled}))}:{}),
             bounds:{x:r.x,y:r.y,width:r.width,height:r.height}});
           if(elements.length>=1000) break;
         }
-        return {elements,text:(document.body?.innerText||'').slice(0,20000),scope:'main-frame',limit:1000};
+        const text=document.body?.innerText||'';
+        return {elements,text:text.slice(0,20000),scope:'main-frame',limit:1000,
+          truncated:elements.length>=1000||text.length>20000};
       }
       function act(kind,target,value) {
         const el=resolve(target);
-        if (!visible(el) || el.disabled || el.getAttribute('aria-disabled')==='true') throw new Error('element_not_actionable');
+        if (!visible(el) || el.matches(':disabled') || el.getAttribute('aria-disabled')==='true') throw new Error('element_not_actionable');
         el.scrollIntoView({block:'nearest'});
         if(kind==='click') el.click();
         else {
           if (el.readOnly) throw new Error('element_readonly');
           if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
             if (el instanceof HTMLInputElement && ['file','checkbox','radio','button','submit','reset','hidden'].includes(el.type)) throw new Error('unsupported_fill_type');
+            if (el instanceof HTMLSelectElement && !Array.from(el.options).some(o=>o.value===value&&!o.disabled&&!o.parentElement.disabled)) throw new Error('invalid_option');
             const prototype=el instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:el instanceof HTMLSelectElement?HTMLSelectElement.prototype:HTMLInputElement.prototype;
             Object.getOwnPropertyDescriptor(prototype,'value').set.call(el,value);
           } else if(el.isContentEditable) el.textContent=value;
           else throw new Error('element_not_editable');
-          el.dispatchEvent(new Event('input',{bubbles:true}));
-          el.dispatchEvent(new Event('change',{bubbles:true}));
+          el.dispatchEvent(new Event('input',{bubbles:true,composed:true}));
+          el.dispatchEvent(new Event('change',{bubbles:true,composed:true}));
         }
         return {method:'dom',nativeVerified:false,requiresForeground:false,target};
       }
-      window.__agentWebKit={snapshot,resolve,act,visible};
+      window.__agentWebKit={snapshot,resolve,act,visible,exists};
     })();
     """#
 }

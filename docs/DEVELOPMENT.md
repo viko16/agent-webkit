@@ -4,9 +4,10 @@
 zsh scripts/build.sh          # debug + 本地 ad-hoc 签名 .app
 zsh scripts/build.sh release  # release + .app
 python3 tests/acceptance.py --out .artifacts/acceptance
+python3 tests/reliability.py  # 独立应用、本地页面、超时恢复和计时回归
 ```
 
-Swift Package 无第三方包。`scripts/build.sh` 生成 `.build/Agent WebKit.app`，包含固定 Bundle ID 和允许 Web 内容联网的 ATS 配置。签名仅供本机开发，不包含公证或分发证书。测试使用 `.build/debug/browser` 作客户端，使用应用包中的 `browser daemon` 启动服务；若构建 release 后要跑自动验收，请重新构建 debug，以免应用包和测试 CLI 版本不一致。
+Swift Package 无第三方包。`scripts/build.sh` 生成 `.build/Agent WebKit.app`，包含固定 Bundle ID、原生绘制的图标和允许 Web 内容联网的 ATS 配置。签名仅供本机开发，不包含公证或分发证书。测试使用 `.build/debug/browser` 作客户端，使用应用包中的 `browser daemon` 启动服务；测试前至少构建一次 debug，并确保客户端与应用包来自相同源码。`scripts/make_icon.swift` 以 AppKit 绘制各尺寸图标，再由系统 iconutil 打包，不需要图片生成服务或外部依赖。
 
 ## 复现域名代理路径
 
@@ -29,6 +30,8 @@ python3 tests/acceptance.py --whistle-existing --origin-port 5173
 
 B 的两个 Space 访问同一个含随机 nonce 的 HTTPS URL。代理端必须显示本地站点生成的 nonce，并且 Whistle 记录实际 GET；direct 必须显示公网 Example Domain、没有本地 nonce，不增加同 URL 的 Whistle 会话或本地来源请求。截图、JSON 状态和配置成功均不能单独作为网络路径证据。这个测试需要访问公网 example.com；断网会失败，不回退到假站点。
 
+`network_cases.py` 在两个 Space 内分别执行同 URL 的 fetch 与 WSS。代理 Space 必须收到本地服务返回的随机 nonce 和 WebSocket echo，Whistle 必须有对应会话；direct 不能新增这些 Whistle 会话或命中本地服务。example.com 不提供测试用 WebSocket，因此 direct 的 WSS 超时只用于排除错误代理路径，不代表公网上存在可用的 WebSocket 服务。媒体、Service Worker 和其他资源类型尚未全面测试。
+
 `tests/fixtures.py proxy` 与 `tests/proxy_probe.py` 保留为此前的 CONNECT / loopback 诊断工具，不再参与 B。localhost / 127.0.0.1 代理路径暂不纳入验收。
 
 ## Space 证书策略
@@ -47,9 +50,11 @@ Whistle 2.10.2 动态证书的 SAN 存在，但缺少 EKU `serverAuth`。本机�
 
 单进程负责 AppKit、Space 注册表和 Unix Socket。WKWebView 操作在主 Actor 上执行，网络等待异步让出执行权；WebKit 自己管理 WebContent / Networking / GPU 进程。每个 Space 同时执行一条页面命令，不同 Space 可以并发。没有全局 activeSpace 供 RPC 隐式使用。
 
+Socket 建立后，`status.ready` 表示元数据恢复与待删除存储的清理尝试是否完成。恢复期间只有 status/help/version 可用，其他命令返回 `not_ready`，避免 Agent 与恢复任务同时修改会话。ready 不表示全部网页加载完成；页面仍用 `wait` 等待。
+
 注册表保存 Space UUID、名称、代理、固定默认 Tab UUID、各 Tab UUID/URL 和待删除标记。Cookie、LocalStorage 等由命名 WKWebsiteDataStore 持久化，不手工导入导出。重启恢复的是标签页 URL，不是 DOM、JavaScript 堆、表单草稿或完整后退历史。Cookie 是否跨重启仍服从过期 / 会话属性；验收使用带 Max-Age 的 Cookie。
 
-GUI 的 selectedSpace / selectedTab 只决定观察哪一个 WebView。关闭观察窗口不终止服务。后台 Tab 使用隐藏 NSPanel 持有视图；DOM、Evaluate 和截图不调用 activate / makeKey。用户通过 Dock 重新打开窗口时才可成为 key window。
+GUI 的 selectedSpace / selectedTabs 只决定观察哪一个 WebView，并按数据目录记住选择。窗口采用 NSSplitViewController、原生 sidebar、NSToolbar 和系统语义颜色。关闭观察窗口不终止服务。后台 Tab 使用隐藏 NSPanel 持有视图；DOM、Evaluate 和截图不调用 activate / makeKey。GUI 新建、地址栏导航和重新加载都走同一条命令处理路径，遵守 Space 锁及代理检查。没有 Space 时，首次新建显式使用 direct 创建 personal；其余新建沿用当前 Space。分享按钮复制带 Space UUID 和 Tab UUID 的 snapshot 命令，既不新建页面，也不修改默认标签页。地址栏编辑期间，后台刷新不会覆盖输入。
 
 本地 RPC 为每连接一条换行分隔的 JSON Request / Response，请求结构：
 
@@ -59,9 +64,19 @@ GUI 的 selectedSpace / selectedTab 只决定观察哪一个 WebView。关闭观
 
 复合命令为 `space.create` / `tab.new` 等，与 CLI 一一对应。Socket 默认位于 0700 的数据目录中，权限 0600，服务用 `getpeereid` 拒绝其他 UID。注册表和 Socket 各有 flock，重复 daemon 不覆盖活跃 Socket。单条消息上限 8 MiB，Socket 读写超时 75 秒，页面等待 1–60000 ms。不要把自定义 Socket 放在他人可替换的目录；同一 UID 内的进程具有相同控制权限。
 
-Snapshot 只覆盖主 frame 的普通 DOM，最多 1000 个可见交互元素与 20000 字文本。引用在元素对象存续期间稳定，导航、刷新或元素被移除后失效；CSS selector 必须恰好命中一个元素。`fill` 使用原生 value setter 和非 trusted input/change 事件；不支持文件、checkbox、radio 的文字填写。Evaluate 使用公开 JS API，返回不能被 JSON 表示的值时明确失败；不等待 Promise。页面弹窗自动关闭并计数，外部 URL scheme 和新窗口导航被拒绝，避免意外启动其他应用。
+Snapshot 只覆盖主 frame 的普通 DOM，最多 1000 个可见交互元素与 20000 字文本，并返回 `truncated`。引用在元素对象存续期间稳定，导航、刷新或元素被移除后失效；CSS selector 必须恰好命中一个元素。Snapshot 包含控件标签、checkbox/radio 状态、select 选项，并隐藏 password 值。`fill` 使用原生 value setter 和非 trusted input/change 事件；拒绝 disabled fieldset、只读字段、无效 select 值以及文件、checkbox、radio 的文字填写。`wait` 等待唯一元素可见，选择器错误不会被吞掉当成普通超时。
 
-页面无限 JavaScript 可能使对应 WebContent 失去响应；目前 Socket 超时不能强制中断正在执行的 JS。后台页面定时器仍受 WebKit 节流。这些都需要在真实 Agent 网站中进一步验证。
+Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 等待表达式返回的 Promise（同样在 page world）。返回不能被 JSON 表示的值时明确失败。页面弹窗自动关闭并计数，外部 URL scheme 和新窗口导航被拒绝，避免意外启动其他应用。
+
+## 超时与恢复
+
+每条页面命令使用单调时钟的截止时间。JS、异步 JS 和截图通过 PendingOperation 将 WebKit 回调与主队列计时器协调，保证 continuation 只完成一次；晚到的回调不能再次完成请求或污染后续请求的计时。WebKit 调用超时后，标签页标记 `unresponsive`，Space 锁释放。`state`、`tab list`、`space info` 可在忙碌或故障期间读取，不需要执行页面 JavaScript。
+
+超时只是停止宿主等待，不是可靠地中断页面 JS。为避免继续在未知状态上操作，该 Tab 的后续 DOM 命令会返回 `web_content_unresponsive`。显式 `open` / `reload` 替换异常 WKWebView，继承同一 Tab ID、WKWebsiteDataStore 与 TLS 策略；不重放点击、填写或提交。真正的 WebContent 终止通知会让挂起调用立即失败，并在 UI 显示恢复提示。当前已实测无限循环和永不完成的 Promise 恢复；进程被系统终止的分支尚未单独故障注入验证。
+
+故障恢复后立即删除 Space，实测 WebKit 可能仍持有没有活动页面的网络会话，`remove(forIdentifier:)` 返回 `Data store is in use (by network process)`。流程先调用 `removeData` 清理全部公开网站数据类型，再用 `fetchDataRecords` 验证为空，并有限重试容器删除。容器未释放时返回 `websiteDataRemoved: true`、`dataStoreRemoved: false`、`cleanupPending: true`，保留 tombstone；不会把容器删除当成成功。重启后会再次清理，可通过 `status.pendingStoreCleanup` 查询。同名重建使用新 UUID，测试验证它读不到旧 LocalStorage，并验证重启后旧容器和 tombstone 清除。
+
+导航等待超时不会停止网络加载，可继续 `wait` 或打开其他 URL。被新导航取消的旧请求不会把迟到的错误写入当前页面。URL 在请求开始时保留，避免重启恢复过程中把尚未加载的标签页覆盖成 about:blank；SPA URL 变化也会保存。恢复仅保证持久化状态和 URL，页面 JS 内存、未提交表单和完整后退历史不在恢复范围内。后台页面定时器仍受 WebKit 节流。
 
 ## 逐步计时
 
@@ -84,10 +99,12 @@ python3 scripts/google_demo.py --space google-demo
 | `ipcRoundTripMs` | CLI 序列化请求、连接 Socket、发送请求到读完响应；包含服务端主队列等待与响应传输。 |
 | `serverMs` | 主 Actor 开始处理请求到命令完成或报错；包含检查、等待、保存元数据、PNG 编码与写盘，排除进入主队列前的等待和响应序列化 / 传输。 |
 | `webkitMs` | 当前请求中 WebKit 操作时间区间的并集，避免导航和读取 readyState 的 JS 重叠计数。 |
-| `webkitOperations` | 按 `evaluateJavaScript`、`takeSnapshot`、`navigation` 返回调用次数、各自总时长及 `inProgress` 数量；分项可能重叠，不能直接相加。 |
+| `webkitOperations` | 按 `evaluateJavaScript`、`callAsyncJavaScript`、`takeSnapshot`、`navigation` 返回调用次数、各自总时长及 `inProgress` 数量；分项可能重叠，不能直接相加。 |
 
 WebKit 计时是宿主可观测的 API 延迟，包含 WebKit 进程间通信、调度和异步工作，不是渲染引擎内部 CPU 时间。JS 和截图从调用 API 计到回调入口，截图不包含之后的 PNG 编码和写盘。`open` 导航从调用 `load` 计到 `didFinish` / `didFail`；点击引发的导航从 `didStartProvisionalNavigation` 计到完成，点击到导航开始之间的间隔不会算作导航区间。导航耗时包含网络、TLS 和加载工作。此完成标志不代表网站以后不再发起异步请求，也不保证某一画面已经显示；滚动步骤验证的是 DOM 滚动位置，随后独立截图验证画面。
 
 `click --wait-for-navigation` 将点击及一次完整导航放在同一请求内计时，脚本用它提交搜索和打开结果；普通 `click` 仍只等待 DOM 操作回调。同页锚点和仅更新 DOM 的 SPA 操作不会满足完整导航等待，可用原有 `wait SELECTOR` 等待。超时返回错误和已消耗时间；尚未结束的导航标为 `inProgress`，不会把它后续的时长计入下一条请求。JS 执行失败和结果无法序列化时也保留计时。
 
 `tests/timing.py` 使用有固定延迟的本地页面，验证计时范围的嵌套关系、并发 Space 归属、导航完成与超时、无导航点击、JS / 序列化错误及真实截图；不依赖 Google 的实时可用性。Google 演示是一次实际样本，沿用持久化 Cookie；`open` 跳过本地缓存，之后的链接导航遵循 WebKit 常规策略，不能当成严格冷启动基准。
+
+命令专属选项在 CLI 与服务端同时校验。CLI 在发送前发现的参数错误只有 `cliMs`，不会伪造 IPC 或 WebKit 耗时。`--` 后的参数作为字面值处理，适用于以连字符开头的表单内容。

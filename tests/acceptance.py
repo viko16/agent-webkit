@@ -12,6 +12,7 @@ import traceback
 from fixtures import Events, origin
 from whistle_fixture import WhistleFixture
 from tls_cases import verify_tls_cases
+from network_cases import verify_network_cases
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -40,7 +41,7 @@ def main():
     state = Path(tempfile.mkdtemp(prefix='awk-'))
     binary = ROOT / '.build/debug/browser'
     app_binary = ROOT / '.build/Agent WebKit.app/Contents/MacOS/browser'
-    env = dict(os.environ, BROWSER_DATA_DIR=str(state))
+    env = dict(os.environ, BROWSER_DATA_DIR=str(state), BROWSER_SOCKET=str(state / 'browser.sock'))
     report = {'out': str(out), 'stateDirectory': str(state), 'tests': {}, 'resources': {}, 'proxyKind': 'real Whistle on 127.0.0.1:8899', 'loopbackProxyInScope': False}
     daemon = None
     logs = []
@@ -78,8 +79,8 @@ def main():
                 raise AssertionError(f'Daemon exited: {daemon.returncode}; inspect {log.name}')
             if (state / 'browser.sock').exists():
                 try:
-                    cli('status')
-                    return
+                    if cli('status')['ready']:
+                        return
                 except AssertionError:
                     pass
             time.sleep(.1)
@@ -171,6 +172,7 @@ def main():
             'directAddedWhistleSessions': 0, 'systemPolicyBeforeCustomCA': strict_before,
             'systemPolicyAfterCustomCA': strict_after, 'whistleWithCustomCA': ca_result,
             'insecurePolicyIsolated': True, 'newTabInheritsPolicy': True}
+        report['tests']['network'] = verify_network_cases(cli, whistle, site, site_events)
         report['tests']['TLS'] = verify_tls_cases(out, cli, lambda: (stop(), start()))
         # Test the same origin with persistent cookies, avoiding session-cookie restart assumptions.
         for name, value in [('admin', 'A'), ('user', 'B')]:
