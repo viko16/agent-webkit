@@ -1,0 +1,12 @@
+{
+  "name": "agent-webkit-form-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": { "start": "node server.mjs" },
+  "devDependencies": {
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "vue": "3.5.44",
+    "vite": "8.3.5"
+  }
+}

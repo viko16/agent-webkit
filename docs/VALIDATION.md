@@ -1,10 +1,24 @@
 # 实际验收记录
 
+## Issue #1：P1 复杂表单完成与完整回归（2026-10-24）
+
+本批完成复杂表单及操作结果校验。应用仍为 Swift/AppKit/WKWebView + CLI/Unix Socket；React/Vue/Vite 只作为可选测试依赖，不进入应用包。
+
+- `npm ci --prefix tests/forms`、Debug/Release 构建、`codesign --verify --deep --strict '.build/Agent WebKit.app'` 通过。最终应用包为 Release；仍有既有的两个 CLT 链接搜索目录警告。
+- `python3 tests/reliability.py --forms` 在 Debug 上通过（[报告](../.artifacts/reliability-20261024-192527/report.json)），最终 Release 上再次通过（[报告](../.artifacts/reliability-20261024-192740/report.json)、[逐条命令](../.artifacts/reliability-20261024-192740/commands.jsonl)、[表单截图](../.artifacts/reliability-20261024-192740/forms.png)）。原有桥接隔离、弹窗、frame/shadow、超时恢复、持久化、清理及 16 项计时均保留并通过。
+- `python3 tests/acceptance.py --direct-conflicts` 在最终 Release 上通过（[报告](../.artifacts/20261024-192644/report.json)）。原有 A/B/C/D、真实 Whistle/Direct、fetch/WSS、TLS 正反用例、弹窗和五类进程内代理设置冲突均通过。与可靠性套件串行运行；没有修改用户系统代理，未把进程注入当作 OS 代理开关实测。
+
+React 19.3.1 和 Vue 3.5.44 各完成两次成功提交、一次服务端拒绝。[服务端记录](../.artifacts/reliability-20261024-192740/submissions.jsonl)恰好 6 条，包含本轮随机 nonce 和框架实际提交的文本、textarea、select、checkbox 状态；等待超时没有重复请求。覆盖中文、多行、空值、keyed 重渲染后值保留及旧引用失效、disabled/readOnly/aria 限制、contenteditable 纯文本替换。合成 click 即使触发 422 拒绝也只返回 DOM 操作完成，随后通过文本条件确认拒绝，不冒充业务成功。
+
+前两次扩展测试未通过：第一次 fixture 的 output 样式折叠换行，改为按实际多行文本显示；第二次错误地要求 checkbox 派生 input 也必须非可信，现分别核对原始 click 和填写事件。WebKit 实测 checkbox 的 click 为 false、派生 input 为 true；fill 的 InputEvent 为 false，类型为 insertReplacementText（[事件记录](../.artifacts/reliability-20261024-192740/form-events.json)）。这不代表原生输入或可信用户激活。
+
+资源样本：空应用 96.42 MiB，5 Space 399.62 MiB，重启后 313.75 MiB，删除后 148.86 MiB，退出后测试进程全部回收；启动前后前台 PID 均为 56420。RSS 仍包含共享页重复计算，是 fixture 短时观察。只实测 macOS 27.0.1；复杂第三方编辑器、输入法/选区、Console/网络诊断、Vite+Whistle 的 HMR 与真实站点回归仍未完成，本次本地框架测试不替代这些验收。
+
 ## Issue #1：P1 操作结果等待（2026-10-24）
 
 `zsh scripts/build.sh` 和 `python3 tests/reliability.py` 通过：[报告](../.artifacts/reliability-20261024-191126/report.json)。新增 URL 精确匹配、文本子串、六类 DOM 状态等待，覆盖延迟完成、SPA/完整导航、缺失/隐藏/多匹配/过期引用、frame/shadow 作用域和参数冲突。原有 bridge、弹窗、作用域、死循环与 Promise 恢复、持久化、清理和 16 项计时均通过。
 
-等待只验证指定页面条件，不证明业务成功；URL 匹配不等于文档加载完成。此批尚未完成 React/Vue 表单实测，Issue 的复杂表单整项保持未勾选。
+等待只验证指定页面条件，不证明业务成功；URL 匹配不等于文档加载完成。该提交时尚未完成 React/Vue 表单实测，后续完成情况见上节。
 
 ## Issue #1：P1 首批与最终回归（2026-10-24）
 

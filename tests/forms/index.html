@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Framework form acceptance</title>
+<style>
+body { font: 16px system-ui; margin: 24px; }
+main { display: flex; gap: 24px; align-items: start; }
+section { width: 380px; }
+input, textarea, select, button, output, [contenteditable] { display: block; margin: 6px 0; }
+[contenteditable] { min-height: 28px; border: 1px solid #888; white-space: pre-wrap; }
+#rich-result { white-space: pre-wrap; }
+</style>
+<main><section id="react"></section><section id="vue"></section></main>
+<section>
+  <h2>Basic editable content</h2>
+  <div id="rich" role="textbox" aria-label="Rich text" contenteditable="true"><b>Bold</b> initial text</div>
+  <output id="rich-result"></output>
+  <div id="rich-readonly" role="textbox" contenteditable="true" aria-readonly="true">Read only rich text</div>
+  <input id="aria-disabled" aria-disabled="true" value="locked">
+</section>
+<script type="module" src="/main.js"></script>
+</html>

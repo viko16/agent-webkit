@@ -1,5 +1,6 @@
 """Exercise bounded WebKit calls, recovery and CLI contracts in a real isolated app."""
 from concurrent.futures import ThreadPoolExecutor
+import argparse
 import json
 import os
 from pathlib import Path
@@ -12,11 +13,15 @@ from fixtures import origin
 from popup_cases import verify_popups
 from context_cases import verify_contexts
 from wait_cases import verify_waits
+from form_cases import framework_site, verify_forms
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--forms', action='store_true', help='Run real React/Vue fixtures (npm ci --prefix tests/forms)')
+    args = parser.parse_args()
     out = ROOT / '.artifacts' / time.strftime('reliability-%Y%m%d-%H%M%S')
     out.mkdir(parents=True)
     state = Path(tempfile.mkdtemp(prefix='awr-'))
@@ -111,6 +116,9 @@ def main():
         checks.append(verify_popups(popup_cli, base, lambda: (stop(), start())))
         checks.append(verify_contexts(cli, base))
         checks.append(verify_waits(cli, base))
+        if args.forms:
+            with framework_site(out) as (form_url, nonce):
+                checks.append(verify_forms(cli, form_url, nonce, out))
         # Raw IPC gets the same validation as the CLI parser.
         with socket.socket(socket.AF_UNIX) as client:
             client.connect(str(state / 'browser.sock'))

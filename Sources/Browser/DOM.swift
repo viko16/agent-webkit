@@ -114,6 +114,7 @@ enum DOM {
           elements.push({ref:refFor(el), context, tag, role, name:name.replace(/\s+/g,' ').trim().slice(0,200),
             value:type==='password'?'[redacted]':String(el.value||'').slice(0,200),
             disabled:Boolean(el.matches(':disabled')||el.getAttribute('aria-disabled')==='true'),
+            readOnly:Boolean(el.readOnly||el.getAttribute('aria-readonly')==='true'),
             ...(type==='checkbox'||type==='radio'?{checked:el.checked}:{}),
             ...(tag==='select'?{options:Array.from(el.options).map(o=>({value:o.value,label:o.label,selected:o.selected,disabled:o.disabled}))}:{}),
             bounds:{x:r.x,y:r.y,width:r.width,height:r.height,coordinateSpace:el.ownerDocument===document?'main-viewport':'frame-viewport'}});
@@ -130,7 +131,7 @@ enum DOM {
         el.scrollIntoView({block:'nearest'});
         if(kind==='click') el.click();
         else {
-          if (el.readOnly) throw new Error('element_readonly');
+          if (el.readOnly || el.getAttribute('aria-readonly')==='true') throw new Error('element_readonly');
           const view=el.ownerDocument.defaultView, tag=el.localName;
           if (['input','textarea','select'].includes(tag)) {
             if (tag==='input' && ['file','checkbox','radio','button','submit','reset','hidden'].includes(el.type)) throw new Error('unsupported_fill_type');
@@ -139,7 +140,9 @@ enum DOM {
             Object.getOwnPropertyDescriptor(prototype,'value').set.call(el,value);
           } else if(el.isContentEditable) el.textContent=value;
           else throw new Error('element_not_editable');
-          el.dispatchEvent(new view.Event('input',{bubbles:true,composed:true}));
+          const input=tag==='select' ? new view.Event('input',{bubbles:true,composed:true}) :
+            new view.InputEvent('input',{bubbles:true,composed:true,inputType:'insertReplacementText',data:value});
+          el.dispatchEvent(input);
           el.dispatchEvent(new view.Event('change',{bubbles:true,composed:true}));
         }
         return {method:'dom',nativeVerified:false,businessOutcomeVerified:false,requiresForeground:false,target};
