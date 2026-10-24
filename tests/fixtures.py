@@ -44,13 +44,25 @@ def origin(port=0, events=None, tls_context=None):
             query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             time.sleep(min(float(query.get('delay', ['0'])[0]), 3))
             events.add(kind='origin', path=self.path, peerPort=self.client_address[1], cookie=self.headers.get('Cookie'), host=self.headers.get('Host'), nonce=nonce)
+            if self.path.startswith('/diagnostic-drop'):
+                self.close_connection = True
+                self.connection.shutdown(socket.SHUT_RDWR)
+                return
+            if self.path.startswith('/diagnostic-status'):
+                status = int(query.get('status', ['503'])[0])
+                body = b'<!doctype html><title>Diagnostic status</title><p>HTTP response fixture</p>'
+                self.send_response(status)
+                self.send_header('Content-Type', 'text/html')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers(); self.wfile.write(body)
+                return
             if self.path.startswith('/popup-redirect'):
                 self.send_response(302)
                 self.send_header('Location', '/popups?mode=child')
                 self.send_header('Content-Length', '0')
                 self.end_headers()
                 return
-            fixture = {'/popups': 'popups.html', '/contexts': 'contexts.html', '/context-frame': 'context-frame.html'}.get(urllib.parse.urlsplit(self.path).path)
+            fixture = {'/popups': 'popups.html', '/contexts': 'contexts.html', '/context-frame': 'context-frame.html', '/diagnostics': 'diagnostics.html'}.get(urllib.parse.urlsplit(self.path).path)
             if fixture:
                 body = (Path(__file__).parent / 'site' / fixture).read_bytes()
                 self.send_response(200)

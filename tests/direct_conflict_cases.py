@@ -45,6 +45,8 @@ def verify_direct_conflicts(cli, start, stop, settings, base, target, nonce, whi
             info = cli('space', 'info', 'conflict-direct')
             assert info['id'] in status['blockedSpaces'] and info['network']['blocked']
             assert info['network']['error']['code'] == 'direct_system_proxy_conflict'
+            diagnostics = cli('diagnostics', '--space', 'conflict-direct')
+            assert diagnostics['networkBlocked'] and diagnostics['networkErrorCode'] == 'direct_system_proxy_conflict'
             assert any(s['name'] == 'conflict-proxy' for s in cli('space', 'list'))
             page = cli('state', '--space', 'conflict-direct')['page']
             assert page['tabId'] == original['tabId'] and page['url'] == original['url']

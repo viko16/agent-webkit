@@ -1,5 +1,23 @@
 # 实际验收记录
 
+## Issue #1：P1 Console / 网络诊断（2026-10-24）
+
+本批完成 `diagnostics --space NAME [--tab ID] [--clear]`。按 Tab 保留最近 200 条内存摘要，页面队列最多 100 条；原生 WebKit 与 page-script 明确分开，默认不采集 console 正文、请求头/体、响应体、表单值或 URL 路径/query/hash，保留 origin、有限类型、状态码、行列与时间信息。查询不执行 JS，页面忙碌、卡住或 Direct 暂停时仍可读取。
+
+- Debug、Release 构建及 `codesign --verify --deep --strict '.build/Agent WebKit.app'` 通过。最终包为 Release；既有 CLT 两个搜索目录警告仍在。
+- 专项 `python3 tests/reliability.py --diagnostics-only` [报告](../.artifacts/reliability-20261024-210926/report.json)通过。最终 Release 的 `python3 tests/reliability.py --forms` [报告](../.artifacts/reliability-20261024-211524/report.json)通过，保留并通过原有 DOM world、弹窗、frame/shadow、复杂表单、持久化、死循环/Promise 恢复、清理与 16 项计时检查。
+- 最终 Release 的 `python3 tests/acceptance.py --direct-conflicts` [报告](../.artifacts/20261024-211552/report.json)通过：A/B/C/D、Whistle/Direct、fetch/WSS、TLS、弹窗和进程内代理设置冲突均保留。新增核对 Direct 暂停时的诊断查询，以及 TLS 拒绝原因和失败请求的正确 origin。两套测试串行运行，没有改用户系统代理或停止已有 Whistle。
+
+[页面观测记录](../.artifacts/reliability-20261024-211524/diagnostics-page.json)包含实际 console.warn/error、TypeError、未处理 RangeError、图片资源失败、fetch 200/503/拒绝和 XHR 404/断连/取消/超时；返回内容和 Promise 拒绝仍由页面正常消费。另验证 opaque fetch 的状态 0 为 response，未误标失败。[原生记录](../.artifacts/reliability-20261024-211524/diagnostics-native.json)包含主文档 HTTP 503、连接拒绝、导航超时、取消及 JS 卡死期限，均有来源和时间字段。原始逐条命令见同目录 `commands.jsonl`。
+
+同一调用突发 1000 条 console 警告时，页面批次上限和丢弃计数生效；继续发送后宿主只保留 200 条。测试还验证清空、伪造消息字段/来源过滤、敏感值不出现在整个诊断响应、popup/Space 隔离、子 frame 消息拒绝、忙碌查询、卡死恢复保留历史、重启清空历史及前台不变。
+
+本轮资源样本：空应用 102.08 MiB，5 Space 406.19 MiB，重启后 321.86 MiB，删除后 155.36 MiB，退出后测试进程全部回收；启动前后前台 PID 均为 169。RSS 含共享页重复计算，仍只是短时 fixture 观察；本轮系统为 macOS 27.0.1。
+
+早期用例未通过的原因分别是 fixture 缺少函数结束括号，以及 macOS 对“bind 但不 listen”的端口保持连接等待；修正 fixture 并改用已关闭端口后，真实错误用例通过。首轮完整验收后复核记录，还发现 TLS 失败会把 WebKit 仍显示的旧文档 origin 当作目标；现取原始失败请求 URL、保留底层 error domain/code，并把证书拒绝作为原因标注，已用不同 TLS 端口断言和最终完整回归验证。
+
+范围仍是主 frame 摘要，console 正文和完整资源追踪不提供；页面 hook 可被覆盖或伪造，不证明真实代理路径。内容进程终止记录已接入原有公开回调，但本轮没有注入系统进程杀死；真实 OS 代理切换、worker/子 frame、Vite+Whistle HMR 和真实站点回归均不由此宣称完成。
+
 ## Issue #1：P1 复杂表单完成与完整回归（2026-10-24）
 
 本批完成复杂表单及操作结果校验。应用仍为 Swift/AppKit/WKWebView + CLI/Unix Socket；React/Vue/Vite 只作为可选测试依赖，不进入应用包。

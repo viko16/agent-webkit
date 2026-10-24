@@ -30,6 +30,32 @@ React fixture 使用 value/onChange，Vue 使用 v-model，分别验证 input/te
 
 WebKit 在 DOM click 切换 checkbox 后，可能把派生的 input 事件标为 `isTrusted=true`；发起它的 click 仍是 false，也不证明有原生用户激活。测试分别记录 checkbox 的 click 与 input，以及 fill 主动派发的非可信 InputEvent，避免把这些事件混为一谈。
 
+## Console 与网络诊断
+
+```sh
+browser diagnostics --space work [--tab ID]
+browser diagnostics --space work --clear
+python3 tests/reliability.py --diagnostics-only
+python3 tests/reliability.py --forms  # 含诊断、原有可靠性和框架回归
+```
+
+`diagnostics` 在宿主读取 Tab 的内存记录，不执行 JS，不占用 Space 操作锁，因此忙碌、Direct 暂停、页面失联时仍可查询。不返回含 URL/title/错误正文的 `page.state`；响应含 `spaceId`、`tabId`、`busy`、`networkBlocked`、`networkErrorCode` 与 `value`。`--clear` 清除已接收记录；仍在网页中排队的事件可能随后出现。每 Tab 保留最近 200 条，`droppedEvents` 合计环形缓冲淘汰数和页面队列报告的丢弃数。普通导航与显式卡死恢复保留历史，关闭/删除 Tab 或重启释放历史；记录不写注册表或其他磁盘文件。
+
+每条事件有递增 `id`、宿主接收时间 `receivedAtMs` 和 `source`：
+
+| 来源 | 记录内容 | 边界 |
+| --- | --- | --- |
+| `webkit` | 主 frame HTTP response、导航完成/失败/超时、条件等待超时、WebKit 调用超时、导航拒绝和内容进程终止回调 | 失败保存系统 domain/code 和有限原因分类，不保存 NSError.userInfo 或错误正文；HTTP 4xx/5xx 本身仍可能是正常完成的文档导航 |
+| `page-script` | console.warn/error 的等级与参数数量、异常类型/行列、未处理拒绝、元素资源错误、fetch/XHR 状态/耗时 | 页面可伪造、覆盖或停用；异常也可能由 Agent evaluate/DOM 调用触发，缺失记录不代表没有错误 |
+
+页面 hook 在 documentStart 注入 page world，通过公开 WKScriptMessageHandler 发送摘要；内部 DOM bridge 仍留在原有隔离 world。console 包装调用原方法且不遍历参数，fetch 保留响应和拒绝，XHR 观察 loadend/error/abort/timeout，不读写 body/header。页面队列最多 100 条，约每 100 ms 批量发送，导航卸载尝试 flush；后台调度、导航和进程退出可能延迟或丢失批次。宿主再次按字段/枚举/数值范围过滤，不接收任意消息键；共享 popup controller 按 WKScriptMessage.webView 路由，不接受网页提供的 Tab/Space ID，并拒绝子 frame 消息。
+
+默认只保留 http(s) origin（含端口），删除用户名、密码、路径、query 和 hash；全部自由文本消息、栈、Cookie、Authorization、表单值和请求/响应内容不采集。`pageTimeMs` 是网页相对时间，`durationMs` 是对应调用/导航耗时，`receivedAtMs` 可能晚于实际发生时间。Request/URL 对象在失败前无法安全读取目标时、opaque 响应等场景 origin 为 `opaque`。fetch 拒绝无法单独区分网络/CORS/策略问题；状态码 0 不能当成网络失败。
+
+本期不覆盖子 frame、worker、WebSocket 消息或所有 CSS/媒体/缓存/Service Worker 请求，不是 DevTools 的完整网络追踪；没有私有 WebKit delegate 或代理路径验证。`routeVerified` 始终 false，实际代理证据仍来自独立 Whistle 与来源日志。测试主动制造真实异常、HTTP 错误、断连、XHR 超时/取消、opaque 响应，并核对保留响应内容、容量、字段过滤、popup/Space/frame 归属、忙碌/卡死查询、恢复/重启和前台不变；完整验收另验证 TLS 拒绝及 Direct 暂停诊断。
+
+接口依据本机 SDK 的 WKNavigationDelegate、WKScriptMessage、WKUserContentController 公开声明，以及 [error](https://developer.mozilla.org/en-US/docs/Web/API/Window/error_event)、[unhandledrejection](https://developer.mozilla.org/en-US/docs/Web/API/Window/unhandledrejection_event)、[XHR loadend](https://developer.mozilla.org/en-US/docs/Web/API/XMLHttpRequestEventTarget/loadend_event) 文档。包装函数会改变函数身份，页面仍可重新替换它们；保持该限制可见，不将观测结果视为可信审计。
+
 ## 复现域名代理路径
 
 默认的 `python3 tests/acceptance.py` 会使用本机已安装的 `whistle` / `w2`，在 8899 启动前台测试实例。规则通过 `--shadowRules` 传入，`--baseDir` / `--storage` 隔离测试数据，`--certDir` 指向临时 CA；不运行 `w2 proxy`、`w2 ca` 或 `--init`。其中 `--baseDir` 只隔离规则等数据，不隔离 Whistle 默认 CA，所以测试还显式提供临时证书目录。已有实例占用端口时不会覆盖或停止它。

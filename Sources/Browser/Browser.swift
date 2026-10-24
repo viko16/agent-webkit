@@ -40,6 +40,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     let id: UUID
     let webView: WKWebView
     let backingWindow: NSPanel
+    let diagnostics: DiagnosticLog
     var navigationError: Error?
     var changed: (() -> Void)?
     var statusChanged: (() -> Void)?
@@ -63,6 +64,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     var certificateError: BrowserError?
     var operationTiming: RequestTiming?
     private struct NavigationSpan {
+        let start: UInt64
         let timing: RequestTiming?
         let token: Int?
         let sequence: Int
@@ -71,20 +73,27 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     private(set) var navigationSequence = 0
     private var completedNavigationSequence = 0
     private var navigationPending = false
+    private var navigationStartedAt: UInt64?
 
-    init(record: TabRecord, store: WKWebsiteDataStore, tls: TLSConfiguration?, configuration supplied: WKWebViewConfiguration? = nil) {
+    init(record: TabRecord, store: WKWebsiteDataStore, tls: TLSConfiguration?, configuration supplied: WKWebViewConfiguration? = nil, diagnostics: DiagnosticLog? = nil) {
         id = record.id
         persistedURL = record.url
         self.tls = tls
+        self.diagnostics = diagnostics ?? DiagnosticLog()
         let configuration = supplied ?? WKWebViewConfiguration()
         if supplied == nil { configuration.websiteDataStore = store }
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         if !configuration.userContentController.userScripts.contains(where: { $0.source == DOM.bootstrap }) {
             configuration.userContentController.addUserScript(WKUserScript(source: DOM.bootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: DOM.world))
         }
+        if !configuration.userContentController.userScripts.contains(where: { $0.source == DiagnosticScript.source }) {
+            configuration.userContentController.add(DiagnosticRouter.shared, contentWorld: .page, name: DiagnosticScript.name)
+            configuration.userContentController.addUserScript(WKUserScript(source: DiagnosticScript.source, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        }
         webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 1000, height: 700), configuration: configuration)
         backingWindow = NSPanel(contentRect: webView.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init()
+        DiagnosticRouter.shared.logs.setObject(self.diagnostics, forKey: webView)
         backingWindow.isReleasedWhenClosed = false
         backingWindow.contentView = webView
         webView.navigationDelegate = self; webView.uiDelegate = self
@@ -121,6 +130,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
 
     func close() {
         closed = true
+        DiagnosticRouter.shared.logs.removeObject(forKey: webView)
         failPending(BrowserError("tab_closed", "标签页已关闭"))
         observations.removeAll()
         webView.stopLoading(); webView.navigationDelegate = nil; webView.uiDelegate = nil
@@ -164,6 +174,8 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
             pending[id] = { call.finish(.failure($0)) }
             call.arm(milliseconds: remaining) { [weak self] in
                 self?.unresponsive = true
+                self?.diagnostics.native("operation-timeout", url: self?.webView.url,
+                    error: BrowserError("timeout", ""), duration: milliseconds(from: now))
                 self?.changed?()
             }
             body { result in
@@ -212,6 +224,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         // Never treat the previous document's readyState as completion of this request.
         navigationPending = true
         let start = monotonicNow()
+        navigationStartedAt = start
         if let navigation = webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)) {
             trackNavigation(navigation, start: start)
         }
@@ -222,7 +235,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         let key = ObjectIdentifier(navigation)
         guard navigationSpans[key] == nil else { return }
         navigationSequence += 1
-        navigationSpans[key] = NavigationSpan(timing: operationTiming,
+        navigationSpans[key] = NavigationSpan(start: start, timing: operationTiming,
             token: operationTiming?.begin("navigation", from: start), sequence: navigationSequence)
     }
 
@@ -281,6 +294,8 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
             }
             try await Task.sleep(nanoseconds: 50_000_000)
         } while milliseconds(from: start) < Double(timeout)
+        diagnostics.native(navigationPending ? "navigation-timeout" : "condition-timeout", url: URL(string: persistedURL),
+                           error: BrowserError("timeout", ""), duration: milliseconds(from: start))
         throw BrowserError("timeout", "等待页面条件超时（\(timeout) ms）")
     }
 
@@ -306,6 +321,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         navigationError = nil
         certificateError = nil
+        if !navigationPending { navigationStartedAt = monotonicNow() }
         navigationPending = true
         if let navigation { trackNavigation(navigation, start: monotonicNow()) }
         changed?()
@@ -315,6 +331,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         changed?()
     }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        recordNavigation("navigation-finished", navigation: navigation)
         if finishNavigation(navigation), let url = webView.url { persistedURL = url.absoluteString }
         changed?()
     }
@@ -328,9 +345,27 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         // Unknown cancelled callbacks may belong to a superseded navigation.
         if navigation.flatMap({ navigationSpans[ObjectIdentifier($0)] }) == nil,
            (error as NSError).domain == NSURLErrorDomain, (error as NSError).code == NSURLErrorCancelled { return }
+        recordNavigation("navigation-failed", navigation: navigation, error: error)
         let latest = finishNavigation(navigation)
         // A replacement load cancels the previous request. Its late failure must not poison the new one.
         if latest { navigationError = certificateError ?? error; changed?() }
+    }
+    private func recordNavigation(_ kind: String, navigation: WKNavigation?, error: Error? = nil) {
+        let span = navigation.flatMap { navigationSpans[ObjectIdentifier($0)] }
+        let start = span?.start ?? navigationStartedAt
+        let latest = span.map { $0.sequence == navigationSequence } ?? navigationPending
+        let failedURL = (error as NSError?)?.userInfo[NSURLErrorFailingURLErrorKey] as? URL
+        // A failed provisional load can leave webView.url pointing at the previous document.
+        let url = error == nil ? webView.url : failedURL ?? URL(string: persistedURL)
+        diagnostics.native(kind, url: url, error: error, cause: latest ? certificateError : nil,
+                           duration: start.map { milliseconds(from: $0) })
+    }
+    func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
+                 decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        if navigationResponse.isForMainFrame, let response = navigationResponse.response as? HTTPURLResponse {
+            diagnostics.native("navigation-response", url: response.url, status: response.statusCode)
+        }
+        decisionHandler(.allow)
     }
     func webView(_ webView: WKWebView, didReceive challenge: URLAuthenticationChallenge,
                  completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
@@ -372,12 +407,17 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         terminated = true
         let error = BrowserError("web_content_terminated", "WebContent 进程已退出；reload 可恢复页面，未提交的表单不会保留")
         navigationError = error
+        diagnostics.native("web-content-terminated", url: webView.url, error: error)
         failPending(error)
         changed?()
     }
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         do { try networkCheck?() }
-        catch { navigationError = error; changed?(); decisionHandler(.cancel); return }
+        catch {
+            navigationError = error
+            diagnostics.native("navigation-blocked", url: navigationAction.request.url, error: error)
+            changed?(); decisionHandler(.cancel); return
+        }
         guard let url = navigationAction.request.url, Self.supports(url) else {
             rejectNavigation(BrowserError("unsupported_navigation", "仅支持 http(s) 与 about:blank；已拒绝外部应用或不支持的 URL scheme"))
             decisionHandler(.cancel); return
@@ -388,6 +428,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         (["http", "https"].contains(url.scheme?.lowercased() ?? "") && url.host != nil) || url.absoluteString == "about:blank"
     }
     private func rejectNavigation(_ error: BrowserError) {
+        diagnostics.native("navigation-blocked", url: webView.url, error: error)
         lastNavigationRejection = error; changed?()
     }
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
@@ -683,10 +724,18 @@ final class BrowserModel {
         guard let space = spaces.first(where: { $0.record.id == id }) else { throw BrowserError("space_not_found", "Space 已删除") }
         if command == "space.info" { return space.summary }
         if command == "tab.list" { return space.tabs.map(\.state) }
-        if command == "state" {
+        if command == "state" || command == "diagnostics" {
             let tabID = r.options["tab"] ?? space.record.defaultTab.uuidString
             guard let tab = space.tabs.first(where: { $0.id.uuidString.lowercased() == tabID.lowercased() }) else {
                 throw BrowserError("tab_not_found", "Space 中不存在该标签页")
+            }
+            if command == "diagnostics" {
+                // No JS evaluation or raw page.state: usable when busy, blocked or hung,
+                // and cannot leak full URLs/titles/TLS error text through the response envelope.
+                return ["spaceId": id.uuidString, "tabId": tab.id.uuidString, "busy": space.busy,
+                        "networkBlocked": space.networkError != nil,
+                        "networkErrorCode": space.networkError?.code as Any? ?? NSNull(),
+                        "value": tab.diagnostics.snapshot(clear: r.options["clear"] == "true")]
             }
             return ["spaceId": id.uuidString, "space": space.record.name, "proxy": space.record.proxy,
                     "network": space.networkState, "page": tab.state, "busy": space.busy, "value": NSNull()] as [String: Any]
@@ -727,7 +776,7 @@ final class BrowserModel {
         guard var tab = space.tabs.first(where: { $0.id.uuidString.lowercased() == tabID.lowercased() }) else { throw BrowserError("tab_not_found", "Space 中不存在该标签页") }
         // Replace a stalled view only on explicit navigation. Never replay an Agent action.
         if ["open", "reload"].contains(command), tab.terminated || tab.unresponsive {
-            let replacement = Tab(record: TabRecord(id: tab.id, url: tab.persistedURL), store: space.store, tls: space.record.tls)
+            let replacement = Tab(record: TabRecord(id: tab.id, url: tab.persistedURL), store: space.store, tls: space.record.tls, diagnostics: tab.diagnostics)
             let index = space.tabs.firstIndex(where: { $0 === tab })!
             tab.close(); space.tabs[index] = replacement; tab = replacement
             bind(space); changed?()

@@ -19,7 +19,7 @@ struct Request: Codable {
             "space.info":1...1, "space.delete":1...1, "tab.list":0...0, "tab.new":0...1,
             "tab.close":1...1, "tab.default":1...1, "open":1...1, "reload":0...0,
             "snapshot":0...0, "state":0...0, "evaluate":1...1, "click":1...1,
-            "fill":2...2, "screenshot":0...0, "wait":0...1]
+            "fill":2...2, "screenshot":0...0, "wait":0...1, "diagnostics":0...0]
         guard let arity = arities[command], arity.contains(args.count) else {
             throw BrowserError("invalid_arguments", "未知命令或参数数量不正确：\(command)；browser help 查看用法")
         }
@@ -49,10 +49,11 @@ struct Request: Codable {
             }
         }
         if command == "screenshot" { allowed.insert("out") }
+        if command == "diagnostics" { allowed.insert("clear") }
         if let key = options.keys.sorted().first(where: { !allowed.contains($0) }) {
             throw BrowserError("invalid_arguments", "\(command) 不支持 --\(key)")
         }
-        for key in ["await", "wait-for-navigation", "wait-for-popup", "ignore-certificate-errors"] {
+        for key in ["await", "wait-for-navigation", "wait-for-popup", "ignore-certificate-errors", "clear"] {
             if let value = options[key], value != "true" { throw BrowserError("invalid_arguments", "--\(key) 是无值开关") }
         }
     }
@@ -96,7 +97,7 @@ struct Options {
             }
             if arg.hasPrefix("--"), !literal {
                 let key = String(arg.dropFirst(2))
-                if ["ignore-certificate-errors", "wait-for-navigation", "wait-for-popup", "await"].contains(key), options[key] == nil {
+                if ["ignore-certificate-errors", "wait-for-navigation", "wait-for-popup", "await", "clear"].contains(key), options[key] == nil {
                     options[key] = "true"; i += 1; continue
                 }
                 guard allowed.contains(key), i + 1 < arguments.count, options[key] == nil else {
@@ -132,6 +133,7 @@ browser tab close ID --space NAME_OR_ID
 browser tab default ID --space NAME_OR_ID
 browser reload --space NAME_OR_ID [--tab ID] [--timeout 15000]
 browser snapshot|state --space NAME_OR_ID [--tab ID]
+browser diagnostics --space NAME_OR_ID [--tab ID] [--clear]
 browser click SELECTOR_OR_REF --space NAME_OR_ID [--tab ID] [--wait-for-navigation | --wait-for-popup] [--timeout 15000]
 browser fill SELECTOR_OR_REF VALUE --space NAME_OR_ID [--tab ID]
 browser evaluate JAVASCRIPT --space NAME_OR_ID [--tab ID] [--await] [--timeout 15000]

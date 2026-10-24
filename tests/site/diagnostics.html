@@ -1,0 +1,41 @@
+<!doctype html>
+<meta charset="utf-8"><title>Diagnostic fixture</title>
+<input id="secret" type="password" value="diagnostic-secret">
+<button id="run">Run errors and requests</button><output id="result">Ready</output>
+<script>
+const secret='diagnostic-secret';
+document.cookie='session='+secret+'; path=/';
+function xhrCase(url,mode) {
+  return new Promise(resolve=>{
+    const xhr=new XMLHttpRequest(); xhr.open('GET',url);
+    xhr.setRequestHeader('Authorization','Bearer '+secret);
+    if(mode==='timeout') xhr.timeout=30;
+    xhr.onloadend=()=>resolve({status:xhr.status,mode});
+    xhr.send(); if(mode==='abort') xhr.abort();
+  });
+}
+document.querySelector('#run').onclick=async()=>{
+  console.warn(secret,{Cookie:secret,Authorization:secret}); console.error(new Error(secret));
+  setTimeout(()=>{throw new TypeError(secret)},0);
+  Promise.reject(new RangeError(secret));
+  const img=new Image(); img.src='/diagnostic-status?status=404&secret='+secret; document.body.append(img);
+  const response=await fetch('/resource?secret='+secret,{headers:{Authorization:'Bearer '+secret}});
+  document.querySelector('#result').textContent='Fetch success';
+  const body=await response.json();
+  const bad=await fetch('/diagnostic-status?status=503&secret='+secret);
+  document.querySelector('#result').textContent='Fetch HTTP';
+  let failed=false;
+  try { await fetch('/diagnostic-drop?secret='+secret); } catch (_) { failed=true; }
+  document.querySelector('#result').textContent='Fetch failure';
+  const xhrs=[];
+  xhrs.push(await xhrCase('/diagnostic-status?status=404&secret='+secret,'http'));
+  document.querySelector('#result').textContent='XHR HTTP';
+  xhrs.push(await xhrCase('/diagnostic-drop?secret='+secret,'network'));
+  document.querySelector('#result').textContent='XHR failure';
+  xhrs.push(await xhrCase('/resource?delay=1&secret='+secret,'timeout'));
+  document.querySelector('#result').textContent='XHR timeout';
+  xhrs.push(await xhrCase('/resource?delay=1&secret='+secret,'abort'));
+  window.actualResults={nonce:body.nonce,status:bad.status,failed,xhrs};
+  document.querySelector('#result').textContent='Done';
+};
+</script>

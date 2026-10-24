@@ -14,6 +14,7 @@ from popup_cases import verify_popups
 from context_cases import verify_contexts
 from wait_cases import verify_waits
 from form_cases import framework_site, verify_forms
+from diagnostic_cases import verify_diagnostics
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -21,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--forms', action='store_true', help='Run real React/Vue fixtures (npm ci --prefix tests/forms)')
+    parser.add_argument('--diagnostics-only', action='store_true', help='Run only the diagnostic regression cases')
     args = parser.parse_args()
     out = ROOT / '.artifacts' / time.strftime('reliability-%Y%m%d-%H%M%S')
     out.mkdir(parents=True)
@@ -74,6 +76,12 @@ def main():
         assert 'reload' in cli('--help')['usage']
         cli('open', 'https://example.com', '--space', 'work', '--proxy', 'direct', error='invalid_arguments')
         start()
+        if args.diagnostics_only:
+            checks.append(verify_diagnostics(cli, base, out, lambda: (stop(), start())))
+            report = dict(ok=True, checks=checks, artifacts=str(out))
+            (out / 'report.json').write_text(json.dumps(report, indent=2))
+            print(json.dumps(report))
+            return
         work = cli('space', 'create', 'work', '--proxy', 'direct')
         cli('space', 'create', 'other', '--proxy', 'direct')
         cli('open', base, '--space', 'work')
@@ -116,6 +124,7 @@ def main():
         checks.append(verify_popups(popup_cli, base, lambda: (stop(), start())))
         checks.append(verify_contexts(cli, base))
         checks.append(verify_waits(cli, base))
+        checks.append(verify_diagnostics(cli, base, out, lambda: (stop(), start())))
         if args.forms:
             with framework_site(out) as (form_url, nonce):
                 checks.append(verify_forms(cli, form_url, nonce, out))
