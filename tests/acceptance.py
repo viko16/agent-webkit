@@ -14,6 +14,7 @@ from whistle_fixture import WhistleFixture
 from tls_cases import verify_tls_cases
 from network_cases import verify_network_cases
 from direct_conflict_cases import prepare_proxy_settings, verify_direct_conflicts
+from popup_cases import verify_popups
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -133,6 +134,8 @@ def main():
         report['launchFocus'] = {'before': launch_focus, 'after': focus_before, 'unchanged': launch_focus == focus_before}
         report['system'] = subprocess.check_output(['sw_vers'], text=True)
         report['systemProxy'] = cli('status')['systemProxy']
+        report['tests']['popups'] = verify_popups(cli, 'https://example.com', lambda: (stop(), start()),
+                                                  proxy='http://127.0.0.1:8899', whistle=whistle)
         sample('empty')
         assert cli('snapshot', ok=False)['code'] == 'space_required'
         assert cli('space', 'create', 'invalid', '--proxy', 'http://127.0.0.1:1234', ok=False)['code'] == 'invalid_proxy'

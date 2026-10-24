@@ -1,5 +1,15 @@
 # 实际验收记录
 
+## Issue #1：P0-3 与 GUI 补验（2026-10-24）
+
+`python3 tests/reliability.py` [报告](../.artifacts/reliability-20261024-184946/report.json)通过 Direct 弹窗回归与原有可靠性/16 项计时检查。随后独立运行 `python3 tests/acceptance.py --direct-conflicts` [报告](../.artifacts/20261024-185037/report.json)，五类冲突、真实 Whistle 弹窗和原有 A/B/C/D、fetch/WSS、TLS 全部通过；该次未与其他测试并行，可用于资源观察。
+
+弹窗覆盖 target blank、window.open、302 重定向、opener 的 postMessage 和父页 hash 回调、window.close、命名窗口复用、关闭父页后最后一个子窗口的清理、显式 Tab 控制、双 Space Cookie/LocalStorage 隔离、CLI 默认 Tab 不变、重启后的 ID/URL、前台 PID 不变。Whistle 会话中有弹窗和重定向真实请求；custom-ca 弹窗接受合规证书，拒绝错误主机名及过期证书。要求可信点击的 fixture 对 DOM click 返回 `popup_not_opened`，不支持的 scheme 返回 `unsupported_navigation`。
+
+`python3 tests/ui_fixture.py --conflict` 创建了[独立 GUI 测试应用](../.artifacts/ui-20261024-185154/fixture.json)。原生 UI 实查：侧栏和横幅显示 Direct 暂停、原因和恢复方法；解除进程内设置后点重新加载恢复原 URL；点击 Require trusted click 实际读到 `isTrusted=true` 并出现同 Space 新 Tab，GUI 仍停留父页，CLI 默认也不变；手动切换子页并点击回调关闭，父页显示 `manual-result`，子 Tab 消失。外部 scheme 的拒绝横幅可见。关闭观察窗口后，CLI 仍可打开弹窗并生成[后台截图](../.artifacts/ui-20261024-185154/background.png)。测试 Space 已删除、测试应用已退出，用户原有应用未被关闭。
+
+这些是受控本地登录回调流程，不是实际第三方 OAuth 服务验收；重启不恢复内存中的 opener/回调关系。真实 OS 代理切换、跨源登录站点和 WebKit 自身的弹窗抑制分支仍未单独覆盖（已覆盖网站依据 isTrusted 拒绝的确定性分支）。
+
 ## Issue #1：P0-2（2026-10-24）
 
 `python3 tests/acceptance.py --direct-conflicts` [报告](../.artifacts/20261024-184539/report.json)通过：HTTP、HTTPS、SOCKS（嵌套接口）、PAC、自动发现五类冲突下，真实 daemon 均可重启；状态查询和 Whistle 域名请求继续工作，Direct 明确拒绝加载。解除冲突后 reload 保留 Cookie、LocalStorage、Tab ID 和 URL；页面自行发起的导航也会被拒绝。原有 A/B/C/D、TLS、fetch/WSS 全部通过。`python3 tests/reliability.py` [报告](../.artifacts/reliability-20261024-184553/report.json)及 16 项计时检查通过。

@@ -9,6 +9,7 @@ import tempfile
 import time
 
 from fixtures import origin
+from popup_cases import verify_popups
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -99,6 +100,13 @@ def main():
         assert cli('status')['frontmostPid'] == focus
         cli('open', base, '--space', 'work')
         checks.append('isolated bridge resists page overwrite/delete; page evaluate and Promise; SPA/ref invalidation; reload/restart; background screenshot and unchanged foreground')
+        def popup_cli(*args, ok=True):
+            if ok:
+                return cli(*args)
+            # Share the existing CLI log and retain the expected structured failure contract.
+            code = 'invalid_arguments' if '--wait-for-navigation' in args else 'unsupported_navigation' if '#external' in args else 'popup_not_opened'
+            return cli(*args, error=code)['error']
+        checks.append(verify_popups(popup_cli, base, lambda: (stop(), start())))
         # Raw IPC gets the same validation as the CLI parser.
         with socket.socket(socket.AF_UNIX) as client:
             client.connect(str(state / 'browser.sock'))

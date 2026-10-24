@@ -30,13 +30,16 @@ struct Request: Codable {
         }
         if ["open", "reload", "tab.new", "snapshot", "evaluate", "click", "fill", "screenshot", "wait"].contains(command) { allowed.insert("timeout") }
         if command == "space.create" { allowed.formUnion(["proxy", "ca-cert", "ignore-certificate-errors"]) }
-        if command == "click" { allowed.insert("wait-for-navigation") }
+        if command == "click" { allowed.formUnion(["wait-for-navigation", "wait-for-popup"]) }
+        if options["wait-for-navigation"] != nil && options["wait-for-popup"] != nil {
+            throw BrowserError("invalid_arguments", "--wait-for-navigation 与 --wait-for-popup 不能同时使用")
+        }
         if command == "evaluate" { allowed.insert("await") }
         if command == "screenshot" { allowed.insert("out") }
         if let key = options.keys.sorted().first(where: { !allowed.contains($0) }) {
             throw BrowserError("invalid_arguments", "\(command) 不支持 --\(key)")
         }
-        for key in ["await", "wait-for-navigation", "ignore-certificate-errors"] {
+        for key in ["await", "wait-for-navigation", "wait-for-popup", "ignore-certificate-errors"] {
             if let value = options[key], value != "true" { throw BrowserError("invalid_arguments", "--\(key) 是无值开关") }
         }
     }
@@ -80,7 +83,7 @@ struct Options {
             }
             if arg.hasPrefix("--"), !literal {
                 let key = String(arg.dropFirst(2))
-                if ["ignore-certificate-errors", "wait-for-navigation", "await"].contains(key), options[key] == nil {
+                if ["ignore-certificate-errors", "wait-for-navigation", "wait-for-popup", "await"].contains(key), options[key] == nil {
                     options[key] = "true"; i += 1; continue
                 }
                 guard allowed.contains(key), i + 1 < arguments.count, options[key] == nil else {
@@ -116,7 +119,7 @@ browser tab close ID --space NAME_OR_ID
 browser tab default ID --space NAME_OR_ID
 browser reload --space NAME_OR_ID [--tab ID] [--timeout 15000]
 browser snapshot|state --space NAME_OR_ID [--tab ID]
-browser click SELECTOR_OR_REF --space NAME_OR_ID [--tab ID] [--wait-for-navigation] [--timeout 15000]
+browser click SELECTOR_OR_REF --space NAME_OR_ID [--tab ID] [--wait-for-navigation | --wait-for-popup] [--timeout 15000]
 browser fill SELECTOR_OR_REF VALUE --space NAME_OR_ID [--tab ID]
 browser evaluate JAVASCRIPT --space NAME_OR_ID [--tab ID] [--await] [--timeout 15000]
 browser screenshot --space NAME_OR_ID [--tab ID] --out PATH
@@ -124,5 +127,6 @@ browser wait [SELECTOR_OR_REF] --space NAME_OR_ID [--tab ID] [--timeout 15000]
 所有命令支持 --socket PATH。页面命令必须指定 Space；默认标签页固定，与 GUI 无关。
 WebKit 操作支持 --timeout 1–60000；--await 等待 Promise；-- 后的参数按字面值处理。
 browser --help | --version 无需启动服务。reload 恢复异常页面，保留 Tab ID 和 Space 网站数据。
+--wait-for-popup 等待同 Space 新 Tab 并返回 newTabId；DOM 点击不保证可信用户激活或业务成功。
 响应 timing 包含 cliMs、ipcRoundTripMs、serverMs、webkitMs；完整 CLI 进程耗时需由调用方测量。
 """

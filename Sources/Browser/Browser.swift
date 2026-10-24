@@ -44,6 +44,12 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     var changed: (() -> Void)?
     var statusChanged: (() -> Void)?
     var networkCheck: (() throws -> Void)?
+    var createPopup: ((WKWebViewConfiguration, URL) throws -> Tab)?
+    var closeRequested: (() -> Void)?
+    var openerTabID: UUID?
+    var lastNavigationRejection: BrowserError?
+    private(set) var popupSequence = 0
+    private var lastPopupID: UUID?
     var suppressedDialogs = 0
     var terminated = false
     var unresponsive = false
@@ -65,14 +71,16 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     private(set) var navigationSequence = 0
     private var completedNavigationSequence = 0
 
-    init(record: TabRecord, store: WKWebsiteDataStore, tls: TLSConfiguration?) {
+    init(record: TabRecord, store: WKWebsiteDataStore, tls: TLSConfiguration?, configuration supplied: WKWebViewConfiguration? = nil) {
         id = record.id
         persistedURL = record.url
         self.tls = tls
-        let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = store
+        let configuration = supplied ?? WKWebViewConfiguration()
+        if supplied == nil { configuration.websiteDataStore = store }
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
-        configuration.userContentController.addUserScript(WKUserScript(source: DOM.bootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: DOM.world))
+        if !configuration.userContentController.userScripts.contains(where: { $0.source == DOM.bootstrap }) {
+            configuration.userContentController.addUserScript(WKUserScript(source: DOM.bootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: DOM.world))
+        }
         webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 1000, height: 700), configuration: configuration)
         backingWindow = NSPanel(contentRect: webView.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init()
@@ -119,6 +127,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         changed = nil
         statusChanged = nil
         networkCheck = nil
+        createPopup = nil; closeRequested = nil
         navigationSpans.removeAll()
     }
 
@@ -127,7 +136,9 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
          "loading": webView.isLoading, "webContentTerminated": terminated, "suppressedDialogs": suppressedDialogs,
          "unresponsive": unresponsive, "lastError": navigationError.map { failure($0)["error"]! } ?? NSNull(),
          "requiresForeground": false, "tls": tls?.summary ?? TLSConfiguration.systemSummary,
-         "lastTLSChallenge": tlsChallenge]
+         "lastTLSChallenge": tlsChallenge, "openerTabId": openerTabID?.uuidString as Any? ?? NSNull(),
+         "lastNavigationRejection": lastNavigationRejection.map { failure($0)["error"]! } ?? NSNull(),
+         "popupPolicy": "same-space tabs; window geometry/toolbars ignored; synthetic clicks do not guarantee user activation"]
     }
 
     private func failPending(_ error: Error) {
@@ -195,7 +206,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
 
     func load(_ url: URL) {
         persistedURL = url.absoluteString
-        navigationError = nil; certificateError = nil; tlsChallenge = [:]; terminated = false
+        navigationError = nil; lastNavigationRejection = nil; certificateError = nil; tlsChallenge = [:]; terminated = false
         let start = monotonicNow()
         if let navigation = webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)) {
             trackNavigation(navigation, start: start)
@@ -222,10 +233,22 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         repeat {
             if terminated { throw BrowserError("web_content_terminated", "WebContent 进程已退出，请 reload") }
             if let navigationError { throw navigationError }
+            if let lastNavigationRejection { throw lastNavigationRejection }
             if navigationSequence > sequence, completedNavigationSequence == navigationSequence { return }
             try await Task.sleep(nanoseconds: 50_000_000)
         } while milliseconds(from: start) < Double(timeout) && (deadline.map { monotonicNow() < $0 } ?? true)
         throw BrowserError("timeout", "点击后等待新导航完成超时（\(timeout) ms）；同页锚点或 SPA 跳转不会触发完整导航")
+    }
+
+    func waitForPopup(after sequence: Int, timeout: Int) async throws -> String {
+        let start = monotonicNow()
+        repeat {
+            if closed { throw BrowserError("tab_closed", "发起弹窗的标签页已关闭") }
+            if let lastNavigationRejection { throw lastNavigationRejection }
+            if popupSequence > sequence, let lastPopupID { return lastPopupID.uuidString }
+            try await Task.sleep(nanoseconds: 25_000_000)
+        } while milliseconds(from: start) < Double(timeout) && (deadline.map { monotonicNow() < $0 } ?? true)
+        throw BrowserError("popup_not_opened", "期限内未观察到新 Tab；DOM 合成点击不是可信用户激活，网站或 WebKit 可能拒绝弹窗。请核对页面状态，必要时手动点击；不会自动重试")
     }
 
     func wait(selector: String?, timeout: Int) async throws {
@@ -336,9 +359,35 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         do { try networkCheck?() }
         catch { navigationError = error; changed?(); decisionHandler(.cancel); return }
-        let scheme = navigationAction.request.url?.scheme?.lowercased() ?? ""
-        // Do not launch external applications or create windows from page content.
-        decisionHandler(["http", "https", "about"].contains(scheme) && navigationAction.targetFrame != nil ? .allow : .cancel)
+        guard let url = navigationAction.request.url, Self.supports(url) else {
+            rejectNavigation(BrowserError("unsupported_navigation", "仅支持 http(s) 与 about:blank；已拒绝外部应用或不支持的 URL scheme"))
+            decisionHandler(.cancel); return
+        }
+        decisionHandler(.allow)
+    }
+    private static func supports(_ url: URL) -> Bool {
+        (["http", "https"].contains(url.scheme?.lowercased() ?? "") && url.host != nil) || url.absoluteString == "about:blank"
+    }
+    private func rejectNavigation(_ error: BrowserError) {
+        lastNavigationRejection = error; changed?()
+    }
+    func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
+                 for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        do {
+            guard !closed, let url = navigationAction.request.url, Self.supports(url), let createPopup else {
+                throw BrowserError("unsupported_navigation", "新窗口只支持 http(s) 或 about:blank；不会启动外部应用")
+            }
+            try networkCheck?()
+            let popup = try createPopup(configuration, url)
+            popupSequence += 1; lastPopupID = popup.id
+            return popup.webView // WebKit loads the request and preserves the opener relationship.
+        } catch {
+            rejectNavigation((error as? BrowserError) ?? BrowserError("popup_failed", error.localizedDescription))
+            return nil
+        }
+    }
+    func webViewDidClose(_ webView: WKWebView) {
+        closeRequested?()
     }
     func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) { suppressedDialogs += 1; completionHandler() }
     func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) { suppressedDialogs += 1; completionHandler(false) }
@@ -438,6 +487,35 @@ final class BrowserModel {
 
     private func bind(_ space: Space) {
         for tab in space.tabs {
+            tab.createPopup = { [weak self, weak space, weak tab] configuration, url in
+                guard let self, let space, let tab, !self.shuttingDown,
+                      self.spaces.contains(where: { $0 === space }), !tab.closed else {
+                    throw BrowserError("tab_closed", "弹窗所属 Space 或标签页已关闭")
+                }
+                guard configuration.websiteDataStore === space.store else {
+                    throw BrowserError("popup_store_mismatch", "拒绝使用其他 Space 的网站数据创建弹窗")
+                }
+                let popup = Tab(record: TabRecord(id: UUID(), url: url.absoluteString), store: space.store,
+                                tls: space.record.tls, configuration: configuration)
+                popup.openerTabID = tab.id
+                space.tabs.append(popup); self.bind(space)
+                do { try self.save(space) }
+                catch { space.tabs.removeAll { $0 === popup }; popup.close(); throw error }
+                self.changed?()
+                return popup
+            }
+            tab.closeRequested = { [weak self, weak space, weak tab] in
+                guard let self, let space, let tab, !tab.closed,
+                      self.spaces.contains(where: { $0 === space }) else { return }
+                space.tabs.removeAll { $0 === tab }; tab.close()
+                if space.tabs.isEmpty {
+                    space.tabs.append(Tab(record: TabRecord(id: UUID(), url: "about:blank"), store: space.store, tls: space.record.tls))
+                    self.bind(space)
+                }
+                if space.record.defaultTab == tab.id { space.record.defaultTab = space.tabs[0].id }
+                do { try self.save(space) } catch { fputs("Persistence error: \(error)\n", stderr) }
+                self.changed?()
+            }
             tab.networkCheck = { [weak space] in
                 if let error = space?.networkError { throw error }
             }
@@ -650,8 +728,15 @@ final class BrowserModel {
         case "evaluate": value = try await tab.runJS(arg(0), awaitPromise: r.options["await"] == "true")
         case "click", "fill":
             let before = tab.navigationSequence
+            let beforePopup = tab.popupSequence
+            tab.lastNavigationRejection = nil
             value = try await tab.runJS("window.__agentWebKit.act(\(try quoteJS(command)),\(try quoteJS(arg(0))),\(try quoteJS(command == "fill" ? arg(1) : "")))", world: DOM.world)
             if r.options["wait-for-navigation"] == "true" { try await tab.waitForNavigation(after: before, timeout: timeout) }
+            if r.options["wait-for-popup"] == "true" {
+                let popupID = try await tab.waitForPopup(after: beforePopup, timeout: timeout)
+                var action = value as? [String: Any] ?? [:]
+                action["newTabId"] = popupID; value = action
+            }
         case "wait": try await tab.wait(selector: r.args.first, timeout: timeout)
         case "screenshot":
             guard let path = r.options["out"] else { throw BrowserError("invalid_arguments", "截图需要 --out PATH") }

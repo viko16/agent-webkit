@@ -86,6 +86,18 @@ Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 
 
 导航等待超时不会停止网络加载，可继续 `wait` 或打开其他 URL。被新导航取消的旧请求不会把迟到的错误写入当前页面。URL 在请求开始时保留，避免重启恢复过程中把尚未加载的标签页覆盖成 about:blank；SPA URL 变化也会保存。恢复仅保证持久化状态和 URL，页面 JS 内存、未提交表单和完整后退历史不在恢复范围内。后台页面定时器仍受 WebKit 节流。
 
+## 网站弹窗与回调
+
+`WKUIDelegate.createWebViewWith` 使用 WebKit 提供的原始 configuration 创建同 Space Tab；检查其 DataStore 与 Space 相同，继承 TLS delegate 策略和独立 DOM world，不手动二次 load，以保留 opener、命名窗口复用和请求语义。原生窗口几何/工具栏请求不生效，`page.popupPolicy` 明示此限制。弹窗不改 CLI default 或 GUI 选择。
+
+`webViewDidClose` 仅移除本 Space 的对应 Tab；最后一个脚本窗口关闭时保留一个普通空白 Tab。关闭或删除 Space 会解绑全部 delegate、回调并释放窗口。`openerTabId` 为本次运行时的来源信息，不在重启后伪造 opener；重启仍恢复 Tab ID、URL 和网站数据。
+
+`click --wait-for-popup` 与 `--wait-for-navigation` 互斥，返回观察到的 `newTabId`；调用方再用该 ID 等待页面加载。若网站要求可信激活或 WebKit 阻止弹窗而未调用 delegate，期限内返回 `popup_not_opened`，不修改 page world 的 `window.open` 来伪装结果。`unsupported_navigation` 表示 URL scheme 被拒绝；GUI 和 state 的 `lastNavigationRejection` 也可查询。普通 click/fill 返回 `businessOutcomeVerified: false`，成功不等于业务完成。
+
+`tests/popup_cases.py` 由 reliability（Direct）和 acceptance（真实 Whistle + insecure TLS）调用；`tests/tls_cases.py` 另验证弹窗 custom-ca 的接受、错误主机名及过期证书拒绝。fixture 覆盖重定向、opener/postMessage、父页回调导航、命名窗口复用、关闭最后一个窗口、双 Space、重启和可信事件拒绝。
+
+手动 GUI 回归可运行 `python3 tests/ui_fixture.py --conflict`。它复制生成的应用并使用独立测试 Bundle ID、数据目录和本地页面，不干扰已打开的用户应用；输出 `fixture.json` 标明 socket、代理设置文件和 URL。解除测试设置（将该文件写为 `{}`）后点击重新加载，检查 Direct 恢复；在页面点击 Require trusted click、切换新 Tab 并点击 Send result and close，检查回调和关闭。终端按 Enter 清理测试 Space 并退出。这个人工测试工具不会操作系统代理。
+
 ## DOM bridge 隔离
 
 `snapshot/click/fill/wait` 的脚本注入与调用统一使用命名 `WKContentWorld`（`AgentWebKit.DOM`），不注册跨 world 消息处理器。`evaluate` 和 `evaluate --await` 明确留在 `.page`，可读取网页全局变量；等待 readyState 也在隔离 world 执行。

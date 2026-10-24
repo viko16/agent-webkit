@@ -36,6 +36,9 @@ browser snapshot --space admin
 # 使用 snapshot 返回的完整引用，引用包含页面随机后缀
 browser fill '@e1-页面后缀' hello --space admin
 browser click '@e2-页面后缀' --space admin
+browser click '#login' --space admin --wait-for-popup
+# 使用返回的 value.newTabId 查看登录页
+browser snapshot --space admin --tab '返回的新 Tab UUID'
 browser fill '#message' hello --space user
 browser evaluate 'document.title' --space admin
 browser wait '#result' --space admin --timeout 5000
@@ -73,6 +76,10 @@ WebKit 操作默认超时为 15000 ms，可用 `--timeout 1–60000` 调整。`e
 窗口采用 Safari 风格的原生侧边栏与工具栏，随系统外观显示。左侧搜索和切换 Space，顶部标签栏切换页面；图钉标记 CLI 默认标签页。底部显示代理和证书策略，忽略证书错误的 Space 会显示橙色提示。
 
 每个 Space 会记住上次查看的标签页。窗口大小和观察选择会恢复，但不会改变 Agent 的操作目标。关闭窗口后服务继续运行；退出应用才会停止服务。
+
+网站的 `target=_blank` 和 `window.open` 会打开同一 Space 的新 Tab，沿用登录状态、代理及证书策略，不切换 GUI 选择或 CLI 默认 Tab。用 `tab list` 发现它，或在 `click` 时指定 `--wait-for-popup` 获取 `value.newTabId`，随后对该 Tab 执行 `wait`、`snapshot`。此选项只确认新 Tab 出现，不代表登录完成。父子页可用 opener 回调和 `window.close()`；重启仅恢复 URL，不能恢复尚在内存中的登录回调关系。
+
+DOM 点击的 `isTrusted=false`。若网站要求真实用户操作，`--wait-for-popup` 会在期限内未出现新 Tab 时返回 `popup_not_opened`；请在窗口中手动点击后让 Agent 接管。外部 App 或不支持的 URL scheme 会被拒绝，原因见页面的 `lastNavigationRejection` 和窗口提示；弹窗尺寸、位置、工具栏要求不应用于原生标签页。不能据此宣称第三方 OAuth 已全自动兼容。
 
 | 快捷键 | 操作 |
 | --- | --- |

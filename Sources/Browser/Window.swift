@@ -375,7 +375,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         let networkError = space?.networkError
         security.stringValue = space.map { "\($0.record.proxy == "direct" ? "直连" : "Whistle")\(networkError == nil ? "" : "已暂停") · \(tls)" } ?? ""
         security.textColor = insecure || networkError != nil ? .systemOrange : .secondaryLabelColor
-        let error = networkError?.localizedDescription ?? (tab?.unresponsive == true ? "页面未响应。重新加载可恢复标签页；上次操作可能已部分生效。" : tab?.navigationError?.localizedDescription)
+        let error = networkError?.localizedDescription ?? tab?.lastNavigationRejection?.localizedDescription ?? (tab?.unresponsive == true ? "页面未响应。重新加载可恢复标签页；上次操作可能已部分生效。" : tab?.navigationError?.localizedDescription)
         bannerText.stringValue = error ?? ""; banner.isHidden = error == nil; retry.isEnabled = space?.busy == false && !model.restoring
         for item in window.toolbar?.items ?? [] where [.reload, .copyCommand, .details].contains(item.itemIdentifier) {
             item.isEnabled = tab != nil && (item.itemIdentifier != .reload || (space?.busy == false && !model.restoring))

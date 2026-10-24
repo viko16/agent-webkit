@@ -44,6 +44,19 @@ def origin(port=0, events=None, tls_context=None):
             query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             time.sleep(min(float(query.get('delay', ['0'])[0]), 3))
             events.add(kind='origin', path=self.path, peerPort=self.client_address[1], cookie=self.headers.get('Cookie'), host=self.headers.get('Host'), nonce=nonce)
+            if self.path.startswith('/popup-redirect'):
+                self.send_response(302)
+                self.send_header('Location', '/popups?mode=child')
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+                return
+            if self.path.startswith('/popups'):
+                body = (Path(__file__).parent / 'site/popups.html').read_bytes()
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html; charset=utf-8')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers(); self.wfile.write(body)
+                return
             if self.path.startswith('/echo?') and self.headers.get('Upgrade', '').lower() == 'websocket':
                 key = self.headers['Sec-WebSocket-Key']
                 accept = base64.b64encode(hashlib.sha1((key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').encode()).digest()).decode()

@@ -1,0 +1,34 @@
+<!doctype html><meta charset="utf-8"><title>Popup Fixture</title>
+<style>body{font:18px system-ui;margin:40px}button,a{display:block;margin:18px;padding:10px}</style>
+<h1>Popup Fixture</h1>
+<a id="blank" href="/popup-redirect?mode=child" target="_blank" rel="opener">Open target blank</a>
+<button id="scripted">Open script popup</button>
+<button id="trusted">Require trusted click</button>
+<button id="callback">Send result and close</button>
+<a id="external" href="agent-webkit-test://unsupported" target="_blank">Unsupported external scheme</a>
+<output id="result">Waiting</output>
+<script>
+window.popupResult=null; window.lastTrusted=null;
+window.addEventListener('message', event=>{
+  if(event.origin!==location.origin || event.data?.type!=='fixture-result') return;
+  window.popupResult=event.data;
+  document.querySelector('#result').textContent=event.data.value;
+});
+function openFlow(event, requireTrusted=false) {
+  window.lastTrusted=event.isTrusted;
+  if(requireTrusted && !event.isTrusted) {
+    document.querySelector('#result').textContent='Trusted user interaction required'; return;
+  }
+  window.openReturned=Boolean(window.open('/popup-redirect?mode=child','fixture-flow','width=320,height=240'));
+}
+document.querySelector('#scripted').onclick=event=>openFlow(event);
+document.querySelector('#trusted').onclick=event=>openFlow(event,true);
+document.querySelector('#callback').onclick=()=>{
+  if(window.opener) {
+    window.opener.postMessage({type:'fixture-result',value:localStorage.getItem('popup-value'),cookie:document.cookie},location.origin);
+    window.opener.location.hash='callback';
+  }
+  setTimeout(()=>window.close(),100);
+};
+if(new URLSearchParams(location.search).get('mode')==='child') document.title='Popup Child';
+</script>

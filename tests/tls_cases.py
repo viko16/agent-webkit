@@ -1,5 +1,6 @@
 """Real HTTPS negative cases, using temporary certificates without touching a keychain."""
 import ssl
+import json
 import subprocess
 from fixtures import Events, origin
 
@@ -59,6 +60,21 @@ def verify_tls_cases(out, cli, restart):
                 assert insecure['page']['lastTLSChallenge']['certificateErrorsIgnored'] is True
                 assert cli('open', url, '--space', 'tls-local', ok=False)['code'] == 'certificate_rejected'
                 results[name + 'AcceptedOnlyWithInsecureFlag'] = True
+            # The exact WebKit-provided popup configuration must retain the Space's TLS policy.
+            parent = cli('space', 'info', 'tls-local')['defaultTabId']
+            before = {t['tabId'] for t in cli('tab', 'list', '--space', 'tls-local')}
+            assert cli('evaluate', f'Boolean(window.open({json.dumps(url)}))', '--space', 'tls-local')['value'] is True
+            tabs = cli('tab', 'list', '--space', 'tls-local')
+            popup = next(t['tabId'] for t in tabs if t['tabId'] not in before)
+            if name == 'valid':
+                accepted = cli('wait', '--space', 'tls-local', '--tab', popup)
+                assert accepted['page']['lastTLSChallenge']['accepted'] is True
+                assert accepted['page']['tls']['policy'] == 'custom-ca'
+            else:
+                assert cli('wait', '--space', 'tls-local', '--tab', popup, ok=False)['code'] == 'certificate_rejected'
+            assert cli('space', 'info', 'tls-local')['defaultTabId'] == parent
+            cli('tab', 'close', popup, '--space', 'tls-local')
+            results[name + 'PopupInheritsTLS'] = True
         results['passed'] = True
         return results
     finally:

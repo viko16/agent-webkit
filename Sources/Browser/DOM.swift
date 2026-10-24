@@ -87,7 +87,7 @@ enum DOM {
           el.dispatchEvent(new Event('input',{bubbles:true,composed:true}));
           el.dispatchEvent(new Event('change',{bubbles:true,composed:true}));
         }
-        return {method:'dom',nativeVerified:false,requiresForeground:false,target};
+        return {method:'dom',nativeVerified:false,businessOutcomeVerified:false,requiresForeground:false,target};
       }
       window.__agentWebKit={snapshot,resolve,act,visible,exists};
     })();
