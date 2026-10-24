@@ -112,7 +112,9 @@ browser space create dev --proxy http://127.0.0.1:8899 --ignore-certificate-erro
 
 本机 Whistle 2.10.2 的动态站点证书缺少 `serverAuth` 用途，在添加 CA 后仍可能被严格校验拒绝（`ServerAuthEKU`）。如果 Whistle CA 已受系统信任，通常直接使用默认策略即可；需要在未受系统信任的开发环境使用这些动态证书时，可显式选择 `--ignore-certificate-errors`，或为 Whistle 配置符合要求的站点证书。`--ca-cert` 不会掩盖证书本身的用途错误。
 
-`direct` 清除自定义代理，并检测系统 HTTP、HTTPS、SOCKS、PAC 和自动发现代理。检测到启用的系统代理会返回 `direct_system_proxy_conflict`，包括恢复已有 direct Space 的应用启动。公开 API 没有强制直连开关；VPN、透明代理、内容过滤器和运行中系统配置变化仍可能影响实际路径。
+`direct` 清除自定义代理，并检测系统 HTTP、HTTPS、SOCKS、PAC 和自动发现代理。冲突时仅暂停受影响的 Direct Space，返回 `direct_system_proxy_conflict`；应用、Whistle Space 和状态查询继续可用。`space info` 的 `network.blocked/error`、`status.blockedSpaces` 和窗口提示可定位原因。关闭系统代理后执行 `browser reload --space NAME` 即可恢复，保留 Cookie、Tab ID 和 URL，无需删除重建。
+
+恢复和每次导航前都会检查系统代理。公开 API 没有强制直连开关；已经加载的页面在系统配置动态变化期间，后续 fetch、WebSocket 等请求仍可能受影响。VPN、透明代理和内容过滤器也不在绕过保证内。
 
 ## 验证
 

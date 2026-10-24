@@ -34,6 +34,14 @@ B 的两个 Space 访问同一个含随机 nonce 的 HTTPS URL。代理端必须
 
 `tests/fixtures.py proxy` 与 `tests/proxy_probe.py` 保留为此前的 CONNECT / loopback 诊断工具，不再参与 B。localhost / 127.0.0.1 代理路径暂不纳入验收。
 
+## Direct 冲突回归
+
+`python3 tests/acceptance.py --direct-conflicts` 在原有 A/B/C/D、TLS、fetch/WSS 验收前追加冲突恢复测试。测试用 clang 构建 `tests/proxy_settings.m`，仅通过独立 daemon 的 `DYLD_INSERT_LIBRARIES` 替换 `CFNetworkCopySystemProxySettings` 返回值，不写 SystemConfiguration、系统代理或钥匙串，不改变 WebKit 网络进程的代理配置。
+
+HTTP、HTTPS、SOCKS（含嵌套接口）、PAC、自动发现各自经历已有 Direct + Whistle Space 的重启、查询、拒绝导航、真实 Whistle 请求、关闭冲突、原 Cookie/LocalStorage/Tab ID/URL 恢复，以及页面自主导航拒绝。它验证真实应用对设置变化的处理，但**不等于真实操作系统代理切换或动态子资源路由实测**；后者需要独立 macOS 测试环境，不能在用户机器上自动切换代理来凑验收。
+
+Direct 冲突不在 `Space.init` 抛出；恢复跳过受阻导航，数据容器仍保留。只读查询、修改默认标签页、关闭标签页及删除 Space 仍可用。关闭系统代理后显式 reload/open 恢复，避免自动重放页面操作。
+
 ## Space 证书策略
 
 默认策略为 `system`，完全交给平台处理。`--ca-cert PATH` 将单张 PEM / DER 导入为 `custom-ca`；保存 DER 数据及 SHA-256 指纹，文件随后被移动也不影响重启恢复。新 Tab 继承同一个策略。旧注册表缺少 `tls` 字段时仍使用系统策略。

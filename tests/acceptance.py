@@ -13,6 +13,7 @@ from fixtures import Events, origin
 from whistle_fixture import WhistleFixture
 from tls_cases import verify_tls_cases
 from network_cases import verify_network_cases
+from direct_conflict_cases import prepare_proxy_settings, verify_direct_conflicts
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -35,6 +36,7 @@ def main():
     parser.add_argument('--out', default=str(ROOT / '.artifacts' / time.strftime('%Y%m%d-%H%M%S')))
     parser.add_argument('--whistle-existing', '--whistle', action='store_true', help='Use existing Whistle with example.com mapped to --origin-port and HTTPS capture enabled; do not change its configuration')
     parser.add_argument('--origin-port', type=int, default=0)
+    parser.add_argument('--direct-conflicts', action='store_true', help='Add process-local CFNetwork conflict/recovery cases without modifying OS proxies')
     args = parser.parse_args()
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -42,6 +44,10 @@ def main():
     binary = ROOT / '.build/debug/browser'
     app_binary = ROOT / '.build/Agent WebKit.app/Contents/MacOS/browser'
     env = dict(os.environ, BROWSER_DATA_DIR=str(state), BROWSER_SOCKET=str(state / 'browser.sock'))
+    daemon_env = env.copy()
+    if args.direct_conflicts:
+        proxy_settings, injection = prepare_proxy_settings(out)
+        daemon_env.update(injection)
     report = {'out': str(out), 'stateDirectory': str(state), 'tests': {}, 'resources': {}, 'proxyKind': 'real Whistle on 127.0.0.1:8899', 'loopbackProxyInScope': False}
     daemon = None
     logs = []
@@ -73,7 +79,7 @@ def main():
         nonlocal daemon
         log = open(out / f'daemon-{len(logs)}.log', 'w')
         logs.append(log)
-        daemon = subprocess.Popen([str(app_binary), 'daemon'], env=env, stdout=log, stderr=log)
+        daemon = subprocess.Popen([str(app_binary), 'daemon'], env=daemon_env, stdout=log, stderr=log)
         for _ in range(150):
             if daemon.poll() is not None:
                 raise AssertionError(f'Daemon exited: {daemon.returncode}; inspect {log.name}')
@@ -120,6 +126,10 @@ def main():
         report['whistleRules'] = whistle.rules
         start()
         focus_before = cli('status')['frontmostPid']
+        if args.direct_conflicts:
+            report['tests']['directConflicts'] = verify_direct_conflicts(
+                cli, start, stop, proxy_settings, base,
+                f'https://example.com/?conflict={site.fixture_nonce}', site.fixture_nonce, whistle, site_events)
         report['launchFocus'] = {'before': launch_focus, 'after': focus_before, 'unchanged': launch_focus == focus_before}
         report['system'] = subprocess.check_output(['sw_vers'], text=True)
         report['systemProxy'] = cli('status')['systemProxy']

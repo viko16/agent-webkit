@@ -31,7 +31,7 @@ func requireDirectAvailable() throws {
     }
     let active = enabled(settings)
     if !active.isEmpty {
-        throw BrowserError("direct_system_proxy_conflict", "系统代理已启用（\(active.joined(separator: ","))）；公开 WebKit API 无强制直连开关，拒绝将系统代理当作 direct")
+        throw BrowserError("direct_system_proxy_conflict", "此 Direct Space 已暂停：系统代理已启用（\(active.joined(separator: ","))）。关闭系统代理后重新加载即可恢复；Cookie、Tab ID 和 URL 保留。公开 WebKit API 无强制直连开关")
     }
 }
 
@@ -43,6 +43,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     var navigationError: Error?
     var changed: (() -> Void)?
     var statusChanged: (() -> Void)?
+    var networkCheck: (() throws -> Void)?
     var suppressedDialogs = 0
     var terminated = false
     var unresponsive = false
@@ -90,7 +91,9 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
             },
             webView.observe(\.url) { [weak self] _, _ in
                 Task { @MainActor in
-                    guard let self, !self.webView.isLoading, let url = self.webView.url else { return }
+                    guard let self, !self.webView.isLoading,
+                          self.navigationSequence == self.completedNavigationSequence,
+                          let url = self.webView.url else { return }
                     self.persistedURL = url.absoluteString
                     self.changed?()
                 }
@@ -115,6 +118,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         webView.removeFromSuperview(); backingWindow.contentView = nil; backingWindow.close()
         changed = nil
         statusChanged = nil
+        networkCheck = nil
         navigationSpans.removeAll()
     }
 
@@ -231,7 +235,11 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
             if let selector {
                 let script = "Boolean(window.__agentWebKit && window.__agentWebKit.exists(\(try quoteJS(selector))))"
                 if (try await runJS(script, world: DOM.world) as? Bool) == true { return }
-            } else if !webView.isLoading, (try await runJS("document.readyState", world: DOM.world) as? String) == "complete" { return }
+            } else if !webView.isLoading, navigationSequence == completedNavigationSequence,
+                      (try await runJS("document.readyState", world: DOM.world) as? String) == "complete" {
+                if let navigationError { throw navigationError }
+                if !webView.isLoading, navigationSequence == completedNavigationSequence { return }
+            }
             try await Task.sleep(nanoseconds: 50_000_000)
         } while milliseconds(from: start) < Double(timeout)
         throw BrowserError("timeout", "等待\(selector ?? "页面加载")超时（\(timeout) ms）")
@@ -326,6 +334,8 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         changed?()
     }
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        do { try networkCheck?() }
+        catch { navigationError = error; changed?(); decisionHandler(.cancel); return }
         let scheme = navigationAction.request.url?.scheme?.lowercased() ?? ""
         // Do not launch external applications or create windows from page content.
         decisionHandler(["http", "https", "about"].contains(scheme) && navigationAction.targetFrame != nil ? .allow : .cancel)
@@ -345,7 +355,6 @@ final class Space {
         self.record = record
         let configurations: [ProxyConfiguration]
         if record.proxy == "direct" {
-            try requireDirectAvailable()
             configurations = []
         } else {
             guard let url = URL(string: record.proxy), url.scheme == "http", url.host == "127.0.0.1", url.port == 8899,
@@ -369,10 +378,18 @@ final class Space {
          "tls": record.tls?.summary ?? TLSConfiguration.systemSummary]
     }
     var networkState: [String: Any] {
-        ["configuredProxy": record.proxy, "routeVerified": false,
+        let error = networkError
+        return ["configuredProxy": record.proxy, "routeVerified": false,
+         "blocked": error != nil, "recoverable": error != nil,
+         "error": error.map { failure($0)["error"]! } ?? NSNull(),
          "limitation": record.proxy == "direct"
-            ? "System proxy checked per command; cannot bypass VPN/content filters or guarantee routing after system settings change."
+            ? "System proxy checked on restore, commands and navigation; already running page requests may follow changed system settings. Cannot bypass VPN/content filters. Disable system proxy then reload to resume."
             : "On tested macOS 27.0.1 loopback requests bypass this proxy, including localhost and 127.0.0.1. Configuration success is not route verification."]
+    }
+    var networkError: BrowserError? {
+        guard record.proxy == "direct" else { return nil }
+        do { try requireDirectAvailable(); return nil }
+        catch { return error as? BrowserError }
     }
 }
 
@@ -407,6 +424,7 @@ final class BrowserModel {
         }
         for space in spaces {
             for (tab, record) in zip(space.tabs, space.record.tabs) {
+                if let error = space.networkError { tab.navigationError = error; continue }
                 if record.url != "about:blank", let url = URL(string: record.url) { tab.load(url) }
             }
         }
@@ -420,6 +438,9 @@ final class BrowserModel {
 
     private func bind(_ space: Space) {
         for tab in space.tabs {
+            tab.networkCheck = { [weak space] in
+                if let error = space?.networkError { throw error }
+            }
             tab.statusChanged = { [weak self] in self?.changed?() }
             tab.changed = { [weak self, weak space] in
                 guard let self, let space, !self.shuttingDown else { return }
@@ -513,6 +534,7 @@ final class BrowserModel {
             return ["version": productVersion, "pid": ProcessInfo.processInfo.processIdentifier, "spaces": spaces.count,
                     "ready": !restoring,
                     "pendingStoreCleanup": records.filter(\.deleting).count,
+                    "blockedSpaces": spaces.filter { $0.networkError != nil }.map { $0.record.id.uuidString },
                     "systemProxy": systemProxyState(), "frontmostPid": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1,
                     "capabilities": ["input":"dom-synthetic", "snapshot":"main-frame", "screenshot":"viewport", "foregroundRequired":false],
                     "directPolicy":"reject-enabled-system-proxy; no VPN/content-filter bypass guarantee"] as [String: Any]
@@ -575,7 +597,7 @@ final class BrowserModel {
         guard !space.busy else { throw BrowserError("space_busy", "同一 Space 已有操作；请在该 Agent 内顺序执行") }
         space.busy = true; changed?()
         defer { space.busy = false; changed?() }
-        if space.record.proxy == "direct" { try requireDirectAvailable() }
+        if !["tab.close", "tab.default"].contains(command), let error = space.networkError { throw error }
         let timeout: Int
         if let raw = r.options["timeout"] {
             guard let value = Int(raw), (1...60000).contains(value) else { throw BrowserError("invalid_timeout", "timeout 必须为 1–60000 ms") }; timeout = value

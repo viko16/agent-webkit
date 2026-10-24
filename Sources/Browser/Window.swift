@@ -258,7 +258,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         icon.contentTintColor = .controlAccentColor
         icon.symbolConfiguration = .init(pointSize: 15, weight: .regular)
         let title = NSTextField(labelWithString: space.record.name); title.font = .systemFont(ofSize: 13)
-        let route = space.record.proxy == "direct" ? "直连" : "Whistle"
+        let route = space.record.proxy == "direct" ? (space.networkError == nil ? "直连" : "直连已暂停") : "Whistle"
         let subtitle = NSTextField(labelWithString: "\(route) · \(space.tabs.count) 个标签页\(space.busy ? " · 运行中" : "")")
         subtitle.font = .systemFont(ofSize: 11); subtitle.textColor = .secondaryLabelColor
         for label in [title, subtitle] { label.lineBreakMode = .byTruncatingTail }
@@ -372,9 +372,10 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         status.stringValue = model.restoring ? "正在恢复会话…" : transientMessage ?? (tab == nil ? "准备就绪" : space?.busy == true ? "正在处理页面…" : tab?.webView.isLoading == true ? "正在加载…" : tab?.id == space?.record.defaultTab ? "Agent 默认标签页" : "可通过分享按钮交给 Agent")
         let insecure = space?.record.tls?.ignoreCertificateErrors == true
         let tls = insecure ? "未校验证书" : space?.record.tls == nil ? "系统证书校验" : "自定义 CA"
-        security.stringValue = space.map { "\($0.record.proxy == "direct" ? "直连" : "Whistle") · \(tls)" } ?? ""
-        security.textColor = insecure ? .systemOrange : .secondaryLabelColor
-        let error = tab?.unresponsive == true ? "页面未响应。重新加载可恢复标签页；上次操作可能已部分生效。" : tab?.navigationError?.localizedDescription
+        let networkError = space?.networkError
+        security.stringValue = space.map { "\($0.record.proxy == "direct" ? "直连" : "Whistle")\(networkError == nil ? "" : "已暂停") · \(tls)" } ?? ""
+        security.textColor = insecure || networkError != nil ? .systemOrange : .secondaryLabelColor
+        let error = networkError?.localizedDescription ?? (tab?.unresponsive == true ? "页面未响应。重新加载可恢复标签页；上次操作可能已部分生效。" : tab?.navigationError?.localizedDescription)
         bannerText.stringValue = error ?? ""; banner.isHidden = error == nil; retry.isEnabled = space?.busy == false && !model.restoring
         for item in window.toolbar?.items ?? [] where [.reload, .copyCommand, .details].contains(item.itemIdentifier) {
             item.isEnabled = tab != nil && (item.itemIdentifier != .reload || (space?.busy == false && !model.restoring))

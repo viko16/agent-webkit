@@ -1,5 +1,13 @@
 # 实际验收记录
 
+## Issue #1：P0-2（2026-10-24）
+
+`python3 tests/acceptance.py --direct-conflicts` [报告](../.artifacts/20261024-184539/report.json)通过：HTTP、HTTPS、SOCKS（嵌套接口）、PAC、自动发现五类冲突下，真实 daemon 均可重启；状态查询和 Whistle 域名请求继续工作，Direct 明确拒绝加载。解除冲突后 reload 保留 Cookie、LocalStorage、Tab ID 和 URL；页面自行发起的导航也会被拒绝。原有 A/B/C/D、TLS、fetch/WSS 全部通过。`python3 tests/reliability.py` [报告](../.artifacts/reliability-20261024-184553/report.json)及 16 项计时检查通过。
+
+设置来自仅测试进程可见的 CFNetwork 返回值注入；没有修改用户的系统代理，没有关闭已有 Whistle。**尚未在独立 macOS 系统环境切换真实代理设置**，此项不标为实际系统切换验收通过。GUI 已增加 Space 暂停标记及恢复提示，本阶段尚未完成独立测试窗口的手动检查。两套测试曾同时运行，资源数字可能包含另一个测试的 WebKit 进程；最终资源结论以独立运行的完整验收为准。
+
+首轮完整验收暴露了 TLS 拒绝时旧文档 readyState 被当作导航成功的竞态（[失败报告](../.artifacts/20261024-184433/report.json)）。等待现在要求已追踪导航完成并复核错误；保留 URL 也避免在导航未结束时被旧文档覆盖，随后上述完整验收通过。
+
 ## Issue #1：P0-1（2026-10-24）
 
 Debug 应用实测通过 `python3 tests/reliability.py`（[报告](../.artifacts/reliability-20261024-184222/report.json)）和 `python3 tests/acceptance.py`（[报告](../.artifacts/20261024-184233/report.json)）。A/B/C/D、真实 Whistle 域名分流、fetch/WSS、TLS 正反用例、并发、资源回收及原有 16 项计时检查均保留并通过。
