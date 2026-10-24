@@ -57,6 +57,8 @@ browser shutdown
 
 所有页面命令必须指定 `--space`，支持名称或 UUID。省略 `--tab` 时使用该 Space 的固定默认标签页，与 GUI 显示哪个页面无关；`tab default` 可显式修改并持久化这个默认值。不同 Agent 使用不同 Space；同一 Space 的重叠操作返回 `space_busy`，由调用方顺序执行。`state`、`tab list` 和 `space info` 在操作进行中仍可查询。
 
+交给 Codex / Pi 时，提供 `browser` 的路径和专属 Space 名称即可；也可直接复制窗口分享按钮给出的接管命令。让 Agent 先 snapshot，再使用返回的引用操作，并读取结果页面确认业务状态；不需要安装 MCP 服务。
+
 WebKit 操作默认超时为 15000 ms，可用 `--timeout 1–60000` 调整。`evaluate --await` 等待 Promise 返回结果。`wait SELECTOR` 等待唯一匹配的元素可见；无效选择器、匹配多个元素和过期引用会直接报错。值以 `--` 开头时，先写选项，再用 `--` 分隔，例如 `browser fill --space user -- '#message' '--hello'`。`browser --help` 和 `browser --version` 无需启动服务。
 
 每条命令返回一行 JSON，成功为 `{"ok":true,"result":...}`，失败为 `{"ok":false,"error":{"code":...,"message":...}}`，退出码分别为 0 / 1。页面结果包含 Space ID、Tab ID、URL、加载状态和代理限制。`click` / `fill` 使用 DOM 合成事件，返回 `method: "dom"`、`nativeVerified: false`；不提供原生输入或剪贴板模拟。
@@ -66,6 +68,8 @@ WebKit 操作默认超时为 15000 ms，可用 `--timeout 1–60000` 调整。`e
 删除后若 WebKit 仍占用空的存储容器，结果会注明 `cleanupPending: true`：网站数据已清除并核对，容器将在下次启动时继续删除。新建同名 Space 会使用新的 ID。`status` 可查询 `pendingStoreCleanup`；启动恢复完成后 `ready` 为 `true`，之前的页面命令会返回 `not_ready`。
 
 内部 DOM 操作使用独立脚本环境，网页覆盖同名变量不会替换自动化实现。`evaluate`（含 `--await`）仍访问网页自身的 JavaScript 状态。网页仍能修改 DOM；隔离不保证页面内容或操作结果可信。
+
+`snapshot` 可列出开放 Shadow Root 和同源 iframe 内的控件，引用包含所属上下文，可直接用于 click/fill/wait。也可用 `>>>` 显式进入作用域，例如 `browser fill '#editor >>> input' hello --space user`（`#editor` 是 iframe 或开放 Shadow Root 的宿主）。每段选择器必须唯一；普通 CSS 选择器仍只查询当前作用域。跨源 frame、closed 或不存在的 Shadow Root 返回 `unsupported_context`。closed root 无法自动枚举；snapshot 的 `unsupported` 和 `limitations` 会说明可观测边界，`text` 仍仅提取主 frame 文本。
 
 ## 手动浏览与 Agent 接管
 

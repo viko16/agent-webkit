@@ -1,0 +1,11 @@
+<!doctype html><meta charset="utf-8"><title>Frame Fixture</title>
+<input id="same" aria-label="Frame input"><button id="save">Frame button</button><output id="result"></output>
+<select id="choice"><option value="a">A</option><option value="b">B</option></select>
+<div id="inner"></div>
+<script>
+window.frameInputEvents=[];
+document.querySelector('#same').addEventListener('input',event=>window.frameInputEvents.push({type:event.type,trusted:event.isTrusted}));
+document.querySelector('#save').onclick=()=>document.querySelector('#result').textContent=document.querySelector('#same').value;
+document.querySelector('#inner').attachShadow({mode:'open'}).innerHTML='<label id="label">Frame shadow input</label><input aria-labelledby="label">';
+window.frameMarker=location.search;
+</script>

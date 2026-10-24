@@ -10,6 +10,7 @@ import time
 
 from fixtures import origin
 from popup_cases import verify_popups
+from context_cases import verify_contexts
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -107,6 +108,7 @@ def main():
             code = 'invalid_arguments' if '--wait-for-navigation' in args else 'unsupported_navigation' if '#external' in args else 'popup_not_opened'
             return cli(*args, error=code)['error']
         checks.append(verify_popups(popup_cli, base, lambda: (stop(), start())))
+        checks.append(verify_contexts(cli, base))
         # Raw IPC gets the same validation as the CLI parser.
         with socket.socket(socket.AF_UNIX) as client:
             client.connect(str(state / 'browser.sock'))

@@ -180,7 +180,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
                 if let error {
                     let nsError = error as NSError
                     if let message = nsError.userInfo["WKJavaScriptExceptionMessage"] as? String {
-                        let codes = ["stale_ref", "selector_count", "invalid_selector", "element_not_actionable", "element_readonly", "unsupported_fill_type", "element_not_editable", "invalid_option"]
+                        let codes = ["stale_ref", "selector_count", "invalid_selector", "unsupported_context", "element_not_actionable", "element_readonly", "unsupported_fill_type", "element_not_editable", "invalid_option"]
                         let code = codes.first { message.contains($0) } ?? "javascript_error"
                         complete(.failure(BrowserError(code, message)))
                     } else { complete(.failure(error)) }
@@ -629,7 +629,7 @@ final class BrowserModel {
                     "pendingStoreCleanup": records.filter(\.deleting).count,
                     "blockedSpaces": spaces.filter { $0.networkError != nil }.map { $0.record.id.uuidString },
                     "systemProxy": systemProxyState(), "frontmostPid": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1,
-                    "capabilities": ["input":"dom-synthetic", "snapshot":"main-frame", "screenshot":"viewport", "foregroundRequired":false],
+                    "capabilities": ["input":"dom-synthetic", "snapshot":"same-origin-frames-and-open-shadow-roots", "screenshot":"viewport", "foregroundRequired":false],
                     "directPolicy":"reject-enabled-system-proxy; no VPN/content-filter bypass guarantee"] as [String: Any]
         }
         if command == "shutdown" {

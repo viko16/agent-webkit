@@ -106,6 +106,16 @@ Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 
 
 每个文档在 documentStart 初始化一次 bridge，刷新、导航、进程替换及重启均产生新的随机引用后缀；同文档 SPA 更新保持连接节点的引用，已移除节点返回 `stale_ref`。隔离只保护实现和命名空间，不阻止网页改变 DOM，也不提供原生可信事件。`tests/reliability.py` 用真实页面覆盖、删除和伪造同名对象，检查四项内部命令、页面 Promise、SPA、重载及重启。
 
+## iframe 与 Shadow DOM 定位
+
+内部 bridge 仍只从主 frame 的隔离 world 发起，通过同源 DOM 访问 frame、开放的 `shadowRoot`，不注入 page-world shim，不绕过同源策略。`snapshot.elements[].context` 用 boundary 的稳定引用标明 frame/shadow 路径，所有元素引用属于同一 Tab 文档的随机 epoch。引用解析除 `isConnected` 外，还验证所属 Document 仍是各层 frame 当前的 `contentDocument`，防止 frame 导航后仍连接旧 Document 的节点被误用。
+
+`#frame >>> #host >>> input` 逐层进入唯一 frame 或开放 Shadow Root；`>>>` 是本工具的作用域分隔符，不是 CSS 标准组合器，不能用于选择器中的字面值。普通 CSS 不自动穿透；snapshot 返回的完整 `@e…` 引用则可直接操作跨作用域元素。frame 内 fill 使用该文档的原型 setter 和 Event 构造器，仍是非可信 DOM 事件。
+
+跨源或尚不可访问的 frame 在 snapshot 的 `unsupported` 中返回上下文和原因，显式进入时返回 `unsupported_context`。公开 DOM 无法区分 closed root 和没有 root；显式进入两者均返回该错误，snapshot 不声称完整枚举 closed root。`textScope` 为 main-frame；元素 bounds 的 `coordinateSpace` 区分主视口和 frame 内视口，不伪装成整页截图坐标。
+
+遍历上限为 1000 个控件、10000 个扫描节点、16 层边界；达到上限标记 `truncated`。`tests/context_cases.py` 随 reliability 执行，覆盖嵌套作用域、同名 ID 不串用、frame 的输入事件、隐藏祖先、display:contents 宿主、跨源/closed 错误、frame 导航及宿主替换后的旧引用拒绝。尚未覆盖全部 slot/富文本组件或跨源 frame 内容。
+
 ## 逐步计时
 
 重新构建并重启应用，然后运行：

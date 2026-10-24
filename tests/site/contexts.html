@@ -1,0 +1,14 @@
+<!doctype html><meta charset="utf-8"><title>DOM Context Fixture</title>
+<style>body{font:16px system-ui}iframe{width:600px;height:220px}section{padding:10px}</style>
+<input id="same" aria-label="Main input"><button id="main">Main button</button>
+<section id="host"></section><section id="closed"></section>
+<iframe id="frame" src="/context-frame"></iframe>
+<iframe id="cross"></iframe>
+<script>
+const root=document.querySelector('#host').attachShadow({mode:'open'});
+root.innerHTML='<label for="same">Shadow input</label><input id="same"><button>Shadow button</button><output></output><div id="nested"></div>';
+root.querySelector('button').onclick=()=>root.querySelector('output').textContent=root.querySelector('input').value;
+root.querySelector('#nested').attachShadow({mode:'open'}).innerHTML='<input aria-label="Nested input">';
+document.querySelector('#closed').attachShadow({mode:'closed'}).innerHTML='<input aria-label="Closed input">';
+document.querySelector('#cross').src=location.href.replace('127.0.0.1','localhost').replace('/contexts','/context-frame');
+</script>

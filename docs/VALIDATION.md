@@ -1,5 +1,21 @@
 # 实际验收记录
 
+## Issue #1：P1 首批与最终回归（2026-10-24）
+
+本轮在原有 Swift/AppKit/WKWebView、CLI + Unix Socket 架构内完成三项 P0 的实现，并推进 P1 的开放 Shadow DOM / 同源 iframe 支持；真实 OS 代理切换仍保留为未完成验收。以下为最终源码的运行记录，旧章节的能力限制以本节及 P0 各节更新为准。
+
+- `zsh scripts/build.sh`、`zsh scripts/build.sh release` 和 `codesign --verify --deep --strict '.build/Agent WebKit.app'` 均通过，最终应用包为 Release。本机 CLT 链接器仍提示两个不存在的搜索目录，未出现源码编译警告。最低声明仍为 macOS 14+，此次只实测 macOS 27.0.1，签名仍为本机 ad-hoc。
+- `python3 tests/reliability.py`：[最终报告](../.artifacts/reliability-20261024-190158/report.json)，原有死循环/Promise 超时恢复、DOM/CLI 边界、持久化、删除清理、16 项计时和新增 bridge/弹窗/作用域测试全部通过。
+- `python3 tests/acceptance.py --direct-conflicts`：[最终报告](../.artifacts/20261024-190215/report.json)、[逐条命令](../.artifacts/20261024-190215/commands.jsonl)、[Whistle 会话](../.artifacts/20261024-190215/whistle-sessions.json)、[来源日志](../.artifacts/20261024-190215/origin.jsonl)。串行运行，原有 A/B/C/D、TLS、fetch/WSS，以及五类进程内代理冲突和真实 Whistle 弹窗全部通过；空应用资源采样在新增用例之前进行。
+
+P1 新增实测：普通 DOM、嵌套开放 Shadow Root、同源 frame 及 frame 内 Shadow Root 的 snapshot/click/fill/wait；同名 ID 不串用、frame 原型 setter 和非可信 input 事件、select 填写、隐藏宿主/frame、display:contents 宿主；frame 同源及跨源导航、宿主替换和刷新后旧引用均返回 `stale_ref`。跨源 frame 与显式进入 closed root 均返回 `unsupported_context`。closed root 无法枚举，snapshot 明示限制；文本仍仅主 frame，子 frame 坐标仍是其自身视口。未宣称支持原生输入或全部富文本组件。
+
+最终资源样本：空应用 RSS 合计 96.42 MiB，5 个 Space 400.11 MiB，重启后 315.67 MiB，删除后 149.75 MiB，退出后测试进程全部回收。启动前后前台 PID 均为 56420。RSS 含共享页重复计算，这仍是 fixture 短时观察，不是复杂网站长期性能结论。
+
+最终复跑曾再次触发重复 TLS 失败导航误报（[失败报告](../.artifacts/20261024-185944/report.json)），说明 P0-2 阶段只检查已追踪导航序列仍不足。现增加无导航对象时的 pending 状态及直接证书错误检查，并在 TLS 测试中对错误主机名、过期证书各追加三次失败导航；上述最终两套测试均通过。
+
+本批停止在 P1 第一项。React/Vue 复杂表单、Console/网络诊断、Vite HMR 和真实站点登录回归，以及 P2 的长期资源、真实进程崩溃、旧系统实机验证等继续由 Issue #1 跟踪；不把本地 fixture 当作这些场景的验收。
+
 ## Issue #1：P0-3 与 GUI 补验（2026-10-24）
 
 `python3 tests/reliability.py` [报告](../.artifacts/reliability-20261024-184946/report.json)通过 Direct 弹窗回归与原有可靠性/16 项计时检查。随后独立运行 `python3 tests/acceptance.py --direct-conflicts` [报告](../.artifacts/20261024-185037/report.json)，五类冲突、真实 Whistle 弹窗和原有 A/B/C/D、fetch/WSS、TLS 全部通过；该次未与其他测试并行，可用于资源观察。

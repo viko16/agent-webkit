@@ -127,6 +127,7 @@ def main():
         report['whistleRules'] = whistle.rules
         start()
         focus_before = cli('status')['frontmostPid']
+        sample('empty')
         if args.direct_conflicts:
             report['tests']['directConflicts'] = verify_direct_conflicts(
                 cli, start, stop, proxy_settings, base,
@@ -136,7 +137,6 @@ def main():
         report['systemProxy'] = cli('status')['systemProxy']
         report['tests']['popups'] = verify_popups(cli, 'https://example.com', lambda: (stop(), start()),
                                                   proxy='http://127.0.0.1:8899', whistle=whistle)
-        sample('empty')
         assert cli('snapshot', ok=False)['code'] == 'space_required'
         assert cli('space', 'create', 'invalid', '--proxy', 'http://127.0.0.1:1234', ok=False)['code'] == 'invalid_proxy'
         assert cli('space', 'create', 'invalid', '--proxy', 'direct', '--ca-cert', str(whistle.ca_path), '--ignore-certificate-errors', ok=False)['code'] == 'invalid_arguments'
