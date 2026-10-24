@@ -62,6 +62,8 @@ WebKit 操作默认超时为 15000 ms，可用 `--timeout 1–60000` 调整。`e
 
 删除后若 WebKit 仍占用空的存储容器，结果会注明 `cleanupPending: true`：网站数据已清除并核对，容器将在下次启动时继续删除。新建同名 Space 会使用新的 ID。`status` 可查询 `pendingStoreCleanup`；启动恢复完成后 `ready` 为 `true`，之前的页面命令会返回 `not_ready`。
 
+内部 DOM 操作使用独立脚本环境，网页覆盖同名变量不会替换自动化实现。`evaluate`（含 `--await`）仍访问网页自身的 JavaScript 状态。网页仍能修改 DOM；隔离不保证页面内容或操作结果可信。
+
 ## 手动浏览与 Agent 接管
 
 点击工具栏右侧的 **＋** 新建标签页，在地址栏输入网址并按回车。新标签页沿用当前 Space 的登录状态和网络设置；第一次使用时会自动创建直连的 `personal` Space。省略协议的网址会使用 HTTPS，本地 HTTP 页面需输入 `http://`。

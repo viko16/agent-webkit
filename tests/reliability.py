@@ -70,6 +70,35 @@ def main():
         cli('space', 'create', 'other', '--proxy', 'direct')
         cli('open', base, '--space', 'work')
         cli('open', base, '--space', 'other')
+        focus = cli('status')['frontmostPid']
+        assert js('typeof window.__agentWebKit')['value'] == 'undefined'
+        cli('open', base + '?poison=1', '--space', 'work')
+        for mutation in ['true', 'delete window.__agentWebKit',
+                         'window.__agentWebKit={snapshot:()=>({forged:true}),act:()=>false,exists:()=>true}; true']:
+            js(mutation)
+            snap = cli('snapshot', '--space', 'work')['value']
+            assert 'forged' not in snap
+            bridge_ref = next(el['ref'] for el in snap['elements'] if el['tag'] == 'button')
+            cli('fill', '#message', 'isolated', '--space', 'work')
+            cli('click', bridge_ref, '--space', 'work')
+            assert js('document.querySelector("#result").textContent')['value'] == 'isolated'
+            cli('wait', '#missing', '--space', 'work', '--timeout', '100', error='timeout')
+            cli('wait', '#message', '--space', 'work')
+        assert cli('evaluate', 'Promise.resolve(window.fixtureNonce)', '--space', 'work', '--await')['value'] == site.fixture_nonce
+        js('history.pushState({}, "", "?poison=1&spa=1"); true')
+        cli('click', bridge_ref, '--space', 'work')
+        js('document.querySelector("#save").replaceWith(document.querySelector("#save").cloneNode(true)); true')
+        cli('click', bridge_ref, '--space', 'work', error='stale_ref')
+        cli('reload', '--space', 'work')
+        cli('click', bridge_ref, '--space', 'work', error='stale_ref')
+        stop(); start()
+        cli('wait', '#message', '--space', 'work')
+        assert cli('snapshot', '--space', 'work')['value']['elements']
+        assert js('window.__agentWebKit.snapshot().forged')['value'] is True
+        cli('screenshot', '--space', 'work', '--out', str(out / 'isolated-bridge.png'))
+        assert cli('status')['frontmostPid'] == focus
+        cli('open', base, '--space', 'work')
+        checks.append('isolated bridge resists page overwrite/delete; page evaluate and Promise; SPA/ref invalidation; reload/restart; background screenshot and unchanged foreground')
         # Raw IPC gets the same validation as the CLI parser.
         with socket.socket(socket.AF_UNIX) as client:
             client.connect(str(state / 'browser.sock'))

@@ -1,5 +1,13 @@
 # 实际验收记录
 
+## Issue #1：P0-1（2026-10-24）
+
+Debug 应用实测通过 `python3 tests/reliability.py`（[报告](../.artifacts/reliability-20261024-184222/report.json)）和 `python3 tests/acceptance.py`（[报告](../.artifacts/20261024-184233/report.json)）。A/B/C/D、真实 Whistle 域名分流、fetch/WSS、TLS 正反用例、并发、资源回收及原有 16 项计时检查均保留并通过。
+
+新增用例在页面 world 中覆盖、删除、伪造 `__agentWebKit`，隔离 world 的 snapshot/click/fill/wait 仍读写真实 DOM；页面变量及 Promise 仍可通过 evaluate 访问。SPA 保留连接节点引用，移除节点、刷新和重启使旧引用失效；恢复后的页面重新注入，后台 PNG 与前台 PID 不变检查通过。测试曾暴露启动恢复期间 bridge 尚未注入时的 wait 异常，已改为等待初始化，并完整复测通过。原有死循环和 Promise 超时恢复仍通过。
+
+这不防止页面修改 DOM 或伪造业务内容；未增加跨源 frame、原生输入或其他能力声明。
+
 ## 0.2.0：2026-10-24
 
 在同一台 macOS 27.0.1 / Apple Silicon 机器上完成 Debug 与 Release 构建。最终应用包为 Release，`codesign --verify --deep --strict` 通过。下面两套测试均以最终应用包运行并退出 0：

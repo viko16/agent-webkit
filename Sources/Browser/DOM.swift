@@ -1,7 +1,9 @@
 import Foundation
+import WebKit
 
 // Adapted from agent-safari's MIT-licensed WeakMap snapshot design. See THIRD_PARTY_NOTICES.md.
 enum DOM {
+    static let world = WKContentWorld.world(name: "AgentWebKit.DOM")
     static let bootstrap = #"""
     (() => {
       if (window.__agentWebKit) return;

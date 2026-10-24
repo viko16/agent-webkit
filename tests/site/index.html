@@ -11,6 +11,10 @@ output{display:block;padding:20px;background:#dcefe2;border-radius:8px}
 <button id="save">Save message</button><output id="result">Ready</output>
 <p id="route">Peer: __PEER_PORT__</p></main>
 <script>
+// Page-owned globals must never replace the host's isolated DOM bridge.
+if (new URLSearchParams(location.search).has('poison')) {
+  window.__agentWebKit = {snapshot:()=>({forged:true}), act:()=>{throw Error('page bridge used')}, exists:()=>true};
+}
 window.fixturePeerPort=__PEER_PORT__;
 window.fixtureNonce='__FIXTURE_NONCE__';
 window.lastTrusted=null;

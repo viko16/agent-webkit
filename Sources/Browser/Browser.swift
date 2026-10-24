@@ -71,7 +71,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = store
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
-        configuration.userContentController.addUserScript(WKUserScript(source: DOM.bootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        configuration.userContentController.addUserScript(WKUserScript(source: DOM.bootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: DOM.world))
         webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 1000, height: 700), configuration: configuration)
         backingWindow = NSPanel(contentRect: webView.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init()
@@ -157,8 +157,9 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         }
     }
 
-    func runJS(_ script: String, awaitPromise: Bool = false) async throws -> Any {
-        try await perform(awaitPromise ? "callAsyncJavaScript" : "evaluateJavaScript") { complete in
+    func runJS(_ script: String, awaitPromise: Bool = false, world: WKContentWorld? = nil) async throws -> Any {
+        let world = world ?? .page
+        return try await perform(awaitPromise ? "callAsyncJavaScript" : "evaluateJavaScript") { complete in
             let callback: (Any?, Error?) -> Void = { result, error in
                 if let error {
                     let nsError = error as NSError
@@ -171,14 +172,19 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
                 else { complete(.success(result ?? NSNull())) }
             }
             if awaitPromise {
-                webView.callAsyncJavaScript("return await (0, eval)(source)", arguments: ["source": script], in: nil, in: .page) { result in
+                webView.callAsyncJavaScript("return await (0, eval)(source)", arguments: ["source": script], in: nil, in: world) { result in
                     switch result {
                     case .success(let value): callback(value, nil)
                     case .failure(let error): callback(nil, error)
                     }
                 }
             } else {
-                webView.evaluateJavaScript(script) { value, error in callback(value, error) }
+                webView.evaluateJavaScript(script, in: nil, in: world) { result in
+                    switch result {
+                    case .success(let value): callback(value, nil)
+                    case .failure(let error): callback(nil, error)
+                    }
+                }
             }
         }
     }
@@ -223,9 +229,9 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         repeat {
             if let navigationError { throw navigationError }
             if let selector {
-                let script = "window.__agentWebKit.exists(\(try quoteJS(selector)))"
-                if (try await runJS(script) as? Bool) == true { return }
-            } else if !webView.isLoading, (try await runJS("document.readyState") as? String) == "complete" { return }
+                let script = "Boolean(window.__agentWebKit && window.__agentWebKit.exists(\(try quoteJS(selector))))"
+                if (try await runJS(script, world: DOM.world) as? Bool) == true { return }
+            } else if !webView.isLoading, (try await runJS("document.readyState", world: DOM.world) as? String) == "complete" { return }
             try await Task.sleep(nanoseconds: 50_000_000)
         } while milliseconds(from: start) < Double(timeout)
         throw BrowserError("timeout", "等待\(selector ?? "页面加载")超时（\(timeout) ms）")
@@ -618,11 +624,11 @@ final class BrowserModel {
             tab.load(try validateURL(tab.persistedURL))
             try await tab.wait(selector: nil, timeout: timeout); try save(space)
         case "state": break
-        case "snapshot": value = try await tab.runJS("window.__agentWebKit.snapshot()")
+        case "snapshot": value = try await tab.runJS("window.__agentWebKit.snapshot()", world: DOM.world)
         case "evaluate": value = try await tab.runJS(arg(0), awaitPromise: r.options["await"] == "true")
         case "click", "fill":
             let before = tab.navigationSequence
-            value = try await tab.runJS("window.__agentWebKit.act(\(try quoteJS(command)),\(try quoteJS(arg(0))),\(try quoteJS(command == "fill" ? arg(1) : "")))")
+            value = try await tab.runJS("window.__agentWebKit.act(\(try quoteJS(command)),\(try quoteJS(arg(0))),\(try quoteJS(command == "fill" ? arg(1) : "")))", world: DOM.world)
             if r.options["wait-for-navigation"] == "true" { try await tab.waitForNavigation(after: before, timeout: timeout) }
         case "wait": try await tab.wait(selector: r.args.first, timeout: timeout)
         case "screenshot":
