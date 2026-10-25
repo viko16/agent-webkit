@@ -1,5 +1,13 @@
 # 实际验收记录
 
+## Issue #1：审查修复——XHR 复用诊断（2026-10-25）
+
+修复前，新增真实 WebKit 用例稳定复现：503 响应的 onload 回调重新 open 同一 XHR 后，诊断误记下一地址的 origin 和状态 0。现在每次 send 固定请求 origin，捕获阶段保存完成结果并解除该次监听；状态 0 仍按 load/error/abort/timeout 区分结果。
+
+`python3 tests/reliability.py --diagnostics-only` 在修复后的 Debug 应用上[通过](../.artifacts/reliability-20261025-132619/report.json)。新增用例覆盖 onload / onreadystatechange 中只重新 open，以及 onload 中连续 open/send；前两种均保留原始 503 与 origin，后一种恰好记录 503、201 两次响应（[记录](../.artifacts/reliability-20261025-132619/diagnostics-xhr-reuse.json)，完整命令见同目录 commands.jsonl）。原有诊断专项的异常、fetch/XHR 断连/取消/超时、脱敏、容量、隔离、卡死查询与恢复、重启及前台检查也通过。
+
+Debug / Release 构建、应用签名检查和 `git diff --check` 通过，最终应用包为 Release。本次只复跑受影响的诊断专项，未重跑完整 A/B/C/D 或框架表单验收；原有用例和入口均保留。没有改系统代理或停止用户 daemon。
+
 ## Issue #1：P1 Console / 网络诊断（2026-10-24）
 
 本批完成 `diagnostics --space NAME [--tab ID] [--clear]`。按 Tab 保留最近 200 条内存摘要，页面队列最多 100 条；原生 WebKit 与 page-script 明确分开，默认不采集 console 正文、请求头/体、响应体、表单值或 URL 路径/query/hash，保留 origin、有限类型、状态码、行列与时间信息。查询不执行 JS，页面忙碌、卡住或 Direct 暂停时仍可读取。

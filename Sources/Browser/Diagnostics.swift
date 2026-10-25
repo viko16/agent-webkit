@@ -161,18 +161,25 @@ enum DiagnosticScript {
         const result=apply(open,this,args); xhrOrigins.set(this,origin(args[1])); return result;
       };
       XMLHttpRequest.prototype.send=function(...args) {
-        const xhr=this, start=now(); let outcome='response';
-        const failed=event=>{outcome=event.type;};
+        const xhr=this, start=now(), requestOrigin=xhrOrigins.get(xhr)||'opaque';
+        const terminalEvents=['load','error','abort','timeout'];
+        let finished=false;
         function clean() {
-          for(const name of ['error','abort','timeout']) xhr.removeEventListener(name,failed);
-          xhr.removeEventListener('loadend',ended);
+          xhr.removeEventListener('readystatechange',ready,true);
+          for(const name of terminalEvents) xhr.removeEventListener(name,ended,true);
         }
-        function ended() {
+        function finish(outcome) {
+          if(finished)return;
+          finished=true;
           clean();
-          emit({kind:'xhr',outcome,status:xhr.status,origin:xhrOrigins.get(xhr)||'opaque',durationMs:now()-start});
+          emit({kind:'xhr',outcome,status:xhr.status,origin:requestOrigin,durationMs:now()-start});
         }
-        for(const name of ['error','abort','timeout']) xhr.addEventListener(name,failed);
-        xhr.addEventListener('loadend',ended);
+        // Capture before ordinary page callbacks can reopen/send this same object.
+        // Status 0 needs the terminal event to distinguish load/error/abort/timeout.
+        function ready() { if(xhr.readyState===4 && xhr.status!==0)finish('response'); }
+        function ended(event) { finish(event.type==='load'?'response':event.type); }
+        xhr.addEventListener('readystatechange',ready,true);
+        for(const name of terminalEvents) xhr.addEventListener(name,ended,true);
         try { return apply(send,this,args); } catch(error) { clean(); throw error; }
       };
       addEventListener('pagehide',()=>{if(timer!==null)clearTimeout(timer);flush();});

@@ -60,6 +60,42 @@ def verify_diagnostics(cli, base, out, restart):
         assert opaque == {'status': 0, 'type': 'opaque'}, opaque
         until(lambda v: any(e['kind'] == 'fetch' and e.get('status') == 0 and e.get('outcome') == 'response' and e.get('origin') == 'opaque' for e in v['events']))
         (out / 'diagnostics-page.json').write_text(json.dumps(captured, indent=2))
+        # Page callbacks may immediately reuse an XHR, before its old loadend fires.
+        for callback in ['onload', 'onreadystatechange']:
+            logs('--clear')
+            result = command('evaluate', '''new Promise(resolve=>{
+                const xhr=new XMLHttpRequest();
+                xhr.open('GET','/diagnostic-status?status=503');
+                xhr[CALLBACK]=()=>{
+                    if(xhr.readyState!==4)return;
+                    const status=xhr.status;
+                    xhr.open('GET','https://example.com/diagnostic-secret');
+                    resolve({status,resetStatus:xhr.status});
+                };
+                xhr.send();
+            })'''.replace('CALLBACK', json.dumps(callback)), '--await')['value']
+            assert result == {'status': 503, 'resetStatus': 0}, result
+            reused = until(lambda v: any(e['kind'] == 'xhr' for e in v['events']))
+            xhrs = [e for e in reused['events'] if e['kind'] == 'xhr']
+            assert len(xhrs) == 1 and xhrs[0]['status'] == 503, reused
+            assert xhrs[0]['origin'] == urljoin(base, '/').rstrip('/') and xhrs[0]['outcome'] == 'response', reused
+        logs('--clear')
+        chained = command('evaluate', '''new Promise(resolve=>{
+            const xhr=new XMLHttpRequest(), statuses=[];
+            xhr.open('GET','/diagnostic-status?status=503');
+            xhr.onload=()=>{
+                statuses.push(xhr.status);
+                if(statuses.length===2){resolve(statuses);return;}
+                xhr.open('GET','/diagnostic-status?status=201'); xhr.send();
+            };
+            xhr.send();
+        })''', '--await')['value']
+        assert chained == [503, 201], chained
+        reused = until(lambda v: len([e for e in v['events'] if e['kind'] == 'xhr']) >= 2)
+        xhrs = [e for e in reused['events'] if e['kind'] == 'xhr']
+        assert [e['status'] for e in xhrs] == [503, 201], reused
+        assert all(e['outcome'] == 'response' and e['durationMs'] >= 0 for e in xhrs), reused
+        (out / 'diagnostics-xhr-reuse.json').write_text(json.dumps(reused, indent=2))
         # Shared popup content controllers must still route logs to the actual WKWebView.
         js('Boolean(window.open("about:blank"))')
         parent = command('state')['page']['tabId']

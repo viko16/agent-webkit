@@ -48,7 +48,7 @@ python3 tests/reliability.py --forms  # 含诊断、原有可靠性和框架回�
 | `webkit` | 主 frame HTTP response、导航完成/失败/超时、条件等待超时、WebKit 调用超时、导航拒绝和内容进程终止回调 | 失败保存系统 domain/code 和有限原因分类，不保存 NSError.userInfo 或错误正文；HTTP 4xx/5xx 本身仍可能是正常完成的文档导航 |
 | `page-script` | console.warn/error 的等级与参数数量、异常类型/行列、未处理拒绝、元素资源错误、fetch/XHR 状态/耗时 | 页面可伪造、覆盖或停用；异常也可能由 Agent evaluate/DOM 调用触发，缺失记录不代表没有错误 |
 
-页面 hook 在 documentStart 注入 page world，通过公开 WKScriptMessageHandler 发送摘要；内部 DOM bridge 仍留在原有隔离 world。console 包装调用原方法且不遍历参数，fetch 保留响应和拒绝，XHR 观察 loadend/error/abort/timeout，不读写 body/header。页面队列最多 100 条，约每 100 ms 批量发送，导航卸载尝试 flush；后台调度、导航和进程退出可能延迟或丢失批次。宿主再次按字段/枚举/数值范围过滤，不接收任意消息键；共享 popup controller 按 WKScriptMessage.webView 路由，不接受网页提供的 Tab/Space ID，并拒绝子 frame 消息。
+页面 hook 在 documentStart 注入 page world，通过公开 WKScriptMessageHandler 发送摘要；内部 DOM bridge 仍留在原有隔离 world。console 包装调用原方法且不遍历参数，fetch 保留响应和拒绝。XHR 每次 send 固定请求 origin，在捕获阶段观察 DONE 状态及 load/error/abort/timeout，先保存结果并解绑该次监听，再由普通页面回调处理，避免 onload/onreadystatechange 复用对象时串用状态；不读写 body/header。页面队列最多 100 条，约每 100 ms 批量发送，导航卸载尝试 flush；后台调度、导航和进程退出可能延迟或丢失批次。宿主再次按字段/枚举/数值范围过滤，不接收任意消息键；共享 popup controller 按 WKScriptMessage.webView 路由，不接受网页提供的 Tab/Space ID，并拒绝子 frame 消息。
 
 默认只保留 http(s) origin（含端口），删除用户名、密码、路径、query 和 hash；全部自由文本消息、栈、Cookie、Authorization、表单值和请求/响应内容不采集。`pageTimeMs` 是网页相对时间，`durationMs` 是对应调用/导航耗时，`receivedAtMs` 可能晚于实际发生时间。Request/URL 对象在失败前无法安全读取目标时、opaque 响应等场景 origin 为 `opaque`。fetch 拒绝无法单独区分网络/CORS/策略问题；状态码 0 不能当成网络失败。
 
