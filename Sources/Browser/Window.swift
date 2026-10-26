@@ -2,10 +2,8 @@ import AppKit
 
 private extension NSToolbarItem.Identifier {
     static let address = Self("observer.address")
-    static let reload = Self("observer.reload")
     static let copyCommand = Self("observer.copyCommand")
     static let details = Self("observer.details")
-    static let divider = Self("observer.divider")
     static let newTab = Self("observer.newTab")
 }
 
@@ -24,11 +22,13 @@ private final class PageTabButton: NSButton {
         let shape = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 6, yRadius: 6)
         if state == .on {
             NSColor.controlBackgroundColor.setFill(); shape.fill()
-            NSColor.separatorColor.withAlphaComponent(0.3).setStroke(); shape.lineWidth = 0.5; shape.stroke()
+            NSColor.labelColor.withAlphaComponent(0.22).setStroke(); shape.lineWidth = 1; shape.stroke()
         } else if hovered {
             NSColor.labelColor.withAlphaComponent(0.05).setFill(); shape.fill()
+        } else {
+            NSColor.labelColor.withAlphaComponent(0.035).setFill(); shape.fill()
         }
-        let color = state == .on ? NSColor.labelColor : .secondaryLabelColor
+        let color = state == .on ? NSColor.labelColor : NSColor.labelColor.withAlphaComponent(0.7)
         let paragraph = NSMutableParagraphStyle(); paragraph.lineBreakMode = .byTruncatingTail
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font ?? NSFont.systemFont(ofSize: 12), .foregroundColor: color, .paragraphStyle: paragraph
@@ -53,6 +53,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     private let search = NSSearchField()
     private let host = NSView()
     private let address = NSTextField()
+    private let reloadButton = NSButton()
     private let tabStack = NSStackView()
     private let progress = NSProgressIndicator()
     private let status = NSTextField(labelWithString: "")
@@ -91,10 +92,15 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
             }
         }
         window.title = "Agent WebKit"; window.titleVisibility = .hidden
-        window.toolbarStyle = .unifiedCompact; window.minSize = NSSize(width: 760, height: 480)
+        window.toolbarStyle = .unified; window.minSize = NSSize(width: 760, height: 480)
         window.isReleasedWhenClosed = false; window.delegate = self
+        split.splitView.dividerStyle = .thin
         configureSidebar(); configureContent()
         window.contentViewController = split
+        NSLayoutConstraint.activate([
+            search.centerYAnchor.constraint(equalTo: tabStack.centerYAnchor),
+            spaceCount.firstBaselineAnchor.constraint(equalTo: status.firstBaselineAnchor)
+        ])
         window.setContentSize(NSSize(width: 1220, height: 800))
         window.setFrameAutosaveName(selectionKey + ".frame")
         window.setFrameUsingName(selectionKey + ".frame")
@@ -118,26 +124,29 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         effect.material = .sidebar; effect.blendingMode = .behindWindow
         controller.view = effect
         let item = NSSplitViewItem(sidebarWithViewController: controller)
+        // One continuous titlebar avoids a separate backdrop edge drifting from the split divider.
+        item.allowsFullHeightLayout = false
         item.minimumThickness = 200; item.maximumThickness = 280
         item.preferredThicknessFraction = 0.19
         split.addSplitViewItem(item)
         let heading = NSTextField(labelWithString: "Spaces")
         heading.font = .systemFont(ofSize: 11, weight: .semibold); heading.textColor = .secondaryLabelColor
-        search.placeholderString = "搜索 Space"; search.delegate = self
+        search.placeholderAttributedString = NSAttributedString(string: "搜索 Space", attributes: [.foregroundColor: NSColor.labelColor.withAlphaComponent(0.7)])
+        search.textColor = .labelColor; search.font = .systemFont(ofSize: 13)
+        search.delegate = self
         search.setAccessibilityLabel("搜索 Space")
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true; scroll.drawsBackground = false
         table.addTableColumn(NSTableColumn(identifier: .init("space")))
-        table.headerView = nil; table.rowHeight = 42; table.style = .sourceList
+        table.headerView = nil; table.rowHeight = 46; table.style = .sourceList
         table.intercellSpacing = NSSize(width: 0, height: 4)
         table.allowsEmptySelection = false
         table.backgroundColor = .clear
         table.delegate = self; table.dataSource = self; table.setAccessibilityLabel("Spaces")
         scroll.documentView = table
-        spaceCount.font = .systemFont(ofSize: 11); spaceCount.textColor = .secondaryLabelColor
+        spaceCount.font = .systemFont(ofSize: 12); spaceCount.textColor = .secondaryLabelColor
         [heading, search, scroll, spaceCount].forEach { $0.translatesAutoresizingMaskIntoConstraints = false; effect.addSubview($0) }
         NSLayoutConstraint.activate([
-            search.topAnchor.constraint(equalTo: effect.safeAreaLayoutGuide.topAnchor, constant: 12),
             search.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 14),
             search.trailingAnchor.constraint(equalTo: effect.trailingAnchor, constant: -14),
             heading.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 20),
@@ -146,8 +155,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
             scroll.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 4),
             scroll.trailingAnchor.constraint(equalTo: effect.trailingAnchor, constant: -4),
             scroll.bottomAnchor.constraint(equalTo: spaceCount.topAnchor, constant: -12),
-            spaceCount.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 20),
-            spaceCount.bottomAnchor.constraint(equalTo: effect.bottomAnchor, constant: -14)
+            spaceCount.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 20)
         ])
     }
 
@@ -186,9 +194,9 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         host.heightAnchor.constraint(greaterThanOrEqualToConstant: 160).isActive = true
         let footer = NSStackView(views: [status, NSView(), security])
         footer.orientation = .horizontal; footer.edgeInsets = NSEdgeInsets(top: 6, left: 14, bottom: 6, right: 14)
-        footer.heightAnchor.constraint(equalToConstant: 25).isActive = true
+        footer.heightAnchor.constraint(equalToConstant: 32).isActive = true
         for label in [status, security] {
-            label.font = .systemFont(ofSize: 11); label.textColor = .secondaryLabelColor
+            label.font = .systemFont(ofSize: 12); label.textColor = .labelColor.withAlphaComponent(0.7)
             label.lineBreakMode = .byTruncatingTail; label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         }
         [tabs, progress, banner, host, footer].forEach {
@@ -211,27 +219,47 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { toolbarDefaultItemIdentifiers(toolbar) }
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.toggleSidebar, .divider, .flexibleSpace, .address, .reload, .flexibleSpace, .copyCommand, .details, .newTab]
+        [.toggleSidebar, .flexibleSpace, .address, .flexibleSpace, .copyCommand, .details, .newTab]
     }
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
-        if id == .divider { return NSTrackingSeparatorToolbarItem(identifier: id, splitView: split.splitView, dividerIndex: 0) }
         let item = NSToolbarItem(itemIdentifier: id); item.target = self; item.autovalidates = false
         if id == .address {
-            address.isEditable = true; address.isSelectable = true; address.bezelStyle = .roundedBezel; address.isBezeled = true
+            address.isEditable = true; address.isSelectable = true; address.isBezeled = false
             address.delegate = self; address.target = self; address.action = #selector(openAddress(_:))
-            address.drawsBackground = true; address.backgroundColor = .controlBackgroundColor
+            address.drawsBackground = false; address.textColor = .labelColor
             address.alignment = .center; address.font = .systemFont(ofSize: 13); address.lineBreakMode = .byTruncatingMiddle
             address.placeholderString = "输入网址"; address.setAccessibilityLabel("页面地址")
             address.translatesAutoresizingMaskIntoConstraints = false
-            let preferred = address.widthAnchor.constraint(equalToConstant: 440)
+            let field = NSBox()
+            field.boxType = .custom; field.cornerRadius = 9
+            field.borderWidth = 0.5; field.borderColor = .separatorColor; field.fillColor = .controlBackgroundColor
+            field.contentViewMargins = .zero
+            field.translatesAutoresizingMaskIntoConstraints = false
+            reloadButton.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "重新加载")
+            reloadButton.target = self; reloadButton.action = #selector(reloadPage)
+            reloadButton.isBordered = false; reloadButton.bezelStyle = .texturedRounded
+            reloadButton.contentTintColor = .labelColor; reloadButton.toolTip = "重新加载"
+            reloadButton.setAccessibilityLabel("重新加载")
+            reloadButton.translatesAutoresizingMaskIntoConstraints = false
+            let content = field.contentView!
+            content.addSubview(address); content.addSubview(reloadButton)
+            let preferred = field.widthAnchor.constraint(equalToConstant: 560)
             preferred.priority = .defaultHigh; preferred.isActive = true
-            address.widthAnchor.constraint(greaterThanOrEqualToConstant: 180).isActive = true
-            address.heightAnchor.constraint(equalToConstant: 28).isActive = true
-            item.view = address; item.label = "页面地址"
+            NSLayoutConstraint.activate([
+                field.widthAnchor.constraint(greaterThanOrEqualToConstant: 220),
+                field.heightAnchor.constraint(equalToConstant: 34),
+                address.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 32),
+                address.centerYAnchor.constraint(equalTo: content.centerYAnchor),
+                address.trailingAnchor.constraint(equalTo: reloadButton.leadingAnchor, constant: -6),
+                reloadButton.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -6),
+                reloadButton.centerYAnchor.constraint(equalTo: content.centerYAnchor),
+                reloadButton.widthAnchor.constraint(equalToConstant: 24),
+                reloadButton.heightAnchor.constraint(equalToConstant: 26)
+            ])
+            item.view = field; item.label = "页面地址"
         } else {
             let values: (String, String, Selector)
             switch id {
-            case .reload: values = ("重新加载", "arrow.clockwise", #selector(reloadPage))
             case .copyCommand: values = ("复制 Agent 接管命令", "square.and.arrow.up", #selector(copyCommand))
             case .details: values = ("Space 信息", "info.circle", #selector(showDetails))
             case .newTab: values = ("新建标签页（⌘T）", "plus", #selector(newTab(_:)))
@@ -257,12 +285,12 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         let icon = NSImageView(image: NSImage(systemSymbolName: "square.stack", accessibilityDescription: nil)!)
         icon.contentTintColor = .controlAccentColor
         icon.symbolConfiguration = .init(pointSize: 15, weight: .regular)
-        let title = NSTextField(labelWithString: space.record.name); title.font = .systemFont(ofSize: 13)
+        let title = NSTextField(labelWithString: space.record.name); title.font = .systemFont(ofSize: 13, weight: .medium)
         let route = space.record.proxy == "direct" ? (space.networkError == nil ? "直连" : "直连已暂停") : "Whistle"
         let subtitle = NSTextField(labelWithString: "\(route) · \(space.tabs.count) 个标签页\(space.busy ? " · 运行中" : "")")
         subtitle.font = .systemFont(ofSize: 11); subtitle.textColor = .secondaryLabelColor
         for label in [title, subtitle] { label.lineBreakMode = .byTruncatingTail }
-        let labels = NSStackView(views: [title, subtitle]); labels.orientation = .vertical; labels.alignment = .leading; labels.spacing = 1
+        let labels = NSStackView(views: [title, subtitle]); labels.orientation = .vertical; labels.alignment = .leading; labels.spacing = 3
         [icon, labels].forEach { $0.translatesAutoresizingMaskIntoConstraints = false; cell.addSubview($0) }
         NSLayoutConstraint.activate([
             icon.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 8), icon.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
@@ -330,7 +358,8 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
                 button.setButtonType(.toggle); button.isBordered = false
                 (button.cell as? NSButtonCell)?.highlightsBy = []
                 (button.cell as? NSButtonCell)?.showsStateBy = []
-                button.state = candidate === tab ? .on : .off; button.tag = index; button.font = .systemFont(ofSize: 12)
+                button.state = candidate === tab ? .on : .off; button.tag = index
+                button.font = .systemFont(ofSize: 13, weight: candidate === tab ? .medium : .regular)
                 button.setAccessibilityRole(.radioButton)
                 button.setAccessibilityValue(candidate === tab ? 1 : 0)
                 button.contentTintColor = candidate === tab ? .labelColor : .secondaryLabelColor
@@ -374,11 +403,12 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         let tls = insecure ? "未校验证书" : space?.record.tls == nil ? "系统证书校验" : "自定义 CA"
         let networkError = space?.networkError
         security.stringValue = space.map { "\($0.record.proxy == "direct" ? "直连" : "Whistle")\(networkError == nil ? "" : "已暂停") · \(tls)" } ?? ""
-        security.textColor = insecure || networkError != nil ? .systemOrange : .secondaryLabelColor
+        security.textColor = insecure || networkError != nil ? .systemOrange : .labelColor.withAlphaComponent(0.7)
+        reloadButton.isEnabled = tab != nil && space?.busy == false && !model.restoring
         let error = networkError?.localizedDescription ?? tab?.lastNavigationRejection?.localizedDescription ?? (tab?.unresponsive == true ? "页面未响应。重新加载可恢复标签页；上次操作可能已部分生效。" : tab?.navigationError?.localizedDescription)
         bannerText.stringValue = error ?? ""; banner.isHidden = error == nil; retry.isEnabled = space?.busy == false && !model.restoring
-        for item in window.toolbar?.items ?? [] where [.reload, .copyCommand, .details].contains(item.itemIdentifier) {
-            item.isEnabled = tab != nil && (item.itemIdentifier != .reload || (space?.busy == false && !model.restoring))
+        for item in window.toolbar?.items ?? [] where [.copyCommand, .details].contains(item.itemIdentifier) {
+            item.isEnabled = tab != nil
         }
         window.toolbar?.items.first { $0.itemIdentifier == .newTab }?.isEnabled = canCreateTab
     }
