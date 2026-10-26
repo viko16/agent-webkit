@@ -1,6 +1,7 @@
 import AppKit
 
 private extension NSToolbarItem.Identifier {
+    static let sidebar = Self("observer.sidebar")
     static let address = Self("observer.address")
     static let copyCommand = Self("observer.copyCommand")
     static let details = Self("observer.details")
@@ -219,7 +220,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { toolbarDefaultItemIdentifiers(toolbar) }
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.toggleSidebar, .flexibleSpace, .address, .flexibleSpace, .copyCommand, .details, .newTab]
+        [.sidebar, .flexibleSpace, .address, .flexibleSpace, .copyCommand, .details, .newTab]
     }
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
         let item = NSToolbarItem(itemIdentifier: id); item.target = self; item.autovalidates = false
@@ -238,7 +239,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
             reloadButton.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "重新加载")
             reloadButton.target = self; reloadButton.action = #selector(reloadPage)
             reloadButton.isBordered = false; reloadButton.bezelStyle = .texturedRounded
-            reloadButton.contentTintColor = .labelColor; reloadButton.toolTip = "重新加载"
+            reloadButton.contentTintColor = .labelColor; reloadButton.toolTip = "重新加载（⌘R）"
             reloadButton.setAccessibilityLabel("重新加载")
             reloadButton.translatesAutoresizingMaskIntoConstraints = false
             let content = field.contentView!
@@ -260,6 +261,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         } else {
             let values: (String, String, Selector)
             switch id {
+            case .sidebar: values = ("显示／隐藏侧边栏（⌃⌘S）", "sidebar.left", #selector(toggleSidebar(_:)))
             case .copyCommand: values = ("复制 Agent 接管命令", "square.and.arrow.up", #selector(copyCommand))
             case .details: values = ("Space 信息", "info.circle", #selector(showDetails))
             case .newTab: values = ("新建标签页（⌘T）", "plus", #selector(newTab(_:)))
@@ -267,13 +269,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
             }
             item.label = values.0; item.toolTip = values.0
             item.image = NSImage(systemSymbolName: values.1, accessibilityDescription: values.0)
-            item.action = values.2; item.isBordered = false
-            let button = NSButton(image: item.image!, target: self, action: values.2)
-            button.bezelStyle = .texturedRounded; button.isBordered = false; button.toolTip = values.0
-            button.symbolConfiguration = .init(pointSize: 16, weight: .regular)
-            button.widthAnchor.constraint(equalToConstant: 28).isActive = true
-            button.heightAnchor.constraint(equalToConstant: 28).isActive = true
-            button.setAccessibilityLabel(values.0); item.view = button
+            item.action = values.2; item.isBordered = true
         }
         return item
     }
@@ -404,7 +400,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         let networkError = space?.networkError
         security.stringValue = space.map { "\($0.record.proxy == "direct" ? "直连" : "Whistle")\(networkError == nil ? "" : "已暂停") · \(tls)" } ?? ""
         security.textColor = insecure || networkError != nil ? .systemOrange : .labelColor.withAlphaComponent(0.7)
-        reloadButton.isEnabled = tab != nil && space?.busy == false && !model.restoring
+        reloadButton.isEnabled = canReload
         let error = networkError?.localizedDescription ?? tab?.lastNavigationRejection?.localizedDescription ?? (tab?.unresponsive == true ? "页面未响应。重新加载可恢复标签页；上次操作可能已部分生效。" : tab?.navigationError?.localizedDescription)
         bannerText.stringValue = error ?? ""; banner.isHidden = error == nil; retry.isEnabled = space?.busy == false && !model.restoring
         for item in window.toolbar?.items ?? [] where [.copyCommand, .details].contains(item.itemIdentifier) {
@@ -413,6 +409,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         window.toolbar?.items.first { $0.itemIdentifier == .newTab }?.isEnabled = canCreateTab
     }
     private var canCreateTab: Bool { !model.restoring && !creatingTab && currentSpace?.busy != true }
+    private var canReload: Bool { displayed != nil && currentSpace?.busy == false && !model.restoring }
     private func resizeTabs() {
         let available = host.bounds.width - 20 - CGFloat(max(0, tabWidths.count - 1)) * 6
         let width = min(240, max(140, available / CGFloat(max(1, tabWidths.count))))
@@ -420,6 +417,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     }
     func windowDidResize(_ notification: Notification) { resizeTabs() }
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(reloadPage) { return canReload }
         if menuItem.action == #selector(newTab(_:)) { return canCreateTab }
         if menuItem.action == #selector(focusAddress(_:)) { return address.isEnabled }
         return true
@@ -482,8 +480,8 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         let alert = NSAlert(); alert.messageText = "无法完成操作"; alert.informativeText = message
         alert.beginSheetModal(for: window)
     }
-    @objc private func reloadPage() {
-        guard let space = currentSpace, let tab = displayed, !space.busy else { NSSound.beep(); return }
+    @objc func reloadPage() {
+        guard canReload, let space = currentSpace, let tab = displayed else { NSSound.beep(); return }
         Task { @MainActor in
             let result = await model.handle(Request(command: "reload", args: [], options: ["space": space.record.id.uuidString, "tab": tab.id.uuidString]))
             if result["ok"] as? Bool != true, selectedSpace == space.record.id { transientMessage = (result["error"] as? [String: Any])?["message"] as? String }
@@ -516,8 +514,9 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         stack.widthAnchor.constraint(equalToConstant: 360).isActive = true
         let controller = NSViewController(); controller.view = stack
         infoPopover.contentViewController = controller; infoPopover.behavior = .transient
-        let anchor = (sender as? NSView) ?? address
-        infoPopover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .maxY)
+        if let item = window.toolbar?.items.first(where: { $0.itemIdentifier == .details }) {
+            infoPopover.show(relativeTo: item)
+        }
     }
     @objc func toggleSidebar(_ sender: Any?) { split.toggleSidebar(sender) }
     @objc func focusSpaces(_ sender: Any?) {

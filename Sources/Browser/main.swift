@@ -52,6 +52,8 @@ final class Application: NSObject, NSApplicationDelegate {
         edit.addItem(withTitle: "粘贴", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         edit.addItem(withTitle: "全选", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         let view = section("显示")
+        let reload = view.addItem(withTitle: "重新加载页面", action: #selector(ObserverWindow.reloadPage), keyEquivalent: "r")
+        reload.target = observer
         let sidebar = view.addItem(withTitle: "显示／隐藏侧边栏", action: #selector(ObserverWindow.toggleSidebar(_:)), keyEquivalent: "s")
         sidebar.keyEquivalentModifierMask = [.command, .control]; sidebar.target = observer
         let search = view.addItem(withTitle: "搜索 Space", action: #selector(ObserverWindow.focusSpaces(_:)), keyEquivalent: "f")
