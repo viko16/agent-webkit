@@ -466,11 +466,12 @@ final class Space {
         if record.proxy == "direct" {
             configurations = []
         } else {
-            guard let url = URL(string: record.proxy), url.scheme == "http", url.host == "127.0.0.1", url.port == 8899,
+            guard let url = URL(string: record.proxy), url.scheme == "http", url.host == "127.0.0.1",
+                  let port = url.port, (1...65535).contains(port), let endpointPort = NWEndpoint.Port(rawValue: UInt16(port)),
                   url.user == nil, url.password == nil, url.path.isEmpty, url.query == nil, url.fragment == nil else {
-                throw BrowserError("invalid_proxy", "仅支持 direct 或 http://127.0.0.1:8899")
+                throw BrowserError("invalid_proxy", "仅支持 direct 或 http://127.0.0.1:<PORT>，端口须为 1–65535；不支持认证、路径、查询参数或片段")
             }
-            var proxy = ProxyConfiguration(httpCONNECTProxy: .hostPort(host: "127.0.0.1", port: 8899))
+            var proxy = ProxyConfiguration(httpCONNECTProxy: .hostPort(host: "127.0.0.1", port: endpointPort))
             proxy.allowFailover = false
             proxy.matchDomains = []
             proxy.excludedDomains = []

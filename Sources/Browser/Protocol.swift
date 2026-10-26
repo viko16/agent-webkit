@@ -123,7 +123,8 @@ struct Options {
 let usage = """
 browser daemon [--data-dir PATH] [--socket PATH]
 browser status | shutdown
-browser space create NAME --proxy direct|http://127.0.0.1:8899 [--ca-cert PATH | --ignore-certificate-errors]
+browser space create NAME --proxy direct|http://127.0.0.1:<PORT> [--ca-cert PATH | --ignore-certificate-errors]
+  PORT: 1–65535; each Space retains its own proxy across restarts (e.g. 8899).
 browser space list
 browser space info|delete NAME_OR_ID
 browser open URL --space NAME_OR_ID [--tab ID]

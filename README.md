@@ -108,7 +108,7 @@ DOM 点击的 `isTrusted=false`。若网站要求真实用户操作，`--wait-fo
 
 ## Whistle 与 direct
 
-应用仅连接 `http://127.0.0.1:8899`，不修改 Whistle 或 macOS 系统代理。将域名映射到本地开发服务时，Whistle 使用以下规则，并开启 HTTPS 抓包：
+应用支持 `http://127.0.0.1:<PORT>`，端口范围为 1–65535，必须显式指定；原有 8899 用法仍有效。不支持远程代理、认证或 SOCKS，不修改 Whistle 或 macOS 系统代理。将域名映射到本地开发服务时，Whistle 使用以下规则，并开启 HTTPS 抓包：
 
 ```text
 example.com http://127.0.0.1:5173
@@ -116,6 +116,8 @@ example.com enable://capture
 ```
 
 两个 Space 均打开 `https://example.com`：代理 Space 应看到本地页面，direct Space 应看到公网 Example Domain。浏览器地址仍保持原域名，映射由 Whistle 完成。
+
+多个 Agent 可分别创建 Space，连接不同端口的独立 Whistle，例如 `--proxy http://127.0.0.1:18899` 与 `--proxy http://127.0.0.1:18900`。各 Whistle 的规则、存储和证书目录应独立配置。代理绑定各 Space 的 WKWebsiteDataStore，重启后恢复原地址；代理不可用时返回失败，不回退到直连或 8899。应用不提供运行中切换代理或代理规则管理。
 
 默认使用系统证书校验。创建 Space 时可选择一种额外证书策略，之后该 Space 的全部 Tab 及应用重启均沿用它：
 
@@ -140,12 +142,13 @@ browser space create dev --proxy http://127.0.0.1:8899 --ignore-certificate-erro
 
 ```sh
 python3 tests/acceptance.py
+python3 tests/acceptance.py --independent-proxies-only
 python3 tests/reliability.py
 ```
 
-测试会启动真实应用、本地 HTML 站点和本机已安装的 Whistle，在 8899 使用临时规则、独立数据目录及测试 CA；不改动已有规则、系统代理或钥匙串。它检查主页面、fetch 与 WSS 的域名分流、HTTPS 证书策略、会话持久化、并发、截图与资源回收，并保存 Whistle 会话和来源站点日志。测试结束会停止自己启动的 Whistle。`reliability.py` 无需 Whistle，验证真实死循环、Promise、超时恢复、参数校验、DOM 边界及计时。
+测试会启动真实应用、本地 HTML 站点和本机已安装的 Whistle，自动选择空闲端口，使用临时规则、独立数据目录及测试 CA；不改动已有规则、系统代理或钥匙串。它检查主页面、fetch 与 WSS 的域名分流、HTTPS 证书策略、会话持久化、并发、截图与资源回收，并保存 Whistle 会话和来源站点日志。完整测试还包含两路独立 Whistle 的并发、重启恢复与单路断连检查；`--independent-proxies-only` 可单独运行这组检查及代理参数校验。测试结束会停止自己启动的 Whistle。`reliability.py` 无需 Whistle，验证真实死循环、Promise、超时恢复、参数校验、DOM 边界及计时。
 
-若 8899 已被占用，测试不会停止该服务。已有 Whistle 时，配置好域名规则后运行 `python3 tests/acceptance.py --whistle-existing --origin-port 5173`，测试会直接核对 Whistle 会话，无需只凭界面人工判断。完整复现步骤见[开发说明](docs/DEVELOPMENT.md)。
+若 8899 已被占用，默认测试仍会选择其他空闲端口。需复用已有 Whistle 时，配置好域名规则后运行 `python3 tests/acceptance.py --whistle-existing --origin-port 5173`（代理端口默认 8899，可加 `--whistle-port PORT`），测试会直接核对 Whistle 会话。复用模式不执行停止代理或两路独立代理测试。完整复现步骤见[开发说明](docs/DEVELOPMENT.md)。
 
 源码研究与 API 核实见[实现依据](docs/RESEARCH.md)，测试证据和功能边界见[验收记录](docs/VALIDATION.md)。借鉴部分的许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 

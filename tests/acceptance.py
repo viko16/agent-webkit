@@ -15,6 +15,7 @@ from tls_cases import verify_tls_cases
 from network_cases import verify_network_cases
 from direct_conflict_cases import prepare_proxy_settings, verify_direct_conflicts
 from popup_cases import verify_popups
+from independent_proxy_cases import verify_proxy_arguments, verify_independent_proxies
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -37,8 +38,12 @@ def main():
     parser.add_argument('--out', default=str(ROOT / '.artifacts' / time.strftime('%Y%m%d-%H%M%S')))
     parser.add_argument('--whistle-existing', '--whistle', action='store_true', help='Use existing Whistle with example.com mapped to --origin-port and HTTPS capture enabled; do not change its configuration')
     parser.add_argument('--origin-port', type=int, default=0)
+    parser.add_argument('--whistle-port', type=int, help='Proxy port; defaults to a free port, or 8899 with --whistle-existing')
+    parser.add_argument('--independent-proxies-only', action='store_true', help='Run argument and two-Whistle isolation/restart/failure checks only')
     parser.add_argument('--direct-conflicts', action='store_true', help='Add process-local CFNetwork conflict/recovery cases without modifying OS proxies')
     args = parser.parse_args()
+    if args.independent_proxies_only and args.whistle_existing:
+        parser.error('--independent-proxies-only requires test-owned Whistles')
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
     state = Path(tempfile.mkdtemp(prefix='awk-'))
@@ -49,13 +54,13 @@ def main():
     if args.direct_conflicts:
         proxy_settings, injection = prepare_proxy_settings(out)
         daemon_env.update(injection)
-    report = {'out': str(out), 'stateDirectory': str(state), 'tests': {}, 'resources': {}, 'proxyKind': 'real Whistle on 127.0.0.1:8899', 'loopbackProxyInScope': False}
+    report = {'out': str(out), 'stateDirectory': str(state), 'tests': {}, 'resources': {}, 'proxyKind': 'real local Whistle', 'loopbackProxyInScope': False}
     daemon = None
     logs = []
     site, site_events = origin(args.origin_port, events=Events(out / 'origin.jsonl'))
     port = site.server_address[1]
     base = f'http://127.0.0.1:{port}/index.html'
-    whistle = WhistleFixture(out, port, existing=args.whistle_existing)
+    whistle = WhistleFixture(out, port, existing=args.whistle_existing, port=args.whistle_port)
     baseline = {p['pid'] for p in processes()}
     launch_focus = int(subprocess.check_output(['osascript', '-l', 'JavaScript', '-e',
         'ObjC.import("AppKit"); $.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier'], text=True).strip())
@@ -124,8 +129,15 @@ def main():
 
     try:
         whistle.start()
+        report['proxyURL'] = whistle.url
         report['whistleRules'] = whistle.rules
         start()
+        report['tests']['proxyArguments'] = verify_proxy_arguments(cli)
+        if args.independent_proxies_only:
+            report['tests']['independentProxies'] = verify_independent_proxies(
+                out, cli, lambda: (stop(), start()), whistle, site, site_events)
+            report['passed'] = True
+            return 0
         focus_before = cli('status')['frontmostPid']
         sample('empty')
         if args.direct_conflicts:
@@ -136,21 +148,20 @@ def main():
         report['system'] = subprocess.check_output(['sw_vers'], text=True)
         report['systemProxy'] = cli('status')['systemProxy']
         report['tests']['popups'] = verify_popups(cli, 'https://example.com', lambda: (stop(), start()),
-                                                  proxy='http://127.0.0.1:8899', whistle=whistle)
+                                                  proxy=whistle.url, whistle=whistle)
         assert cli('snapshot', ok=False)['code'] == 'space_required'
-        assert cli('space', 'create', 'invalid', '--proxy', 'http://127.0.0.1:1234', ok=False)['code'] == 'invalid_proxy'
         assert cli('space', 'create', 'invalid', '--proxy', 'direct', '--ca-cert', str(whistle.ca_path), '--ignore-certificate-errors', ok=False)['code'] == 'invalid_arguments'
-        a = cli('space', 'create', 'admin', '--proxy', 'http://127.0.0.1:8899', '--ignore-certificate-errors')
+        a = cli('space', 'create', 'admin', '--proxy', whistle.url, '--ignore-certificate-errors')
         b = cli('space', 'create', 'user', '--proxy', 'direct')
         assert a['id'] != b['id'] and a['dataStoreId'] != b['dataStoreId']
         assert cli('state', '--space', 'admin', '--tab', b['defaultTabId'], ok=False)['code'] == 'tab_not_found'
         # B: real domain, same URL, real Whistle maps only the proxied Space to the local origin.
         target = f'https://example.com/?agent_webkit={site.fixture_nonce}'
-        cli('space', 'create', 'strict', '--proxy', 'http://127.0.0.1:8899')
+        cli('space', 'create', 'strict', '--proxy', whistle.url)
         strict_before = cli('open', target, '--space', 'strict', ok=None)
         if not args.whistle_existing:
             assert strict_before['ok'] is False, 'A fresh, untrusted Whistle CA must be rejected by system policy'
-        cli('space', 'create', 'whistle-ca', '--proxy', 'http://127.0.0.1:8899', '--ca-cert', str(whistle.ca_path))
+        cli('space', 'create', 'whistle-ca', '--proxy', whistle.url, '--ca-cert', str(whistle.ca_path))
         ca_result = cli('open', target, '--space', 'whistle-ca', ok=None)
         cli('space', 'delete', 'whistle-ca')
         proxied = cli('open', target, '--space', 'admin')
@@ -279,8 +290,10 @@ def main():
         cli('space', 'delete', 'admin')
         # Stop only our own Whistle process; never interrupt a pre-existing instance.
         if not args.whistle_existing:
+            report['tests']['independentProxies'] = verify_independent_proxies(
+                out, cli, lambda: (stop(), start()), whistle, site, site_events)
             whistle.close()
-            cli('space', 'create', 'offline', '--proxy', 'http://127.0.0.1:8899', '--ignore-certificate-errors')
+            cli('space', 'create', 'offline', '--proxy', whistle.url, '--ignore-certificate-errors')
             error = cli('open', 'https://www.example.com/?must-not-arrive', '--space', 'offline', '--timeout', '3000', ok=False)
             cli('space', 'delete', 'offline')
             report['tests']['B']['whistleOfflineFailsClosed'] = error

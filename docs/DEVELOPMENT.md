@@ -58,7 +58,7 @@ python3 tests/reliability.py --forms  # 含诊断、原有可靠性和框架回�
 
 ## 复现域名代理路径
 
-默认的 `python3 tests/acceptance.py` 会使用本机已安装的 `whistle` / `w2`，在 8899 启动前台测试实例。规则通过 `--shadowRules` 传入，`--baseDir` / `--storage` 隔离测试数据，`--certDir` 指向临时 CA；不运行 `w2 proxy`、`w2 ca` 或 `--init`。其中 `--baseDir` 只隔离规则等数据，不隔离 Whistle 默认 CA，所以测试还显式提供临时证书目录。已有实例占用端口时不会覆盖或停止它。
+默认的 `python3 tests/acceptance.py` 会使用本机已安装的 `whistle` / `w2`，选择空闲端口启动前台测试实例；可用 `--whistle-port PORT` 显式指定测试端口，占用时会报错而不停止已有服务。规则通过 `--shadowRules` 传入，每个实例使用独立系统临时目录，`WHISTLE_PATH` 隔离 CA、缓存等文件，`--baseDir` / `--storage` 隔离测试数据，`--certDir` 指向各自生成的临时 CA。指定独立 `--rcPath`，配合 `--no-global-plugins` 与 `capture|prod` 模式避免继承用户配置或加载插件。不运行 `w2 proxy`、`w2 ca` 或 `--init`，不安装工具或证书。
 
 若要复用已经运行的 Whistle，在其中准备以下规则：
 
@@ -73,7 +73,17 @@ example.com enable://capture
 python3 tests/acceptance.py --whistle-existing --origin-port 5173
 ```
 
-测试自己启动 5173 HTML 服务，通过 `/cgi-bin/rootca?type=pem` 读取 CA，并通过 `/cgi-bin/get-data` 读取 Whistle 会话。该模式不设置规则、不切换 HTTPS 开关、不停止现有 Whistle；要求本机可读这两个 API。如现有实例有 UI 认证，当前测试不会自动提供凭据。
+测试自己启动 5173 HTML 服务，通过 `/cgi-bin/rootca?type=pem` 读取 CA，并通过 `/cgi-bin/get-data` 读取 Whistle 会话。复用实例的代理端口默认 8899，可用 `--whistle-port PORT` 指定。该模式不设置规则、不切换 HTTPS 开关、不停止现有 Whistle；要求本机可读这两个 API。如现有实例有 UI 认证，当前测试不会自动提供凭据。
+
+### 两路独立代理
+
+`python3 tests/acceptance.py --independent-proxies-only` 使用两个独立 Whistle、两个返回不同随机 nonce 的来源服务，以及两个 Space。对同一个 `https://example.com` URL 并发导航和 fetch，核对页面 nonce、输入与点击结果、Whistle 的实际 GET / realUrl / 目标端口 / 状态 / 完成记录，以及来源服务日志。两次延迟导航的来源时间差用于验证并发。随后保存 Cookie / LocalStorage 并重启 daemon，核对 Space、DataStore、Tab ID、代理地址、证书策略和网站数据，再执行一轮真实路由检查。
+
+单路故障用例先通过 Direct Space 确认相同公网 URL 可访问，再只停止测试代理 A：A 必须明确失败且不新增来源请求，B 必须继续经自己的代理访问来源 B。报告、两路抓包和截图位于输出目录的 `independent-proxies/`，代理 A 抓包及来源日志位于输出目录根部；`whistle-instance.json` 记录进程、临时目录、端口和规则。清理删除测试 Space 并停止测试服务，临时配置和日志保留便于检查。
+
+默认完整套件包含此专项；`--whistle-existing` 跳过它，以免停止用户代理。参数检查同时覆盖 direct、8899、其他端口、端口边界及非法地址；接受端口的检查不导航，不要求这些端口运行服务。此测试验证本机 HTTP Whistle 的独立绑定，不覆盖远程代理、认证、SOCKS、运行中切换或业务页面验收。
+
+`python3 tests/independent_proxy_cleanup.py` 使用真实 Whistle 和来源服务，注入浏览器 IPC 失联，确认即使 Space 清理失败，代理 B 与来源服务仍释放端口，失败报告仍写入临时目录。这个故障用例只检查资源清理，不能替代上述真实 WebKit 路由验收。
 
 B 的两个 Space 访问同一个含随机 nonce 的 HTTPS URL。代理端必须显示本地站点生成的 nonce，并且 Whistle 记录实际 GET；direct 必须显示公网 Example Domain、没有本地 nonce，不增加同 URL 的 Whistle 会话或本地来源请求。截图、JSON 状态和配置成功均不能单独作为网络路径证据。这个测试需要访问公网 example.com；断网会失败，不回退到假站点。
 

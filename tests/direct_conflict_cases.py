@@ -26,7 +26,7 @@ def verify_direct_conflicts(cli, start, stop, settings, base, target, nonce, whi
 
     # Persist both routes and data before introducing a conflict at the CFNetwork boundary.
     cli('space', 'create', 'conflict-direct', '--proxy', 'direct')
-    cli('space', 'create', 'conflict-proxy', '--proxy', 'http://127.0.0.1:8899', '--ignore-certificate-errors')
+    cli('space', 'create', 'conflict-proxy', '--proxy', whistle.url, '--ignore-certificate-errors')
     cli('open', base, '--space', 'conflict-direct')
     cli('open', target, '--space', 'conflict-proxy')
     cli('evaluate', 'localStorage.setItem("conflict","saved"); document.cookie="conflict=kept; max-age=3600; path=/"', '--space', 'conflict-direct')

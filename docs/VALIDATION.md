@@ -1,5 +1,55 @@
 # 实际验收记录
 
+## Space 独立 Whistle 端口（2026-10-26）
+
+`Space.init` 现在接受 `http://127.0.0.1:<PORT>`（1–65535），用实际端口创建 HTTP CONNECT 配置。代理仍写在各 Space 的 WKWebsiteDataStore 上，`allowFailover = false`、网站数据隔离和证书策略保持原行为；注册表继续保存完整代理地址，恢复不引入默认端口或全局覆盖。CLI 帮助、README、开发说明和验收入口同步更新。
+
+已检查仓库全部 8899：运行时的两处限制已移除，验收及 Direct 冲突用例改用实例地址；README 的兼容示例、复用已有 Whistle 的默认端口、旧 CONNECT / loopback 诊断工具、仅展示代理配置的 UI fixture 和历史验收记录保留其原用途。
+
+### 两路实际网络证据
+
+使用本机已有 Whistle 2.10.12 和真实 WKWebView；未安装依赖。专项命令：
+
+```sh
+python3 tests/acceptance.py --independent-proxies-only --out .artifacts/proxy-isolation-20261026-v2
+```
+
+[专项总报告](../.artifacts/proxy-isolation-20261026-v2/report.json)和[双代理详细报告](../.artifacts/proxy-isolation-20261026-v2/independent-proxies/report.json)均通过。两个 Whistle 的 `WHISTLE_PATH`、baseDir、storage 所在根目录、证书目录和 CA 各自独立，绑定 127.0.0.1 的空闲端口；独立 rcPath、禁用全局插件和 prod 模式隔离已有配置。启动记录见 [A](../.artifacts/proxy-isolation-20261026-v2/whistle-instance.json) / [B](../.artifacts/proxy-isolation-20261026-v2/independent-proxies/whistle-instance.json)。
+
+| Space | HTTP Whistle 端口 | 规则指向的来源端口 | 页面和 fetch 返回的来源 nonce | 首次导航抓包 ID |
+| --- | --- | --- | --- | --- |
+| proxy-a | 60493 | 60492 | `a91a341c39024374b60cfd29f83c4a94` | `1793005986342-002` |
+| proxy-b | 60516 | 60515 | `948cb419351645b7a75620aa056eb4e2` | `1793005986404-001` |
+
+两路并发访问完全相同的 URL：`https://example.com/?independent=bc5d3cffa54c4b92b8c9f2ce6894f382&phase=concurrent&delay=0.8`。各自输入并点击保存后页面分别显示 proxy-a / proxy-b；同 URL 的 fetch 分别返回本来源 nonce。Whistle 的实际 GET、命中规则、realUrl、目标端口、200 状态及 endTime 均与对应来源日志一致，两路延迟导航到达时间差 0.067 秒，未出现规则串用。
+
+证据：[A 抓包](../.artifacts/proxy-isolation-20261026-v2/whistle-sessions.json)、[B 抓包](../.artifacts/proxy-isolation-20261026-v2/independent-proxies/whistle-sessions.json)、[A 来源日志](../.artifacts/proxy-isolation-20261026-v2/origin.jsonl)、[B 来源日志](../.artifacts/proxy-isolation-20261026-v2/independent-proxies/origin-b.jsonl)、[A 截图](../.artifacts/proxy-isolation-20261026-v2/independent-proxies/concurrent-proxy-a.png)、[B 截图](../.artifacts/proxy-isolation-20261026-v2/independent-proxies/concurrent-proxy-b.png)。来源页面由真实 HTTP 服务生成，经 Whistle 转发，未用 Mock 代理或 DOM 注入代替路由验证。
+
+保存 Cookie / LocalStorage 后正常关闭并重新启动 daemon：Space UUID、DataStore UUID、默认 Tab UUID、代理原地址及 TLS 策略保持一致，各自恢复 route=proxy-a / proxy-b。自动恢复页面的 nonce 正确；随后再次并发导航和 fetch，仍分别命中原来源，到达时间差 0.011 秒。重启后两路导航抓包 ID 分别为 `1793005991489-006`、`1793005991501-006`。
+
+只停止 A 并确认其端口释放后，两路同时访问带 `phase=offline` 的相同 URL：A 返回 `operation_failed: Could not connect to the server.`，原生诊断为 `NSURLErrorDomain -1004 / connection_failed`，来源 A 新增请求数为 0；B 仍返回本来源 nonce，抓包 `1793005994039-008` 为 200、目标端口 60515。故障前 Direct 对照已成功读取同一公网 URL 的 Example Domain，排除了目标不可达造成假阳性；A 未回退直连或 8899。
+
+代理参数检查覆盖 direct、1、1234、8899、65535 的接受，以及缺失端口、0、65536、负数、非数字、其他协议、远程地址、localhost、IPv6、认证、路径、query、fragment 的拒绝。端口接受检查不发起导航；8899 原有服务未被用作测试代理。
+
+### 现有检查与清理
+
+运行环境为 macOS 26.6.2（25G83）。以下真实 WebKit 测试使用 Debug 应用：
+
+- `python3 tests/acceptance.py --out .artifacts/proxy-full-20261026-v2` [全部通过](../.artifacts/proxy-full-20261026-v2/report.json)：代理参数、弹窗、A/B/C/D、fetch/WSS、TLS，以及双独立代理专项。此轮另用 62812、63592 两个代理端口，重复验证了动态端口行为。
+- `python3 tests/acceptance.py --direct-conflicts --out .artifacts/proxy-full-20261026` 中 [Direct 冲突专项通过](../.artifacts/proxy-full-20261026/report.json)，覆盖 HTTP、HTTPS、SOCKS、PAC、自动发现的恢复处理；只在测试 daemon 中注入设置，没有切换操作系统代理。该轮随后因前台应用从 Helium（35319）变为 Typora（69937）在 C 的焦点不变断言处停止，不能算整套通过；上面的标准套件重跑已完成 C/D，未放宽或删除断言。
+- `python3 tests/reliability.py` [通过](../.artifacts/reliability-20261026-171541/report.json)，包含死循环与 Promise 超时恢复、CLI / IPC 校验、DOM 边界、诊断、持久化隔离、删除恢复及原有计时回归。未加 `--forms`，没有安装或运行 React / Vue 专项依赖。
+- Debug、Release 编译、`codesign --verify --deep --strict '.build/Agent WebKit.app'`、改动 Python 文件的语法检查及 `git diff --check` 通过。最终应用包为 Release；上列完整 WebKit 套件运行于 Debug，下述双代理复验使用 Release。构建仍有既有 CLT 两个链接搜索目录警告。
+
+[清理核查](../.artifacts/proxy-cleanup-20261026.json)：包括失败尝试在内，本次记录的 daemon / Whistle 进程均已退出，22 个测试 TCP 端口均无监听；四次验收的 Space 注册表为空。临时目录保留配置、证书和日志，遗留 Unix socket 路径连接返回 ECONNREFUSED，没有运行中的浏览器服务。用户原有 Whistle PID 95274 / 95278 仍监听 8899 / 40003（及原有 43901），未停止或重配。未修改系统代理或钥匙串；核查时系统代理各启用项均为 0。
+
+审查后补充的异常清理回归 `python3 tests/independent_proxy_cleanup.py` 通过：注入浏览器 IPC 失联，确认代理 B（54080）与来源服务（54079）均释放端口，异常仍向调用方报告，验收报告保存为失败且 `proxyBStopped=true`。清理使用 ExitStack 保证各资源的释放不依赖 Space 清理成功，故障验证使用真实 Whistle，未用 Mock 替代进程。
+
+`python3 tests/acceptance.py --independent-proxies-only --out .artifacts/proxy-review-20261026` 在 Release 应用上[再次通过](../.artifacts/proxy-review-20261026/report.json)，包含参数、双路并发、重启恢复和 A 停机/B 正常。[本轮清理核查及故障报告](../.artifacts/proxy-review-20261026/cleanup-check.json)确认测试端口释放、Whistle 进程退出、验收 Space 注册表为空。此轮仅修改测试清理及相关文档，Python 语法检查和 `git diff --check` 通过；未重复运行此前已通过的完整套件。
+
+### 范围与限制
+
+两路专项使用显式 `--ignore-certificate-errors`，没有把忽略校验表述为严格 CA 信任成功。未执行 verify-web-via-proxy 的业务页面、登录或预发验收，也未修改该技能。loopback 目标绕过 WebKit 代理的既有限制保持可见；本次路由验证使用 example.com 域名。远程代理、认证、SOCKS、运行中切换、媒体和 Service Worker 的双路行为不在本次覆盖范围。
+
 ## Issue #1：审查修复——XHR 复用诊断（2026-10-25）
 
 修复前，新增真实 WebKit 用例稳定复现：503 响应的 onload 回调重新 open 同一 XHR 后，诊断误记下一地址的 origin 和状态 0。现在每次 send 固定请求 origin，捕获阶段保存完成结果并解除该次监听；状态 0 仍按 load/error/abort/timeout 区分结果。
