@@ -1,5 +1,17 @@
 import AppKit
 
+private final class AddressField: NSTextField {
+    var willFocus: (() -> Void)?
+    override func selectText(_ sender: Any?) {
+        willFocus?()
+        super.selectText(sender)
+    }
+    override func mouseDown(with event: NSEvent) {
+        willFocus?()
+        super.mouseDown(with: event)
+    }
+}
+
 private extension NSToolbarItem.Identifier {
     static let sidebar = Self("observer.sidebar")
     static let address = Self("observer.address")
@@ -53,7 +65,12 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     private let table = NSTableView()
     private let search = NSSearchField()
     private let host = NSView()
-    private let address = NSTextField()
+    private let address = AddressField()
+    private let addressContainer = NSBox()
+    private let addressIcon = NSImageView()
+    private let addressDisplay = NSTextField(labelWithString: "")
+    private var editingAddress = false
+    private var addressDraft = ""
     private let reloadButton = NSButton()
     private let tabStack = NSStackView()
     private let progress = NSProgressIndicator()
@@ -227,12 +244,14 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         if id == .address {
             address.isEditable = true; address.isSelectable = true; address.isBezeled = false
             address.delegate = self; address.target = self; address.action = #selector(openAddress(_:))
-            address.drawsBackground = false; address.textColor = .labelColor
-            address.alignment = .center; address.font = .systemFont(ofSize: 13); address.lineBreakMode = .byTruncatingMiddle
+            address.willFocus = { [weak self] in self?.beginAddressEditing() }
+            address.drawsBackground = false; address.textColor = .clear
+            address.focusRingType = .none
+            address.alignment = .left; address.font = .systemFont(ofSize: 13); address.lineBreakMode = .byTruncatingMiddle
             address.placeholderString = "输入网址"; address.setAccessibilityLabel("页面地址")
             address.translatesAutoresizingMaskIntoConstraints = false
-            let field = NSBox()
-            field.boxType = .custom; field.cornerRadius = 9
+            let field = addressContainer
+            field.boxType = .custom; field.cornerRadius = 18
             field.borderWidth = 0.5; field.borderColor = .separatorColor; field.fillColor = .controlBackgroundColor
             field.contentViewMargins = .zero
             field.translatesAutoresizingMaskIntoConstraints = false
@@ -243,14 +262,29 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
             reloadButton.setAccessibilityLabel("重新加载")
             reloadButton.translatesAutoresizingMaskIntoConstraints = false
             let content = field.contentView!
-            content.addSubview(address); content.addSubview(reloadButton)
+            addressIcon.image = NSImage(systemSymbolName: "globe", accessibilityDescription: nil)
+            addressIcon.contentTintColor = .secondaryLabelColor; addressIcon.isHidden = true
+            addressIcon.translatesAutoresizingMaskIntoConstraints = false
+            content.addSubview(addressIcon); content.addSubview(address); content.addSubview(reloadButton)
+            addressDisplay.font = address.font; addressDisplay.alignment = .center
+            addressDisplay.lineBreakMode = .byTruncatingMiddle
+            addressDisplay.translatesAutoresizingMaskIntoConstraints = false
+            addressDisplay.setAccessibilityElement(false)
+            content.addSubview(addressDisplay, positioned: .below, relativeTo: address)
             let preferred = field.widthAnchor.constraint(equalToConstant: 560)
             preferred.priority = .defaultHigh; preferred.isActive = true
             NSLayoutConstraint.activate([
                 field.widthAnchor.constraint(greaterThanOrEqualToConstant: 220),
-                field.heightAnchor.constraint(equalToConstant: 34),
+                field.heightAnchor.constraint(equalToConstant: 36),
+                addressIcon.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
+                addressIcon.centerYAnchor.constraint(equalTo: content.centerYAnchor),
+                addressIcon.widthAnchor.constraint(equalToConstant: 16),
+                addressIcon.heightAnchor.constraint(equalToConstant: 16),
                 address.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 32),
                 address.centerYAnchor.constraint(equalTo: content.centerYAnchor),
+                addressDisplay.leadingAnchor.constraint(equalTo: address.leadingAnchor),
+                addressDisplay.trailingAnchor.constraint(equalTo: address.trailingAnchor),
+                addressDisplay.centerYAnchor.constraint(equalTo: address.centerYAnchor),
                 address.trailingAnchor.constraint(equalTo: reloadButton.leadingAnchor, constant: -6),
                 reloadButton.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -6),
                 reloadButton.centerYAnchor.constraint(equalTo: content.centerYAnchor),
@@ -299,6 +333,23 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     }
     func controlTextDidChange(_ notification: Notification) {
         if notification.object as? NSSearchField === search { refresh() }
+        if notification.object as? NSTextField === address { addressDraft = address.stringValue }
+    }
+    private func beginAddressEditing() {
+        guard !editingAddress else { return }
+        editingAddress = true
+        address.textColor = .labelColor; addressDisplay.isHidden = true
+        addressContainer.borderWidth = 3; addressContainer.borderColor = .keyboardFocusIndicatorColor
+        addressIcon.isHidden = false
+        addressDraft = address.stringValue
+    }
+    func controlTextDidEndEditing(_ notification: Notification) {
+        guard notification.object as? NSTextField === address else { return }
+        editingAddress = false
+        address.textColor = .clear; addressDisplay.isHidden = false
+        addressContainer.borderWidth = 0.5; addressContainer.borderColor = .separatorColor
+        addressIcon.isHidden = true
+        updateStatus()
     }
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         guard control === address, selector == #selector(NSResponder.cancelOperation(_:)) else { return false }
@@ -388,7 +439,13 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     private func updateStatus() {
         let space = currentSpace; let tab = displayed
         let url = tab?.persistedURL == "about:blank" ? "" : tab?.persistedURL ?? ""
-        if address.currentEditor() == nil, address.stringValue != url { address.stringValue = url }
+        if !editingAddress {
+            let components = URLComponents(string: url)
+            let display = ["http", "https"].contains(components?.scheme?.lowercased() ?? "")
+                ? components?.host ?? url : url
+            addressDisplay.stringValue = display
+            if address.stringValue != url { address.stringValue = url }
+        }
         address.toolTip = tab?.persistedURL
         address.placeholderString = "输入网址"
         address.isEnabled = tab != nil && !model.restoring && !creatingTab
@@ -424,7 +481,9 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     }
     @objc func focusAddress(_ sender: Any?) {
         guard address.isEnabled else { return }
+        beginAddressEditing()
         window.makeFirstResponder(address); address.selectText(nil)
+        beginAddressEditing()
     }
     @objc private func startBrowsing(_ sender: Any?) {
         if displayed == nil { newTab(sender) } else { focusAddress(sender) }
@@ -457,7 +516,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     }
     @objc private func openAddress(_ sender: Any?) {
         guard let space = currentSpace, let tab = displayed, !space.busy, !model.restoring else { NSSound.beep(); return }
-        let input = address.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let input = addressDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !input.isEmpty else { return }
         // Bare domains and local host:port addresses use HTTPS; explicit HTTP is preserved.
         let url = input.contains("://") || input == "about:blank" ? input : "https://" + input
