@@ -26,9 +26,32 @@ python3 tests/reliability.py --forms
 
 React fixture 使用 value/onChange，Vue 使用 v-model，分别验证 input/textarea/select/checkbox、中文/多行/空值、key 改变后的状态保留及旧引用失效、disabled/readOnly、服务端拒绝提交。成功必须同时满足框架渲染状态、真实 POST 数据和服务端随机 nonce；完整运行应只有 6 次提交，超时等待不能重放请求。该页还验证 contenteditable 整段纯文本替换、非可信 InputEvent 和 aria-readonly，并保存后台截图、核对前台 PID。表单写入沿用目标 realm 的原生 setter，文本 input 事件带 `inputType=insertReplacementText`，select 保持普通 input/change 事件；不模拟 beforeinput、输入法组合、选区或第三方富文本编辑器私有状态。
 
-表单模式只通过 Direct 加载本地 Vite 页面，**不是** Vite + Whistle 的域名/WSS/HMR 验收。后者与真实第三方站点回归仍由 Issue #1 跟踪。框架用法依据 [React 受控输入](https://react.dev/reference/react-dom/components/input)与 [Vue 表单绑定](https://vuejs.org/guide/essentials/forms.html)，兼容性结论仅来自本仓库实际运行的这些用例。
+表单模式只通过 Direct 加载本地 Vite 页面，**不是** Vite + Whistle 的域名/WSS/HMR 验收；后者使用下面的独立入口，真实第三方站点回归仍由 Issue #1 跟踪。框架用法依据 [React 受控输入](https://react.dev/reference/react-dom/components/input)与 [Vue 表单绑定](https://vuejs.org/guide/essentials/forms.html)，兼容性结论仅来自本仓库实际运行的这些用例。
 
 WebKit 在 DOM click 切换 checkbox 后，可能把派生的 input 事件标为 `isTrusted=true`；发起它的 click 仍是 false，也不证明有原生用户激活。测试分别记录 checkbox 的 click 与 input，以及 fill 主动派发的非可信 InputEvent，避免把这些事件混为一谈。
+
+## Vite + Whistle 域名与 HMR 回归
+
+```sh
+npm ci --prefix tests/forms
+python3 tests/acceptance.py --vite-only
+python3 tests/acceptance.py --vite --direct-conflicts  # 同时保留完整 A/B/C/D 等验收
+```
+
+复用表单测试锁定的 Vite 8.3.5，不增加应用依赖。`tests/forms/vite-workflow.mjs` 启动随机端口的 HTTP Vite 服务，使用每次输出目录里的 `tests/vite` 副本；只修改副本的 revision 模块。单独的测试 Whistle 将 `example.com` 映射到该端口，开启 HTTPS capture。两个代理 Space 均显式使用测试用 `--ignore-certificate-errors`，不代表严格 CA 信任通过。
+
+实际项目可以沿用这两条 Whistle 规则（把端口换成自己的 Vite 端口）：
+
+```text
+example.com http://127.0.0.1:5173
+example.com enable://capture
+```
+
+Vite 8 的服务配置使用 `allowedHosts: ['example.com']` 和 `ws: { protocol: 'wss', host: 'example.com', clientPort: 443 }`，然后在代理 Space 打开 `https://example.com`。客户端 WSS 仍访问该域名的 443，经 Whistle 转成 Vite 的本地 WS；不依赖 HMR 客户端回退到 loopback。应用不修改系统代理；localhost/127.0.0.1 目标的 WebKit 代理限制仍保留。
+
+验收并发打开两个隔离 Space，核对页面、fetch nonce、Cookie/LocalStorage 隔离，三次真实文件修改后文档实例 ID 与各自计数不变。切换 CLI 默认 Tab 到空白页后仍显式操作原 Tab；跨 Space Tab ID 和旧引用被拒绝，等待不存在的版本超时而不重放动作。随后重新导航并重启 daemon，核对 ID、代理、TLS、持久数据及新一轮 HMR。Direct 访问相同公网 URL 必须显示 Example Domain，不能新增 Whistle 会话或 Vite 来源请求。所有 Agent 操作检查前台 PID 不变；本专项不操作 GUI 选择。
+
+`vite-workflow/` 保存复制后的项目、Vite 日志、HTTP/upgrade/HMR 回执来源日志、Whistle 会话、页面截图和详细报告。必须同时看到实际 HTTPS 模块/fetch 请求、WSS `101` 及本地端口/规则匹配、每版本来自两个文档的 HMR 回执，不能只凭页面脚本或截图认定代理成功。退出或失败时删除测试 Space、停止自有 Whistle/Vite；原有服务与源码不变。`--vite-only` 不与其他专项或复用代理模式混用，`--vite` 的完整验收仍可使用原有参数。
 
 ## Console 与网络诊断
 

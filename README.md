@@ -119,6 +119,8 @@ example.com enable://capture
 
 多个 Agent 可分别创建 Space，连接不同端口的独立 Whistle，例如 `--proxy http://127.0.0.1:18899` 与 `--proxy http://127.0.0.1:18900`。各 Whistle 的规则、存储和证书目录应独立配置。代理绑定各 Space 的 WKWebsiteDataStore，重启后恢复原地址；代理不可用时返回失败，不回退到直连或 8899。应用不提供运行中切换代理或代理规则管理。
 
+Vite 开发页可沿用上述域名映射；让 Vite 允许 `example.com`，并将 HMR 客户端指向 `wss://example.com:443`。已验证两个 Space 的连续热更新、独立页面状态和重启后重连；配置及自动验收入口见[开发说明](docs/DEVELOPMENT.md#vite--whistle-域名与-hmr-回归)。
+
 默认使用系统证书校验。创建 Space 时可选择一种额外证书策略，之后该 Space 的全部 Tab 及应用重启均沿用它：
 
 ```sh

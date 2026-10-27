@@ -16,6 +16,7 @@ from network_cases import verify_network_cases
 from direct_conflict_cases import prepare_proxy_settings, verify_direct_conflicts
 from popup_cases import verify_popups
 from independent_proxy_cases import verify_proxy_arguments, verify_independent_proxies
+from vite_cases import verify_vite_workflow
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -41,9 +42,15 @@ def main():
     parser.add_argument('--whistle-port', type=int, help='Proxy port; defaults to a free port, or 8899 with --whistle-existing')
     parser.add_argument('--independent-proxies-only', action='store_true', help='Run argument and two-Whistle isolation/restart/failure checks only')
     parser.add_argument('--direct-conflicts', action='store_true', help='Add process-local CFNetwork conflict/recovery cases without modifying OS proxies')
+    parser.add_argument('--vite', action='store_true', help='Add real Vite + isolated Whistle WSS/HMR workflow (requires tests/forms dependencies)')
+    parser.add_argument('--vite-only', action='store_true', help='Run only the real Vite + Whistle workflow')
     args = parser.parse_args()
     if args.independent_proxies_only and args.whistle_existing:
         parser.error('--independent-proxies-only requires test-owned Whistles')
+    if args.vite_only and (args.independent_proxies_only or args.whistle_existing or args.direct_conflicts):
+        parser.error('--vite-only cannot be combined with --independent-proxies-only, --whistle-existing or --direct-conflicts')
+    if args.vite and args.independent_proxies_only:
+        parser.error('--vite and --independent-proxies-only are mutually exclusive')
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
     state = Path(tempfile.mkdtemp(prefix='awk-'))
@@ -128,11 +135,18 @@ def main():
         (out / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2))
 
     try:
+        if args.vite_only:
+            start()
+            report['tests']['viteWorkflow'] = verify_vite_workflow(out, cli, lambda: (stop(), start()))
+            report['passed'] = True
+            return 0
         whistle.start()
         report['proxyURL'] = whistle.url
         report['whistleRules'] = whistle.rules
         start()
         report['tests']['proxyArguments'] = verify_proxy_arguments(cli)
+        if args.vite:
+            report['tests']['viteWorkflow'] = verify_vite_workflow(out, cli, lambda: (stop(), start()))
         if args.independent_proxies_only:
             report['tests']['independentProxies'] = verify_independent_proxies(
                 out, cli, lambda: (stop(), start()), whistle, site, site_events)

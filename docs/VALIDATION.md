@@ -1,5 +1,22 @@
 # 实际验收记录
 
+## Issue #2 阶段 0 / #1 P1：Vite + 真实 Whistle HMR（2026-10-27）
+
+完成 `acceptance.py --vite-only` 专项及 `--vite` 完整套件扩展。运行时仍为原有 Swift/AppKit/WKWebView + CLI/Unix Socket，本次只增加测试和文档；复用已安装、锁定的 Vite 8.3.5，不向应用增加依赖。测试修改输出目录里的项目副本，仓库源文件和用户项目不参与热更新。
+
+- `python3 tests/acceptance.py --vite --direct-conflicts --out .artifacts/issue2-vite-full-20261027` [完整报告](../.artifacts/issue2-vite-full-20261027/report.json)通过：新增 Vite 专项，以及原有代理参数、Direct 冲突、弹窗、A/B/C/D、fetch/WSS、TLS、双独立代理全部通过。此前的 `reliability.py --forms` 已通过；本次没有改动原生源码，也没有移除或放宽原有断言。
+- 最终补充规则 matcher 断言及“资源清理成功后才标为通过”，再运行 `python3 tests/acceptance.py --vite-only --out .artifacts/issue2-vite-final-20261027` [专项通过](../.artifacts/issue2-vite-final-20261027/vite-workflow/report.json)。Python/Node 语法检查、`git diff --check` 通过。未额外构建 Release；测试与此前 P0 复核使用同一 Debug 应用。
+
+最终专项使用来源 HTTP 端口 50581、Whistle 50583，代理 Space 打开同一 `https://example.com/?vite_workflow=...`。实际文档、`/@vite/client`、主模块、版本模块、fetch 均返回 200；五条 WSS 会话为 101，`realUrl=ws://127.0.0.1:50581/...`、响应端口及实际命中规则相符。[抓包](../.artifacts/issue2-vite-final-20261027/vite-workflow/whistle-sessions.json)与[来源日志](../.artifacts/issue2-vite-final-20261027/vite-workflow/origin.jsonl)共同证明路径；首两条 WSS ID 为 `1793116566685-014`、`1793116566687-015`。Direct 对相同公网 URL 读到 Example Domain，本地来源和 Whistle 请求增量均为 0。
+
+两个 Space 连续三次真实文件热更新保留不同文档 UUID、计数 1/2 和各自 Cookie/LocalStorage；来源收到每版本各两条 HMR 回执。切换 CLI 默认 Tab 至空白页仍显式操作原 Tab，空白页不串用；跨 Space Tab 返回 `tab_not_found`，等待不存在版本返回 `timeout` 且计数不变。重新导航更换文档 UUID 并拒绝旧引用，后台[截图](../.artifacts/issue2-vite-final-20261027/vite-workflow/after-hmr.png)成功。重启保留 Space/DataStore/默认 Tab ID、代理、TLS、Cookie/LocalStorage，随后两个新文档再次各收到一次真实 HMR；总计八条版本回执。前台 PID 始终 1245。
+
+首轮已完成热更新，但验收误把 Whistle WebSocket 的字符串 `"101"` 当作整数，并把来源协议预期为 HTTP；[失败报告](../.artifacts/issue2-vite-20261027/report.json)保留，修正抓包断言后专项及完整套件通过。Vite 日志在旧引用负例期间还记录了 `Script error`；CLI 按预期返回 `stale_ref`，后续重连/HMR 通过，不把日志缺少错误当作验收条件。
+
+[清理核查](../.artifacts/issue2-vite-final-20261027/cleanup-check.json)确认包含失败尝试在内的五轮代理验收注册表为空、Socket 无服务、自有 Whistle PID 已退出，记录的 Whistle/Vite 端口均释放；完整套件退出后的相关进程 RSS 为 0。没有停止或修改已有代理、系统代理或钥匙串。
+
+本项使用显式忽略证书错误的受控开发 Space，不代表严格 CA 信任验收；loopback 目标代理限制不变。未验证第三方 Vite 插件、React/Vue 专用 HMR、懒加载/Service Worker 的全部路径。本专项不切换 GUI，也不替代真实 SPA/登录站点回归、真实 OS 代理开关和长期资源测试；这些 checklist 保持未完成。
+
 ## Issue #2：既有 P0 逐项复核（2026-10-27）
 
 本批先核对 #1 的实现和未完成验收，再在当前源码构建的 Debug 应用上串行运行：
