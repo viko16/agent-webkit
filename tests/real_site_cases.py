@@ -35,10 +35,24 @@ def prepare_site_gui(out, app):
     return copied / 'Contents/MacOS/browser', observe
 
 
+def site_gui_checks(cli, created, report, observe):
+    def checkpoint(phase, **expected):
+        if observe:
+            observe(phase, expected)
+
+    def observer(name, tab, visible=True):
+        actual = cli('status')['observer']
+        assert actual == dict(spaceId=created[name]['id'], tabId=tab, visible=visible), actual
+        report.setdefault('observerChecks', []).append(actual)
+
+    return checkpoint, observer
+
+
 def verify_real_spa(cli, out, observe=None):
     names = ('site-spa-a', 'site-spa-b')
     created = {}
     report = {'passed': False, 'site': INTRO, 'rounds': [], 'guiVerified': False}
+    checkpoint, observer = site_gui_checks(cli, created, report, observe)
 
     def command(name, *args, **kwargs):
         return cli(*args, '--space', name, '--tab', created[name]['defaultTabId'], **kwargs)
@@ -65,15 +79,6 @@ def verify_real_spa(cli, out, observe=None):
         after = state(name)
         assert after['documentId'] == before['documentId'] and after['documentId'], (before, after)
         return after
-
-    def checkpoint(phase, **expected):
-        if observe:
-            observe(phase, expected)
-
-    def observer(space, tab, visible=True):
-        actual = cli('status')['observer']
-        assert actual == dict(spaceId=created[space]['id'], tabId=tab, visible=visible), actual
-        report.setdefault('observerChecks', []).append(actual)
 
     try:
         focus = cli('status')['frontmostPid']
@@ -164,6 +169,7 @@ def verify_real_login(cli, out, restart, observe=None):
     created = {}
     report = {'passed': False, 'site': INTERNET, 'guiVerified': False,
               'credentialSource': INTERNET + '/login', 'thirdPartyOAuthTested': False}
+    checkpoint, observer = site_gui_checks(cli, created, report, observe)
 
     def command(name, *args, tab=None, **kwargs):
         return cli(*args, '--space', name, '--tab', tab or created[name]['defaultTabId'], **kwargs)
@@ -187,15 +193,6 @@ def verify_real_login(cli, out, restart, observe=None):
     def logout(name, tab=None):
         command(name, 'click', 'a[href="/logout"]', '--wait-for-navigation', '--timeout', '20000', tab=tab)
         return page(name, '/login', 'You logged out of the secure area!', tab=tab)
-
-    def checkpoint(phase, **expected):
-        if observe:
-            observe(phase, expected)
-
-    def observer(name, tab, visible=True):
-        actual = cli('status')['observer']
-        assert actual == dict(spaceId=created[name]['id'], tabId=tab, visible=visible), actual
-        report.setdefault('observerChecks', []).append(actual)
 
     try:
         focus = cli('status')['frontmostPid']

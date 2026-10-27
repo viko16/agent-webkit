@@ -1,5 +1,11 @@
 # 实际验收记录
 
+## 审查修复：共用 GUI 检查辅助逻辑（2026-10-28）
+
+将真实 SPA 与登录专项重复的 `checkpoint` / `observer` 提取为同一个 `site_gui_checks`，每个流程仍独立绑定其回调、动态 Space 映射和报告。原有检查点、Space/Tab/可见性断言、`observerChecks` 内容、前台与截图步骤保留；没有改变原生代码、CLI 接口或新增测试框架。
+
+`python3 -m unittest discover -s tests -p test_workflow_guards.py -v` 的 6 项测试全部通过：保留两项 HMR 守卫测试，新增四项 GUI 辅助逻辑验证，覆盖两流程上下文隔离、默认可见/显式隐藏、错误 Space/Tab/可见性拒绝且不记录成功、无 GUI 回调不查询/记录、操作者拒绝时异常继续上抛。Python 语法及 diff 检查通过。这些检查使用受控宿主返回值验证抽取后的 Python 逻辑，本轮未重新执行公网/原生 GUI 或完整验收；此前真实 GUI 证据保持其原版本归属。
+
 ## 审查修复：HMR 回执文档归属（2026-10-28）
 
 修复原先仅按版本统计“两条回执”的守卫：现在逐版本同时检查数量和两个实际页面的 `documentId` 集合；重启后在修改版本文件前重新采集 ID，报告保留 `hmrExpectedDocumentIds`。原有页面状态、Whistle 路由/WSS、Direct 对照、隔离、超时、引用失效与恢复断言保留，未修改原生代码或增加应用依赖。
