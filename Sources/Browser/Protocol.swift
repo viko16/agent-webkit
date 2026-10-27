@@ -13,30 +13,38 @@ struct Request: Codable {
     var args: [String]
     var options: [String: String]
 
-    func validate() throws {
-        let arities: [String: ClosedRange<Int>] = ["help":0...0, "version":0...0, "daemon":0...0,
+    static let arities: [String: ClosedRange<Int>] = ["help":0...2, "capabilities":0...0, "version":0...0, "daemon":0...0,
             "status":0...0, "shutdown":0...0, "space.list":0...0, "space.create":1...1,
             "space.info":1...1, "space.delete":1...1, "tab.list":0...0, "tab.new":0...1,
             "tab.close":1...1, "tab.default":1...1, "open":1...1, "reload":0...0,
             "snapshot":0...0, "state":0...0, "evaluate":1...1, "click":1...1,
             "fill":2...2, "screenshot":0...0, "wait":0...1, "diagnostics":0...0]
-        guard let arity = arities[command], arity.contains(args.count) else {
-            throw BrowserError("invalid_arguments", "未知命令或参数数量不正确：\(command)；browser help 查看用法")
-        }
+
+    static func allowedOptions(for command: String) -> Set<String> {
         var allowed: Set<String> = ["socket", "data-dir"]
-        if !["help", "version", "daemon", "status", "shutdown"].contains(command), !command.hasPrefix("space.") {
+        if !["help", "capabilities", "version", "daemon", "status", "shutdown"].contains(command), !command.hasPrefix("space.") {
             allowed.insert("space")
             if !command.hasPrefix("tab.") { allowed.insert("tab") }
         }
         if ["open", "reload", "tab.new", "snapshot", "evaluate", "click", "fill", "screenshot", "wait"].contains(command) { allowed.insert("timeout") }
         if command == "space.create" { allowed.formUnion(["proxy", "ca-cert", "ignore-certificate-errors"]) }
         if command == "click" { allowed.formUnion(["wait-for-navigation", "wait-for-popup"]) }
+        if command == "evaluate" { allowed.insert("await") }
+        if command == "wait" { allowed.formUnion(["url", "text", "state"]) }
+        if command == "screenshot" { allowed.insert("out") }
+        if command == "diagnostics" { allowed.insert("clear") }
+        return allowed
+    }
+
+    func validate() throws {
+        guard let arity = Self.arities[command], arity.contains(args.count) else {
+            throw BrowserError("invalid_arguments", "未知命令或参数数量不正确：\(command)；browser help 查看用法")
+        }
+        let allowed = Self.allowedOptions(for: command)
         if options["wait-for-navigation"] != nil && options["wait-for-popup"] != nil {
             throw BrowserError("invalid_arguments", "--wait-for-navigation 与 --wait-for-popup 不能同时使用")
         }
-        if command == "evaluate" { allowed.insert("await") }
         if command == "wait" {
-            allowed.formUnion(["url", "text", "state"])
             let conditions = ["url", "text", "state"].filter { options[$0] != nil }
             guard conditions.count <= 1,
                   options["url"] == nil || args.isEmpty,
@@ -48,8 +56,6 @@ struct Request: Codable {
                 throw BrowserError("invalid_arguments", "wait --state 支持 visible、hidden、attached、detached、enabled、disabled")
             }
         }
-        if command == "screenshot" { allowed.insert("out") }
-        if command == "diagnostics" { allowed.insert("clear") }
         if let key = options.keys.sorted().first(where: { !allowed.contains($0) }) {
             throw BrowserError("invalid_arguments", "\(command) 不支持 --\(key)")
         }
@@ -121,6 +127,7 @@ struct Options {
 }
 
 let usage = """
+browser help [COMMAND [SUBCOMMAND]] | capabilities
 browser daemon [--data-dir PATH] [--socket PATH]
 browser status | shutdown
 browser space create NAME --proxy direct|http://127.0.0.1:<PORT> [--ca-cert PATH | --ignore-certificate-errors]

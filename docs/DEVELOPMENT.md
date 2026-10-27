@@ -9,6 +9,25 @@ python3 tests/reliability.py  # 独立应用、本地页面、超时恢复和计
 
 Swift Package 无第三方包。`scripts/build.sh` 生成 `.build/Agent WebKit.app`，包含固定 Bundle ID、原生绘制的图标和允许 Web 内容联网的 ATS 配置。签名仅供本机开发，不包含公证或分发证书。测试使用 `.build/debug/browser` 作客户端，使用应用包中的 `browser daemon` 启动服务；测试前至少构建一次 debug，并确保客户端与应用包来自相同源码。`scripts/make_icon.swift` 以 AppKit 绘制各尺寸图标，再由系统 iconutil 打包，不需要图片生成服务或外部依赖。
 
+## 离线帮助与机器可读契约
+
+```sh
+browser help                    # 保留 result.usage
+browser help space              # 命令组
+browser help space create       # 或 browser help open
+browser capabilities
+python3 tests/contract_cases.py  # 不存在的 Socket / 数据目录，验证纯离线查询
+python3 tests/reliability.py --forms  # 含真实 CLI / IPC 对照和原有可靠性回归
+```
+
+`help`、`capabilities`、`version` 在 CLI 本地返回，也可通过原有 Socket 查询。帮助使用 `help COMMAND [SUBCOMMAND]`，不是给任意操作追加 `--help`；`--` 后的表单值仍按字面处理。命令数量、位置参数范围和允许选项共用 `Request` 校验定义；必需项、互斥项及条件约束由元数据补充，服务端继续执行原有语义校验。
+
+`capabilities` 的 `result.schemaVersion` 为 1，与产品 `version` 分开。`commands` 列出命令、参数名称/数量、选项类型/必需性、超时单位/范围/默认值、CLI/IPC 可用范围和离线属性。IPC 的选项值始终为字符串，无值 CLI 开关对应 `"true"`。`constraints` 保存 click/TLS/wait 的组合限制；`errors` 是已知结构化错误码，底层未分类错误使用 `operation_failed`，不能据错误码自动重放有副作用的操作。
+
+`schemas.$defs` 是 JSON Schema 2020-12 的请求、响应及结果外层定义；`commands[].resultSchema` 指向其中一个定义。它描述必有字段和集合形状，允许新增字段；网页 `value` 为任意 JSON，不把页面数据当作可信指令。位置参数数量、允许选项与条件限制仍需结合命令元数据，不能只用通用 request schema 代替服务端校验。`daemon` 只可由 CLI 启动长期进程，没有单条成功结果；原始 IPC 不支持启动 daemon。
+
+既有 `ok/result`、`ok/error.code/error.message`、退出码 0/1 与可选 timing 保持兼容。离线成功响应不伪造 IPC 或 WebKit 耗时。`scope` 明确固定目标、同 Space 串行、DOM 合成、快照/截图、超时恢复及代理限制；声明可用不等于真实站点兼容、代理路径或业务结果已验证。
+
 ## 操作结果等待
 
 `wait` 的 `--url`、`--text`、`--state` 互斥，CLI 和原始 IPC 均校验。URL 精确匹配 `location.href`，包括 SPA history/hash；它不保证文档已加载，也不代表服务器完成业务。文本为可见目标的 `innerText` 子串，不带选择器时只查主 frame 的 body。元素状态沿用唯一选择器、`>>>` 和引用作用域：hidden 包含节点不存在，attached/detached 只判断是否存在；enabled/disabled 要求元素可见，并检查原生禁用及 `aria-disabled`，readOnly 不算 disabled。过期引用始终报 `stale_ref`，要等节点被删除应使用选择器。

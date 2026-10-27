@@ -94,7 +94,9 @@ do {
         item.submenu = submenu; menu.addItem(item); app.mainMenu = menu
         withExtendedLifetime(delegate) { app.run() }
     } else if options.request.command == "help" {
-        print(String(decoding: try jsonData(["ok":true,"result":["usage":usage]]), as: UTF8.self))
+        print(String(decoding: try jsonData(["ok":true,"result":try CLIContract.help(options.request.args)]), as: UTF8.self))
+    } else if options.request.command == "capabilities" {
+        print(String(decoding: try jsonData(["ok":true,"result":CLIContract.capabilities]), as: UTF8.self))
     } else if options.request.command == "version" {
         print(String(decoding: try jsonData(["ok":true,"result":["version":productVersion]]), as: UTF8.self))
     } else {

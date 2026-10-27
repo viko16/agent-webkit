@@ -27,6 +27,8 @@ browser daemon
 
 在另一个终端设置同样的 PATH，然后运行：
 
+`browser help open`、`browser help space create` 可查看单项命令，`browser capabilities` 返回机器可读契约；这些查询无需启动应用。契约格式见[开发说明](docs/DEVELOPMENT.md#离线帮助与机器可读契约)。
+
 ```sh
 browser space create admin --proxy http://127.0.0.1:8899
 browser space create user --proxy direct

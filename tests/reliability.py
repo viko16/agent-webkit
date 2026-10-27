@@ -16,6 +16,7 @@ from wait_cases import verify_waits
 from form_cases import framework_site, verify_forms
 from diagnostic_cases import verify_diagnostics
 from store_cleanup_cases import verify_pending_store_only
+from contract_cases import verify_offline, verify_live_contract
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -76,8 +77,7 @@ def main():
         return cli('evaluate', source, '--space', 'work', **kwargs)
 
     try:
-        assert cli('--version')['version'] == '0.2.0'
-        assert 'reload' in cli('--help')['usage']
+        verify_offline(cli)
         cli('open', 'https://example.com', '--space', 'work', '--proxy', 'direct', error='invalid_arguments')
         start()
         if args.diagnostics_only:
@@ -96,6 +96,7 @@ def main():
         cli('space', 'create', 'other', '--proxy', 'direct')
         cli('open', base, '--space', 'work')
         cli('open', base, '--space', 'other')
+        checks.append(verify_live_contract(cli, state / 'browser.sock'))
         focus = cli('status')['frontmostPid']
         assert js('typeof window.__agentWebKit')['value'] == 'undefined'
         cli('open', base + '?poison=1', '--space', 'work')

@@ -660,7 +660,7 @@ final class BrowserModel {
         guard !shuttingDown else { throw BrowserError("shutting_down", "应用正在退出") }
         try r.validate()
         let command = r.command
-        guard !restoring || ["status", "help", "version"].contains(command) else {
+        guard !restoring || ["status", "help", "capabilities", "version"].contains(command) else {
             throw BrowserError("not_ready", "应用正在恢复会话；请等待 status.ready 为 true")
         }
         if command != "click", r.options["wait-for-navigation"] != nil {
@@ -673,7 +673,8 @@ final class BrowserModel {
             guard r.args.indices.contains(index) else { throw BrowserError("invalid_arguments", "缺少参数；browser help 查看用法") }
             return r.args[index]
         }
-        if command == "help" { return ["usage": usage] }
+        if command == "help" { return try CLIContract.help(r.args) }
+        if command == "capabilities" { return CLIContract.capabilities }
         if command == "version" { return ["version": productVersion] }
         if command == "status" {
             return ["version": productVersion, "pid": ProcessInfo.processInfo.processIdentifier, "spaces": spaces.count,

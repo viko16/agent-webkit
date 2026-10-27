@@ -1,5 +1,15 @@
 # 实际验收记录
 
+## P1 / #7：离线帮助与 CLI 契约（2026-10-28）
+
+新增 `help COMMAND [SUBCOMMAND]` 和 `capabilities`，CLI 离线可用，原始 Socket 返回相同内容。24 个命令的参数范围/允许选项共用既有校验定义，另列必需项、单位、组合约束、错误码、结果外层 schema、可用范围与能力限制；没有更改页面执行、响应字段或退出码，也没有引入依赖或新的客户端。
+
+`python3 tests/contract_cases.py` 通过：全部命令及两组帮助、未知主题/参数拒绝、schema 引用、超时单位、退出码、无 IPC 计时；不存在的 Socket/注册表目录始终未创建。`reliability.py --forms` [通过](../.artifacts/reliability-20261028-010843/report.json)：新增真实 CLI/IPC 对照、实际 status/Space/Tab/snapshot/diagnostics 结果字段、字面 `--help` 填写及 GUI/默认目标不变；保留 bridge、frame/shadow、弹窗、等待、诊断、六次框架提交、挂起恢复/清理和 16 项计时。
+
+最终 Release 的 `acceptance.py --vite --direct-conflicts --out .artifacts/issue2-p1-contract-full-20261028` [完整通过](../.artifacts/issue2-p1-contract-full-20261028/report.json)：原有代理参数、Vite/Whistle 域名与 WSS/HMR、Direct 冲突、弹窗、A/B/C/D、fetch/WSS、TLS 和双独立代理均保留。Debug/Release 构建与签名、离线专项、既有 6 项 workflow guard 及 diff 检查通过。构建仍有既有 CLT 搜索目录警告。
+
+完整可靠性运行后，仅修正契约中 `diagnostics --clear` 的说明（先清空再返回）；随后重新构建最终 Debug/Release、复跑离线专项，并在最终 Release 执行上述完整验收。schema 限定稳定外层，不宣称穷举页面任意 JSON。此功能尚不等同 #7 全部完成；Skill 和实际 Codex/Pi 集成另行验证，公网/原生 GUI 沿用此前证据，不计作本次重跑。
+
 ## 审查修复：共用 GUI 检查辅助逻辑（2026-10-28）
 
 将真实 SPA 与登录专项重复的 `checkpoint` / `observer` 提取为同一个 `site_gui_checks`，每个流程仍独立绑定其回调、动态 Space 映射和报告。原有检查点、Space/Tab/可见性断言、`observerChecks` 内容、前台与截图步骤保留；没有改变原生代码、CLI 接口或新增测试框架。
