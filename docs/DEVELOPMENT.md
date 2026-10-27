@@ -58,6 +58,7 @@ Vite 8 的服务配置使用 `allowedHosts: ['example.com']` 和 `ws: { protocol
 ```sh
 python3 tests/acceptance.py --real-sites-only
 python3 tests/acceptance.py --real-sites-only --real-sites-gui
+python3 tests/acceptance.py --real-sites-only --real-site-case login  # spa / login / all
 python3 tests/acceptance.py --real-sites --vite --direct-conflicts
 ```
 
@@ -65,7 +66,15 @@ python3 tests/acceptance.py --real-sites --vite --direct-conflicts
 
 SPA 目标是 [Vue 官方文档](https://vuejs.org/guide/introduction.html)。等待真实应用 hydration 后，用 snapshot 引用操作页面计数按钮和侧栏路由；两个独立 CLI 工作流并发切换 Introduction、Reactivity Fundamentals、Computed Properties，核对 URL、标题和文档标记。标记仅用于观察文档是否重载，不改 DOM、应用状态或路由；`performance.timeOrigin` 仅作诊断，因为本机同文档读数曾有 1 ms 浮动。随后再次交互、验证缺失元素等待超时，并分别后台截图。CLI 始终显式绑定 Space/Tab，第二个 Tab 不改变默认目标。
 
+登录/弹窗目标是 [The Internet](https://the-internet.herokuapp.com/login)，仅使用网页公开的演示账号，不读取用户凭据。两个 Space 同时验证成功登录和错误密码，未登录 Space 访问 `/secure` 必须被服务器重定向；由 `/windows` 的实际链接打开子 Tab 后，在其中访问 `/secure`，核对继承会话及系统 TLS 策略。从子 Tab 退出，父 Tab 重载后也必须失去会话；另一 Space 的登录独立有效，再反向验证登录/退出。覆盖有界等待、后台截图、关闭子 Tab、重启后的 ID/URL 与未登录 Space 不凭空获得会话。登录、退出只在明确测试步骤执行一次，失败/超时不自动重放。
+
+该站 `_blank` 链接没有 `rel="opener"`，按 [HTML 规则](https://html.spec.whatwg.org/multipage/links.html#link-type-opener)使用隐式 noopener；专项核对子页 `window.opener === null`，不改网站属性来强行开启它。宿主 `openerTabId` 记录创建关系，不代表网页一定能访问 opener。原有本地显式 opener/postMessage/回调用例继续保留。这个站点分别提供登录和新窗口页面，没有真实第三方 OAuth 提供商交互，不代表 OAuth 全自动兼容。
+
+重启后的登录状态按实际页面记录为 `authenticated` 或已回到登录页，可能受 Cookie 生命周期和服务端策略影响；不承诺会话 Cookie 等同带有效期的持久 Cookie，已退出的 Space 则必须仍未登录。测试不读取或保存服务端 Cookie/token 的值，只有网站公开的演示密码会出现在测试参数和该站帮助文字中。测试失败时保存主 Tab snapshot 和错误，便于区分站点变动、环境不可达与实现问题。
+
 GUI 模式复制一个独立 Bundle ID 的测试应用，打印原生操作检查点；操作者实际完成界面选择或关窗后，输入 `confirmed` 继续。它会激活测试窗口，检查点明确标记 `requiresForeground: true`，普通 CLI 操作仍检查前台 PID 不变。选中 A 的非默认 Tab 后操作默认 Tab，随后切换到 B；程序用 `status.observer` 断言观察目标未被 CLI 切走，并在关窗后继续并发操作、截图，确认窗口保持隐藏。GUI 工具若查询隐藏应用可能重新激活窗口，关窗后应直接读取 CLI 状态。拒绝检查点或状态不符均失败，不能仅凭输入确认认定通过。没有 GUI 实查的普通运行返回 `guiVerified: false`。
+
+登录 GUI 检查先观察未登录的 B，A 的登录和弹窗不应切走 GUI 或改变 CLI 默认 Tab；随后选择 A 的认证子 Tab、核对 Secure Area 并关窗，继续在后台完成跨 Tab 退出和 B 登录。普通 GUI 检查点需要人工或原生 UI 工具实际执行；脚本不会自动代替操作者确认。
 
 `status.observer` 是只读宿主快照：`visible` 为原生观察窗口可见性，`spaceId`、`tabId` 为 GUI 正在观察的目标（空选择为 null）。它不执行网页脚本、不激活窗口、不改变 CLI 默认目标，也不持久化新状态。测试报告、逐条命令、GUI 检查点和截图写入该次输出目录；退出时删除自有测试 Space 并停止测试 daemon。
 

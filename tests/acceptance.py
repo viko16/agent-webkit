@@ -17,7 +17,7 @@ from direct_conflict_cases import prepare_proxy_settings, verify_direct_conflict
 from popup_cases import verify_popups
 from independent_proxy_cases import verify_proxy_arguments, verify_independent_proxies
 from vite_cases import verify_vite_workflow
-from real_site_cases import verify_real_spa, prepare_site_gui
+from real_site_cases import verify_real_spa, verify_real_login, prepare_site_gui
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -48,6 +48,7 @@ def main():
     parser.add_argument('--real-sites', action='store_true', help='Add opt-in public-site regressions (requires Internet access)')
     parser.add_argument('--real-sites-only', action='store_true', help='Run only the public-site regressions')
     parser.add_argument('--real-sites-gui', action='store_true', help='With --real-sites-only, pause for native GUI observation/switch/close checkpoints')
+    parser.add_argument('--real-site-case', choices=['spa', 'login', 'all'], default='all', help='Public-site cases to run (default: all)')
     args = parser.parse_args()
     if args.independent_proxies_only and args.whistle_existing:
         parser.error('--independent-proxies-only requires test-owned Whistles')
@@ -61,6 +62,8 @@ def main():
         parser.error('--real-sites-only cannot be combined with --direct-conflicts, --whistle-existing or --vite')
     if args.real_sites_gui and not args.real_sites_only:
         parser.error('--real-sites-gui requires --real-sites-only')
+    if args.real_site_case != 'all' and not (args.real_sites or args.real_sites_only):
+        parser.error('--real-site-case requires --real-sites or --real-sites-only')
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
     state = Path(tempfile.mkdtemp(prefix='awk-'))
@@ -147,10 +150,16 @@ def main():
                                       'note': 'RSS sum double-counts shared pages. intervalCpuPercent uses CPU-time deltas; 100% is one core. Newly appearing WebKit processes are attributed to this test; other apps may affect attribution.'}
         (out / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2))
 
+    def real_sites():
+        if args.real_site_case in ('spa', 'all'):
+            report['tests']['realSPA'] = verify_real_spa(cli, out, site_observer)
+        if args.real_site_case in ('login', 'all'):
+            report['tests']['realLogin'] = verify_real_login(cli, out, lambda: (stop(), start()), site_observer)
+
     try:
         if args.real_sites_only:
             start()
-            report['tests']['realSPA'] = verify_real_spa(cli, out, site_observer)
+            real_sites()
             report['passed'] = True
             return 0
         if args.vite_only:
@@ -164,7 +173,7 @@ def main():
         start()
         report['tests']['proxyArguments'] = verify_proxy_arguments(cli)
         if args.real_sites:
-            report['tests']['realSPA'] = verify_real_spa(cli, out)
+            real_sites()
         if args.vite:
             report['tests']['viteWorkflow'] = verify_vite_workflow(out, cli, lambda: (stop(), start()))
         if args.independent_proxies_only:

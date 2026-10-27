@@ -152,7 +152,7 @@ python3 tests/reliability.py
 
 若 8899 已被占用，默认测试仍会选择其他空闲端口。需复用已有 Whistle 时，配置好域名规则后运行 `python3 tests/acceptance.py --whistle-existing --origin-port 5173`（代理端口默认 8899，可加 `--whistle-port PORT`），测试会直接核对 Whistle 会话。复用模式不执行停止代理或两路独立代理测试。完整复现步骤见[开发说明](docs/DEVELOPMENT.md)。
 
-可用 `python3 tests/acceptance.py --real-sites-only` 运行公网真实站点专项；加 `--real-sites-gui` 实查 Space/Tab 切换及关窗后的后台操作。它使用独立测试会话，依赖公网和当前站点布局，具体覆盖范围见[开发说明](docs/DEVELOPMENT.md#公网真实站点回归)。
+可用 `python3 tests/acceptance.py --real-sites-only` 回归 Vue 官方 SPA 和 The Internet 公开账号的登录／弹窗流程；加 `--real-sites-gui` 实查 Space/Tab 切换及关窗后的后台操作。它使用独立测试会话，依赖公网和当前站点布局，不代表第三方 OAuth 全自动兼容，具体覆盖范围见[开发说明](docs/DEVELOPMENT.md#公网真实站点回归)。
 
 源码研究与 API 核实见[实现依据](docs/RESEARCH.md)，测试证据和功能边界见[验收记录](docs/VALIDATION.md)。借鉴部分的许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 

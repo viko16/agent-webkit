@@ -156,3 +156,146 @@ def verify_real_spa(cli, out, observe=None):
     report['passed'] = True
     (out / 'spa-report.json').write_text(json.dumps(report, indent=2))
     return report
+
+
+def verify_real_login(cli, out, restart, observe=None):
+    """Use the site's published demo account, never user credentials or saved sessions."""
+    names = ('site-login-a', 'site-login-b')
+    created = {}
+    report = {'passed': False, 'site': INTERNET, 'guiVerified': False,
+              'credentialSource': INTERNET + '/login', 'thirdPartyOAuthTested': False}
+
+    def command(name, *args, tab=None, **kwargs):
+        return cli(*args, '--space', name, '--tab', tab or created[name]['defaultTabId'], **kwargs)
+
+    def page(name, path, text, tab=None):
+        command(name, 'wait', '--url', INTERNET + path, '--timeout', '15000', tab=tab)
+        command(name, 'wait', 'body', '--text', text, '--timeout', '15000', tab=tab)
+        return command(name, 'state', tab=tab)['page']
+
+    def login(name, valid):
+        command(name, 'fill', '#username', 'tomsmith')
+        command(name, 'fill', '#password', 'SuperSecretPassword!' if valid else 'invalid-demo-password')
+        fields = command(name, 'snapshot')['value']['elements']
+        assert next(e for e in fields if e['name'] == 'Password')['value'] == '[redacted]'
+        result = command(name, 'click', '#login button', '--wait-for-navigation', '--timeout', '20000')['value']
+        assert result['method'] == 'dom' and result['nativeVerified'] is False
+        assert result['businessOutcomeVerified'] is False
+        return page(name, '/secure' if valid else '/login',
+                    'Secure Area' if valid else 'Your password is invalid!')
+
+    def logout(name, tab=None):
+        command(name, 'click', 'a[href="/logout"]', '--wait-for-navigation', '--timeout', '20000', tab=tab)
+        return page(name, '/login', 'You logged out of the secure area!', tab=tab)
+
+    def checkpoint(phase, **expected):
+        if observe:
+            observe(phase, expected)
+
+    def observer(name, tab, visible=True):
+        actual = cli('status')['observer']
+        assert actual == dict(spaceId=created[name]['id'], tabId=tab, visible=visible), actual
+        report.setdefault('observerChecks', []).append(actual)
+
+    try:
+        focus = cli('status')['frontmostPid']
+        for name in names:
+            created[name] = cli('space', 'create', name, '--proxy', 'direct')
+            command(name, 'open', INTERNET + '/secure')
+            page(name, '/login', 'You must login to view the secure area!')
+        checkpoint('login-select-b', space=names[1], tab=created[names[1]]['defaultTabId'], heading='Login Page')
+        if observe:
+            observer(names[1], created[names[1]]['defaultTabId'])
+        focus = cli('status')['frontmostPid'] if observe else focus
+        with ThreadPoolExecutor(2) as pool:
+            valid = pool.submit(login, names[0], True)
+            invalid = pool.submit(login, names[1], False)
+            report['initialLogin'] = dict(valid=valid.result()['url'], invalid=invalid.result()['url'])
+        command(names[1], 'open', INTERNET + '/secure')
+        page(names[1], '/login', 'You must login to view the secure area!')
+        parent = cli('tab', 'new', INTERNET + '/windows', '--space', names[0])['tabId']
+        command(names[0], 'wait', '.example a[target="_blank"]', tab=parent)
+        link = command(names[0], 'evaluate', '(() => {const a=document.querySelector(".example a");'
+                       'return {target:a.target,rel:a.rel}})()', tab=parent)['value']
+        assert link['target'] == '_blank' and 'opener' not in link['rel'].split(), link
+        result = command(names[0], 'click', '.example a[target="_blank"]', '--wait-for-popup',
+                         '--timeout', '15000', tab=parent)['value']
+        assert result['nativeVerified'] is False
+        child = result['newTabId']
+        popup = page(names[0], '/windows/new', 'New Window', tab=child)
+        assert popup['openerTabId'] == parent and popup['tls']['policy'] == 'system'
+        assert cli('space', 'info', names[0])['defaultTabId'] == created[names[0]]['defaultTabId']
+        command(names[0], 'open', INTERNET + '/secure', tab=child)
+        page(names[0], '/secure', 'Secure Area', tab=child)
+        # This public site's _blank link uses HTML's implicit noopener behavior.
+        assert command(names[0], 'evaluate', 'window.opener === null', tab=child)['value'] is True
+        report['openerPolicy'] = 'implicit-noopener; host openerTabId does not imply a JS opener'
+        assert cli('status')['frontmostPid'] == focus
+        if observe:
+            observer(names[1], created[names[1]]['defaultTabId'])
+        checkpoint('login-select-child-and-close', beforeSpace=names[1], beforeHeading='Login Page',
+                   selectSpace=names[0], selectTab=child, heading='Secure Area', closeWindow=True)
+        if observe:
+            observer(names[0], child, visible=False)
+        focus = cli('status')['frontmostPid'] if observe else focus
+        with ThreadPoolExecutor(2) as pool:
+            signed_out = pool.submit(logout, names[0], child)
+            signed_in = pool.submit(login, names[1], True)
+            signed_out.result(); signed_in.result()
+        command(names[0], 'reload')
+        page(names[0], '/login', 'You must login to view the secure area!')
+        page(names[1], '/secure', 'Secure Area')
+        assert command(names[0], 'wait', '#content', '--text', 'never-published-result',
+                       '--timeout', '100', ok=False)['code'] == 'timeout'
+        page(names[0], '/login', 'You must login to view the secure area!')
+        for name, tab in ((names[0], child), (names[1], None)):
+            command(name, 'screenshot', '--out', str(out / f'{name}-background.png'), tab=tab)
+        assert cli('status')['frontmostPid'] == focus
+        if observe:
+            observer(names[0], child, visible=False)
+        # Reverse the authenticated Space, demonstrating logout did not affect its peer.
+        with ThreadPoolExecutor(2) as pool:
+            signed_in = pool.submit(login, names[0], True)
+            signed_out = pool.submit(logout, names[1])
+            signed_in.result(); signed_out.result()
+        cli('tab', 'close', child, '--space', names[0])
+        assert command(names[0], 'state', tab=child, ok=False)['code'] == 'tab_not_found'
+        assert cli('space', 'info', names[0])['defaultTabId'] == created[names[0]]['defaultTabId']
+        before = {name: cli('space', 'info', name) for name in names}
+        restart()
+        report['restart'] = {}
+        for name in names:
+            restored = cli('space', 'info', name)
+            for key in ('id', 'dataStoreId', 'defaultTabId', 'proxy', 'tls'):
+                assert restored[key] == before[name][key], (key, restored)
+            assert {t['tabId'] for t in restored['tabs']} == {t['tabId'] for t in before[name]['tabs']}
+            command(name, 'wait')
+            # Session cookies follow WebKit/server lifetime, not an application promise.
+            path = command(name, 'evaluate', 'location.pathname')['value']
+            assert path in ('/secure', '/login'), path
+            page(name, path, 'Secure Area' if path == '/secure' else 'Login Page')
+            if name == names[1]:
+                assert path == '/login', 'The signed-out Space gained a session after restart'
+            report['restart'][name] = dict(path=path, authenticated=path == '/secure')
+        assert cli('status')['frontmostPid'] == focus
+        report.update(guiVerified=observe is not None, sessionIsolation=True,
+                      popupInheritedSession=True, logoutSharedAcrossTabs=True, childClosed=True,
+                      syntheticInput=True, parentTab=parent, childTab=child)
+    except Exception as error:
+        report['failure'] = str(error)
+        report['failureObservations'] = {}
+        for name in created:
+            try:
+                report['failureObservations'][name] = command(name, 'snapshot')['value']
+            except Exception as observation_error:
+                report['failureObservations'][name] = {'error': str(observation_error)}
+        raise
+    finally:
+        try:
+            for name in created:
+                cli('space', 'delete', name)
+        finally:
+            (out / 'login-report.json').write_text(json.dumps(report, indent=2))
+    report['passed'] = True
+    (out / 'login-report.json').write_text(json.dumps(report, indent=2))
+    return report

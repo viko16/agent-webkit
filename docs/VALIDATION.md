@@ -1,5 +1,26 @@
 # 实际验收记录
 
+## Issue #2 阶段 0：公网登录／弹窗站点（2026-10-28）
+
+目标为 [The Internet](https://the-internet.herokuapp.com/login) 的 `/login`、`/secure`、`/windows` 与 `/windows/new`，通过公网 Direct + 系统证书校验访问。仅使用该站公开演示账号；没有用户凭据、真实个人账号或本地 HTML 替代。新增 `--real-site-case spa|login|all`，`--real-sites` / `--real-sites-only` 默认包含两个站点；原有基础验收入口与断言保留。
+
+`python3 tests/acceptance.py --real-sites-only --real-site-case login --real-sites-gui --out .artifacts/issue2-login-gui-final-20261028` [通过](../.artifacts/issue2-login-gui-final-20261028/login-report.json)，测试使用当前源码构建的 Debug 应用。实际检查：
+
+- A 成功登录、B 错误密码，并验证 B 访问受保护页仍由服务器重定向回登录页；输入密码字段在 snapshot 中为 `[redacted]`。成功判断来自完整导航后的 URL 和服务器页面内容，动作仍标记 DOM / 非原生 / 未验证业务结果。
+- `/windows` 的实际 `_blank` 链接创建 A 的新 Tab，继承系统 TLS 和登录会话；子 Tab 访问 `/secure` 成功，固定 CLI 默认 Tab 不变。B 仍处于登录页，未被 A 会话影响。
+- GUI 实查先观察 B，再选择 A 的认证子 Tab，并核对实际 Secure Area。关闭原生观察窗口后，宿主状态确认为 `visible: false`；后台并发执行 A 子 Tab 退出与 B 成功登录。A 的父 Tab 重载后也被服务器拒绝，B 保持已登录；后台 PNG、有界等待超时及前台不变检查通过，结束时窗口仍隐藏。[GUI 检查点](../.artifacts/issue2-login-gui-final-20261028/gui-checkpoints.jsonl)、[逐条命令](../.artifacts/issue2-login-gui-final-20261028/commands.jsonl)及报告中的四次宿主状态可核对。
+- 再反向执行 A 登录/B 退出，关闭 A 子 Tab 后查询返回 `tab_not_found`，默认 Tab 仍保留。重启后 Space/DataStore/Tab ID、Tab 集合、代理/TLS 均一致；该站 A 实际回到 `/login`，已退出的 B 也保持 `/login`。这是当前站点登录状态的实测边界，未单独归因于 Cookie 生命周期或服务端策略，不是“所有登录状态跨重启保留”的证据。
+
+**站点／引擎语义**：该链接没有 `rel="opener"`，WebKit 实测子页 `window.opener === null`；按 [HTML 的 opener 规则](https://html.spec.whatwg.org/multipage/links.html#link-type-opener)属于隐式 noopener。测试核对该行为，没有修改站点属性或强开 opener；宿主 `openerTabId` 只是创建关系。原有本地显式 opener/postMessage/回调仍由完整弹窗回归覆盖。此处是同站登录与新窗口流程，没有第三方 OAuth 提供商、MFA、跨源登录回调或可信原生输入验收。
+
+**保留的失败**：[首轮](../.artifacts/issue2-login-probe-20261028/report.json)把服务器 flash 提示误限定在 `#content`（实际位于独立区域）；[第二轮](../.artifacts/issue2-login-20261028-v2/report.json)的 `_blank` 选择器同时命中两个页脚链接，按既有唯一匹配规则返回 `selector_count`，随后限定实际 `.example` 链接。[首轮 GUI](../.artifacts/issue2-login-gui-20261028/report.json)误要求网站提供 JS opener，实际按上述标准返回 null；修正站点预期后完整 GUI 专项通过。三项均是新验收对实际站点结构/规则的错误假设，没有更改应用的 DOM 合成、选择器唯一性或 opener 行为来凑通过。
+
+最终 Release 上，`python3 tests/acceptance.py --vite --direct-conflicts --out .artifacts/issue2-existing-full-20261028` [完整通过](../.artifacts/issue2-existing-full-20261028/report.json)：代理参数、Vite/HMR、五类 Direct 冲突、弹窗、A/B/C/D、fetch/WSS、TLS、双独立代理均通过。此前 `--real-sites --vite --direct-conflicts` 的 [Release 组合运行](../.artifacts/issue2-real-sites-full-final-20261028/report.json)已通过真实 SPA、真实登录、HMR 和 Direct 冲突，随后因外部前台从 1241 切到 1245 在原有弹窗焦点断言停止；没有将整轮记为通过。更早的[组合首轮](../.artifacts/issue2-real-sites-full-20261028/report.json)同样因外部前台 1245 → 1241 停止，均非当时测试 daemon。完整套件单独重跑保留所有断言并通过，启动前后前台保持 1245。
+
+本轮 macOS 27.2（26B123）。完整套件 RSS 合计：空 Space 阶段 171.22 MiB，五 Space 424.08 MiB，重启后 329.83 MiB，删除后 147.77 MiB，退出后 0；这是先运行 HMR 后的短时资源样本，含共享页重复计算，不是冷启动或长期上限。Debug/Release 构建、签名、Python 语法和 diff 检查通过；Release 构建另提示迁移前路径的旧中间产物及既有 CLT 搜索目录警告，未为此清理仓库外文件。GUI 实查使用 Debug，Release 组合及完整套件没有原生 GUI 交互。
+
+资源核查另发现一轮主动取消的 GUI 测试留下删除 tombstone；仅剩删除记录时重启，该机 WebKit 在 WebsiteDataStoreIO 中崩溃。此时不能声明所有延迟清理已完成；恢复路径作为独立修复继续验证，不影响上列已实际通过的站点用例记录。
+
 ## Issue #2 阶段 0：真实 SPA 与观察窗口（2026-10-28）
 
 使用真实公网 [Vue 官方文档](https://vuejs.org/guide/introduction.html)，Direct + 系统证书校验，不通过本地映射或替换 HTML。新增 `acceptance.py --real-sites-only` 专项和 `--real-sites` 完整套件扩展，现有验收入口与断言保留。宿主仅新增只读 `status.observer`，返回窗口可见性、GUI Space/Tab ID；未引入 GUI 控制接口或全局 Agent 活动目标。
