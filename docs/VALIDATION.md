@@ -1,5 +1,17 @@
 # 实际验收记录
 
+## Issue #2：既有 P0 逐项复核（2026-10-27）
+
+本批先核对 #1 的实现和未完成验收，再在当前源码构建的 Debug 应用上串行运行：
+
+- `python3 tests/reliability.py --forms` [通过](../.artifacts/reliability-20261027-235003/report.json)：P0-1 的 page world 覆写/删除、独立 bridge、evaluate/Promise、引用失效、刷新/重启和后台截图通过；P0-3 的 Direct 弹窗、回调/关闭、默认 Tab、Space 隔离与前台不变通过。原有 frame/shadow、wait、诊断、React/Vue 六次真实提交、死循环恢复、清理及 16 项计时均通过。
+- `python3 tests/acceptance.py --direct-conflicts --out .artifacts/issue2-p0-20261027` [通过](../.artifacts/issue2-p0-20261027/report.json)：P0-2 的 HTTP/HTTPS/SOCKS/PAC/自动发现五类**进程内 CFNetwork 注入**下，daemon 重启、Whistle 可用、Direct 拒绝及保留 Cookie/LocalStorage/Tab ID 恢复通过；P0-3 的真实 Whistle 弹窗及 TLS 正反用例通过。原有 A/B/C/D、fetch/WSS、双独立代理并发/重启/单路断连均通过。
+- `zsh scripts/build.sh` 与 `codesign --verify --deep --strict '.build/Agent WebKit.app'` 通过，保留既有 CLT 两个链接搜索目录警告。首次沙箱构建无法写入编译缓存，授权使用正常缓存后构建成功。
+
+本轮系统为 macOS 27.2（26B123），启动前后前台 PID 都为 1245。RSS 合计：空应用 118.38 MiB，五 Space 423.84 MiB，重启后 331.50 MiB，删除后 148.91 MiB，退出后测试进程全部回收；短时采样含共享页重复计算，不能作为长期资源上限。
+
+**P0-2 尚未完成真实 OS 代理开关的独立环境验证**，#1 对应两项验收继续未勾选；没有修改用户系统代理、钥匙串或已有 Whistle。此前 GUI 实查证据保留，本次未重做手动 GUI 验收。P0 的实现及已有自动化回归均保留，不将进程内注入表述为系统级通过。
+
 ## Space 独立 Whistle 端口（2026-10-26）
 
 `Space.init` 现在接受 `http://127.0.0.1:<PORT>`（1–65535），用实际端口创建 HTTP CONNECT 配置。代理仍写在各 Space 的 WKWebsiteDataStore 上，`allowFailover = false`、网站数据隔离和证书策略保持原行为；注册表继续保存完整代理地址，恢复不引入默认端口或全局覆盖。CLI 帮助、README、开发说明和验收入口同步更新。
