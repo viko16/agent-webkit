@@ -53,6 +53,22 @@ Vite 8 的服务配置使用 `allowedHosts: ['example.com']` 和 `ws: { protocol
 
 `vite-workflow/` 保存复制后的项目、Vite 日志、HTTP/upgrade/HMR 回执来源日志、Whistle 会话、页面截图和详细报告。必须同时看到实际 HTTPS 模块/fetch 请求、WSS `101` 及本地端口/规则匹配、每版本来自两个文档的 HMR 回执，不能只凭页面脚本或截图认定代理成功。退出或失败时删除测试 Space、停止自有 Whistle/Vite；原有服务与源码不变。`--vite-only` 不与其他专项或复用代理模式混用，`--vite` 的完整验收仍可使用原有参数。
 
+## 公网真实站点回归
+
+```sh
+python3 tests/acceptance.py --real-sites-only
+python3 tests/acceptance.py --real-sites-only --real-sites-gui
+python3 tests/acceptance.py --real-sites --vite --direct-conflicts
+```
+
+默认套件不依赖这些外部站点；`--real-sites` 在完整验收前追加，`--real-sites-only` 单独运行。网络、站点布局或脚本加载发生变化时保存失败，不跳过断言，也不替换成本地页面。使用 Direct、默认系统证书校验和新建的独立 Space，不读取用户已有会话。
+
+SPA 目标是 [Vue 官方文档](https://vuejs.org/guide/introduction.html)。等待真实应用 hydration 后，用 snapshot 引用操作页面计数按钮和侧栏路由；两个独立 CLI 工作流并发切换 Introduction、Reactivity Fundamentals、Computed Properties，核对 URL、标题和文档标记。标记仅用于观察文档是否重载，不改 DOM、应用状态或路由；`performance.timeOrigin` 仅作诊断，因为本机同文档读数曾有 1 ms 浮动。随后再次交互、验证缺失元素等待超时，并分别后台截图。CLI 始终显式绑定 Space/Tab，第二个 Tab 不改变默认目标。
+
+GUI 模式复制一个独立 Bundle ID 的测试应用，打印原生操作检查点；操作者实际完成界面选择或关窗后，输入 `confirmed` 继续。它会激活测试窗口，检查点明确标记 `requiresForeground: true`，普通 CLI 操作仍检查前台 PID 不变。选中 A 的非默认 Tab 后操作默认 Tab，随后切换到 B；程序用 `status.observer` 断言观察目标未被 CLI 切走，并在关窗后继续并发操作、截图，确认窗口保持隐藏。GUI 工具若查询隐藏应用可能重新激活窗口，关窗后应直接读取 CLI 状态。拒绝检查点或状态不符均失败，不能仅凭输入确认认定通过。没有 GUI 实查的普通运行返回 `guiVerified: false`。
+
+`status.observer` 是只读宿主快照：`visible` 为原生观察窗口可见性，`spaceId`、`tabId` 为 GUI 正在观察的目标（空选择为 null）。它不执行网页脚本、不激活窗口、不改变 CLI 默认目标，也不持久化新状态。测试报告、逐条命令、GUI 检查点和截图写入该次输出目录；退出时删除自有测试 Space 并停止测试 daemon。
+
 ## Console 与网络诊断
 
 ```sh

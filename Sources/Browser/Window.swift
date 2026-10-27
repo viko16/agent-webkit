@@ -126,6 +126,12 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         toolbar.delegate = self; toolbar.displayMode = .iconOnly; toolbar.allowsUserCustomization = false
         window.toolbar = toolbar
         model.changed = { [weak self] in self?.refresh() }
+        model.observerState = { [weak self] in
+            guard let self else { return [:] }
+            return ["visible": self.window.isVisible,
+                    "spaceId": self.selectedSpace?.uuidString as Any? ?? NSNull(),
+                    "tabId": self.displayed?.id.uuidString as Any? ?? NSNull()]
+        }
         model.willRemove = { [weak self] space in
             guard let self else { return }
             if space.tabs.contains(where: { $0 === self.displayed }) { self.displayed?.park(); self.displayed = nil }

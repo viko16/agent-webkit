@@ -509,6 +509,7 @@ final class BrowserModel {
     var records: [SpaceRecord] = []
     var changed: (() -> Void)?
     var willRemove: ((Space) -> Void)?
+    var observerState: (() -> [String: Any])?
     private let file: URL
     var storagePath: String { file.deletingLastPathComponent().path }
     private var lockFD: Int32 = -1
@@ -672,6 +673,7 @@ final class BrowserModel {
         if command == "status" {
             return ["version": productVersion, "pid": ProcessInfo.processInfo.processIdentifier, "spaces": spaces.count,
                     "ready": !restoring,
+                    "observer": observerState?() ?? [:],
                     "pendingStoreCleanup": records.filter(\.deleting).count,
                     "blockedSpaces": spaces.filter { $0.networkError != nil }.map { $0.record.id.uuidString },
                     "systemProxy": systemProxyState(), "frontmostPid": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1,

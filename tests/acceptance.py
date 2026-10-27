@@ -17,6 +17,7 @@ from direct_conflict_cases import prepare_proxy_settings, verify_direct_conflict
 from popup_cases import verify_popups
 from independent_proxy_cases import verify_proxy_arguments, verify_independent_proxies
 from vite_cases import verify_vite_workflow
+from real_site_cases import verify_real_spa, prepare_site_gui
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -44,6 +45,9 @@ def main():
     parser.add_argument('--direct-conflicts', action='store_true', help='Add process-local CFNetwork conflict/recovery cases without modifying OS proxies')
     parser.add_argument('--vite', action='store_true', help='Add real Vite + isolated Whistle WSS/HMR workflow (requires tests/forms dependencies)')
     parser.add_argument('--vite-only', action='store_true', help='Run only the real Vite + Whistle workflow')
+    parser.add_argument('--real-sites', action='store_true', help='Add opt-in public-site regressions (requires Internet access)')
+    parser.add_argument('--real-sites-only', action='store_true', help='Run only the public-site regressions')
+    parser.add_argument('--real-sites-gui', action='store_true', help='With --real-sites-only, pause for native GUI observation/switch/close checkpoints')
     args = parser.parse_args()
     if args.independent_proxies_only and args.whistle_existing:
         parser.error('--independent-proxies-only requires test-owned Whistles')
@@ -51,11 +55,20 @@ def main():
         parser.error('--vite-only cannot be combined with --independent-proxies-only, --whistle-existing or --direct-conflicts')
     if args.vite and args.independent_proxies_only:
         parser.error('--vite and --independent-proxies-only are mutually exclusive')
+    if (args.real_sites or args.real_sites_only) and (args.vite_only or args.independent_proxies_only):
+        parser.error('public-site regressions cannot be combined with another only mode')
+    if args.real_sites_only and (args.direct_conflicts or args.whistle_existing or args.vite):
+        parser.error('--real-sites-only cannot be combined with --direct-conflicts, --whistle-existing or --vite')
+    if args.real_sites_gui and not args.real_sites_only:
+        parser.error('--real-sites-gui requires --real-sites-only')
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
     state = Path(tempfile.mkdtemp(prefix='awk-'))
     binary = ROOT / '.build/debug/browser'
     app_binary = ROOT / '.build/Agent WebKit.app/Contents/MacOS/browser'
+    site_observer = None
+    if args.real_sites_gui:
+        app_binary, site_observer = prepare_site_gui(out, ROOT / '.build/Agent WebKit.app')
     env = dict(os.environ, BROWSER_DATA_DIR=str(state), BROWSER_SOCKET=str(state / 'browser.sock'))
     daemon_env = env.copy()
     if args.direct_conflicts:
@@ -135,6 +148,11 @@ def main():
         (out / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2))
 
     try:
+        if args.real_sites_only:
+            start()
+            report['tests']['realSPA'] = verify_real_spa(cli, out, site_observer)
+            report['passed'] = True
+            return 0
         if args.vite_only:
             start()
             report['tests']['viteWorkflow'] = verify_vite_workflow(out, cli, lambda: (stop(), start()))
@@ -145,6 +163,8 @@ def main():
         report['whistleRules'] = whistle.rules
         start()
         report['tests']['proxyArguments'] = verify_proxy_arguments(cli)
+        if args.real_sites:
+            report['tests']['realSPA'] = verify_real_spa(cli, out)
         if args.vite:
             report['tests']['viteWorkflow'] = verify_vite_workflow(out, cli, lambda: (stop(), start()))
         if args.independent_proxies_only:

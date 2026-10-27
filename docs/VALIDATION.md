@@ -1,5 +1,19 @@
 # 实际验收记录
 
+## Issue #2 阶段 0：真实 SPA 与观察窗口（2026-10-28）
+
+使用真实公网 [Vue 官方文档](https://vuejs.org/guide/introduction.html)，Direct + 系统证书校验，不通过本地映射或替换 HTML。新增 `acceptance.py --real-sites-only` 专项和 `--real-sites` 完整套件扩展，现有验收入口与断言保留。宿主仅新增只读 `status.observer`，返回窗口可见性、GUI Space/Tab ID；未引入 GUI 控制接口或全局 Agent 活动目标。
+
+`python3 tests/acceptance.py --real-sites-only --real-sites-gui --out .artifacts/issue2-spa-observer-20261028` [实际通过](../.artifacts/issue2-spa-observer-20261028/spa-report.json)。两个 Space 的计数分别达到 1/2，随后各自完成 Introduction → Reactivity/Computed → Computed/Reactivity → Introduction 的客户端路由，文档 UUID 各自保持不变；回到首页后再次点击达到 1。URL、可见标题、缺失元素的有界超时、固定默认 Tab、后台 PNG 和各阶段前台 PID 均核对通过。
+
+通过原生 GUI 工具实际选择 A 的非默认 Reactivity Tab，再对两个默认 Tab 操作，GUI 未切走；切换到 B 后并发路由，仍观察 B。原生关窗后读取宿主确认 `visible: false`，随后继续双 Space 路由、点击和截图；结束时仍为 false，Space/Tab ID 不变。六次宿主观察状态在报告中保留，[检查点](../.artifacts/issue2-spa-observer-20261028/gui-checkpoints.jsonl)与[逐条命令](../.artifacts/issue2-spa-observer-20261028/commands.jsonl)可交叉核对。GUI 操作明确要求前台，未把手动切换前后的前台变化误当成 CLI 抢焦点；普通运行不会据此自动声明 GUI 通过。
+
+首次纯 CLI [运行通过](../.artifacts/issue2-spa-probe-20261028/report.json)，随后 [GUI 首轮失败](../.artifacts/issue2-spa-gui-20261028/report.json)：同一 bridge 引用后缀保持不变时，`performance.timeOrigin` 读数变化 1 ms，精确相等断言不适合作文档身份。改用不触碰业务状态的 UUID 标记，时间读数仍保留。另一轮在关窗状态不明确时主动拒绝检查点，[保持失败](../.artifacts/issue2-spa-gui-final-20261028/report.json)；补充宿主真实可见性后完成最终回归。检查过程中，GUI 工具在关窗后的 AX 查询会重新激活观察窗口；最终用原生关窗动作加 CLI 的 `visible` 前后断言验证，没有绕过这一差异。
+
+`python3 tests/reliability.py --forms` [通过](../.artifacts/reliability-20261028-001317/report.json)，原有 bridge、弹窗、frame/shadow、wait、诊断、六次框架提交、恢复/清理及 16 项计时全部保留。前一次 `.artifacts/reliability-20261028-001203/` 在既有前台断言处停止：前台从 6540 变为 1241，均不是测试 daemon（当时 PID 8019/8280）；保留失败命令记录与断言，未把那次运行记为通过。
+
+Debug 构建、应用签名、Python 语法与 diff 检查通过；构建仍有既有 CLT 链接目录警告。登录/弹窗公网测试站、第三方 OAuth、重启后的真实站点会话、真实 OS 代理开关和长期资源测试不由这项 SPA 回归宣称完成。
+
 ## Issue #2 阶段 0 / #1 P1：Vite + 真实 Whistle HMR（2026-10-27）
 
 完成 `acceptance.py --vite-only` 专项及 `--vite` 完整套件扩展。运行时仍为原有 Swift/AppKit/WKWebView + CLI/Unix Socket，本次只增加测试和文档；复用已安装、锁定的 Vite 8.3.5，不向应用增加依赖。测试修改输出目录里的项目副本，仓库源文件和用户项目不参与热更新。
