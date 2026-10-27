@@ -1,5 +1,17 @@
 # 实际验收记录
 
+## 真实站点回归发现的独立修复：仅剩 tombstone 时的恢复（2026-10-28）
+
+一轮主动取消的 GUI 验收正常删除了网站数据，但 WebKit 仍占用空容器，注册表保留 `deleting: true`。单独重启重试时，系统在 `com.apple.WebKit.WebsiteDataStoreIO` 队列的 `removeDataStoreWithIdentifierImpl → WTF::RunLoop::dispatch → os_unfair_lock_lock` 崩溃（SIGSEGV / 0x48）。保留[原生崩溃摘要](../.artifacts/reliability-20261028-003359/crash-evidence.json)，没有改写删除标记来隐藏问题。
+
+新增真实 WebKit 回归 `python3 tests/reliability.py --cleanup-only`：创建实际 Store、写入 LocalStorage、正常退出，再只改该轮自产注册表，模拟中断在删除标记持久化之后、实际 purge 之前。新进程只有一个待删除记录、没有存活 Space，因此没有其他 Store 提前初始化 WebKit。修复前[专项稳定复现启动崩溃](../.artifacts/reliability-20261028-003359/daemon-1.log)，和原 GUI 遗留状态相符；它不是 Mock 删除，也不宣称真实强杀或断电。
+
+修复限定在有删除标记的启动恢复：先创建临时非持久 Store，持有至恢复完成，再沿用原来的删除 API、错误与 tombstone 流程。没有使用默认 Store、私有 API、额外 WebView 或导航，也没有删除用户数据。修复后 Debug 的[同一专项通过](../.artifacts/reliability-20261028-003501/report.json)：ready 为 true、pendingStoreCleanup 为 0、注册表清空；同名重建分配新 UUID 且读取不到旧 LocalStorage。
+
+修复后的最终 Release 上，`python3 tests/reliability.py --forms` [通过](../.artifacts/reliability-20261028-003658/report.json)，包含新增 pending-only 用例，以及原有 bridge、弹窗、frame/shadow、wait、诊断、React/Vue 六次提交、死循环/Promise 恢复、删除重建和 16 项计时。Debug/Release 构建、签名、Python 语法及 diff 检查通过。此五行启动初始化修复后复跑了受影响恢复路径和整套可靠性；完整 Whistle/TLS/A/B/C/D 套件的通过记录来自修复前的最终 Release，未将其倒填为修复后重跑。
+
+[最终清理核查](../.artifacts/issue2-existing-full-20261028/cleanup-check.json)覆盖本批 16 轮站点/代理/可靠性测试，包括失败和主动取消的轮次：测试 daemon、Whistle PID 均退出，注册表均为空，Socket 无服务，记录的 Whistle/Vite 端口均释放。两个遗留删除标记分别通过修复后的正常启动恢复移除，其中 GUI 数据使用相同测试 Bundle ID 的更新副本；没有直接删除系统 WebKit 目录或手工抹掉 tombstone。没有修改用户系统代理、钥匙串或已有 Whistle。强杀 WebContent、真实断电、长期资源、旧版 macOS 实机和真实 OS 代理开关仍保持待验收。
+
 ## Issue #2 阶段 0：公网登录／弹窗站点（2026-10-28）
 
 目标为 [The Internet](https://the-internet.herokuapp.com/login) 的 `/login`、`/secure`、`/windows` 与 `/windows/new`，通过公网 Direct + 系统证书校验访问。仅使用该站公开演示账号；没有用户凭据、真实个人账号或本地 HTML 替代。新增 `--real-site-case spa|login|all`，`--real-sites` / `--real-sites-only` 默认包含两个站点；原有基础验收入口与断言保留。
@@ -19,7 +31,7 @@
 
 本轮 macOS 27.2（26B123）。完整套件 RSS 合计：空 Space 阶段 171.22 MiB，五 Space 424.08 MiB，重启后 329.83 MiB，删除后 147.77 MiB，退出后 0；这是先运行 HMR 后的短时资源样本，含共享页重复计算，不是冷启动或长期上限。Debug/Release 构建、签名、Python 语法和 diff 检查通过；Release 构建另提示迁移前路径的旧中间产物及既有 CLT 搜索目录警告，未为此清理仓库外文件。GUI 实查使用 Debug，Release 组合及完整套件没有原生 GUI 交互。
 
-资源核查另发现一轮主动取消的 GUI 测试留下删除 tombstone；仅剩删除记录时重启，该机 WebKit 在 WebsiteDataStoreIO 中崩溃。此时不能声明所有延迟清理已完成；恢复路径作为独立修复继续验证，不影响上列已实际通过的站点用例记录。
+资源核查发现的仅 tombstone 启动崩溃已作为上面的独立修复处理；上列站点验收记录保留其实际测试版本，不把后续恢复修复的结果倒填为原运行结果。
 
 ## Issue #2 阶段 0：真实 SPA 与观察窗口（2026-10-28）
 

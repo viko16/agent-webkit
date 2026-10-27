@@ -15,6 +15,7 @@ from context_cases import verify_contexts
 from wait_cases import verify_waits
 from form_cases import framework_site, verify_forms
 from diagnostic_cases import verify_diagnostics
+from store_cleanup_cases import verify_pending_store_only
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -23,7 +24,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--forms', action='store_true', help='Run real React/Vue fixtures (npm ci --prefix tests/forms)')
     parser.add_argument('--diagnostics-only', action='store_true', help='Run only the diagnostic regression cases')
+    parser.add_argument('--cleanup-only', action='store_true', help='Run only pending-store restoration with no live Spaces')
     args = parser.parse_args()
+    if args.cleanup_only and (args.forms or args.diagnostics_only):
+        parser.error('--cleanup-only cannot be combined with --forms or --diagnostics-only')
     out = ROOT / '.artifacts' / time.strftime('reliability-%Y%m%d-%H%M%S')
     out.mkdir(parents=True)
     state = Path(tempfile.mkdtemp(prefix='awr-'))
@@ -78,6 +82,12 @@ def main():
         start()
         if args.diagnostics_only:
             checks.append(verify_diagnostics(cli, base, out, lambda: (stop(), start())))
+            report = dict(ok=True, checks=checks, artifacts=str(out))
+            (out / 'report.json').write_text(json.dumps(report, indent=2))
+            print(json.dumps(report))
+            return
+        checks.append(verify_pending_store_only(cli, start, stop, state, base))
+        if args.cleanup_only:
             report = dict(ok=True, checks=checks, artifacts=str(out))
             (out / 'report.json').write_text(json.dumps(report, indent=2))
             print(json.dumps(report))

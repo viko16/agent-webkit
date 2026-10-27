@@ -528,6 +528,11 @@ final class BrowserModel {
     }
 
     func restore() async throws {
+        // Static removal can crash in WebKit's WebsiteDataStoreIO run loop when
+        // no store has initialized WebKit yet (e.g. only tombstones remain).
+        // Use an ephemeral store; never open the user's default website store.
+        let cleanupBootstrap = records.contains(where: \.deleting) ? WKWebsiteDataStore.nonPersistent() : nil
+        defer { withExtendedLifetime(cleanupBootstrap) {} }
         for record in records.filter(\.deleting) {
             if try await removeStore(record.id) {
                 records.removeAll { $0.id == record.id }; try persist()
