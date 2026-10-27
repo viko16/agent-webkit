@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -48,6 +49,56 @@ def verify_cleanup(state):
             raise AssertionError('Test daemon still accepts connections')
 
 
+def cleanup_test_services(cli, daemon, site):
+    errors = []
+    try:
+        if daemon is not None and daemon.poll() is None:
+            try:
+                spaces = cli('space', 'list')
+            except Exception as error:
+                errors.append(error)
+                spaces = []
+            for space in spaces:
+                try:
+                    cli('space', 'delete', space['id'])
+                except Exception as error:
+                    errors.append(error)
+            try:
+                cli('shutdown')
+                daemon.wait(timeout=15)
+            except Exception as error:
+                errors.append(error)
+    finally:
+        try:
+            if daemon is not None and daemon.poll() is None:
+                daemon.terminate()
+                try:
+                    daemon.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    daemon.kill()
+                    daemon.wait(timeout=10)
+        except Exception as error:
+            errors.append(error)
+        finally:
+            for close in (site.shutdown, site.server_close):
+                try:
+                    close()
+                except Exception as error:
+                    errors.append(error)
+    return errors
+
+
+def finish_test_services(cli, daemon, site, out):
+    # Keep the test failure primary; cleanup errors must still prevent a success report.
+    failed = sys.exc_info()[0] is not None
+    errors = cleanup_test_services(cli, daemon, site)
+    if errors:
+        (out / 'cleanup-errors.json').write_text(json.dumps([
+            dict(type=type(error).__name__, message=str(error)) for error in errors], indent=2))
+        if not failed:
+            raise RuntimeError(f'Test cleanup failed; see {out / "cleanup-errors.json"}') from errors[0]
+
+
 def main():
     out = ROOT / '.artifacts' / time.strftime('skill-codex-%Y%m%d-%H%M%S')
     out.mkdir(parents=True)
@@ -67,8 +118,9 @@ def main():
         return response['result']
 
     with (out / 'daemon.log').open('w') as log:
-        daemon = subprocess.Popen([str(app), 'daemon'], env=env, stdout=log, stderr=log)
+        daemon = None
         try:
+            daemon = subprocess.Popen([str(app), 'daemon'], env=env, stdout=log, stderr=log)
             for _ in range(100):
                 assert daemon.poll() is None, 'Test daemon exited'
                 if (state / 'browser.sock').exists() and cli('status')['ready']:
@@ -114,12 +166,7 @@ CLI 为 {binary}，每条调用显式传 --socket {state / 'browser.sock'}；不
                           peerUnchanged=True, observerUnchanged=True, foregroundUnchanged=True,
                           artifacts=str(out))
         finally:
-            if daemon.poll() is None:
-                for space in cli('space', 'list'):
-                    cli('space', 'delete', space['id'])
-                cli('shutdown')
-                daemon.wait(timeout=15)
-            site.shutdown(); site.server_close()
+            finish_test_services(cli, daemon, site, out)
     verify_cleanup(state)
     report['cleanupVerified'] = True
     (out / 'report.json').write_text(json.dumps(report, indent=2))

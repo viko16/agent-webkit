@@ -1,5 +1,15 @@
 # 实际验收记录
 
+## P1 双轴审查修复：Skill 测试失败清理（2026-10-28）
+
+审查范围为 `git diff 15e6b77...8d3021b`，即 `91386dd`、`8d3021b` 两个提交，依据 Issue #2/#7、用户约束及仓库运行/验收约定。Standards 与 Spec 各报告 1 项 P2，指向同一缺陷：原 `finally` 中列举、删除 Space 或 shutdown 任一步失败，会跳过其余清理并掩盖原测试异常。未发现命令校验语义、原生页面执行、JSON/退出码或既有验收入口/断言退化；没有为启发式代码气味另做重构。
+
+修复仅涉及可选 Skill 测试：逐项尝试删除，优先正常退出 daemon，超时后有界 terminate/kill 自有进程；HTTP 关闭独立执行。启动失败也能释放已启动的 fixture。原测试异常优先，清理错误单独保存；仅清理失败也不能生成成功报告。清理失败可能留下未删数据，文档明确不以停止进程冒充数据删除。
+
+`python3 -m unittest discover -s tests -p test_skill_cleanup.py -v` 的 5 项通过，覆盖 IPC 断连、删除失败后继续处理其他 Space、shutdown 失败/超时、terminate/kill 有界回收、保留原始异常、清理失败阻止成功报告，以及启动/HTTP 关闭失败。使用标准库故障注入，不调用模型或操作用户服务。
+
+修复后 `python3 tests/skill_workflow.py` [真实通过](../.artifacts/skill-codex-20261028-012641/report.json)：旧引用失效与重新快照、非默认 Tab 保存计数 1、真实 150 ms 超时及随后观察、另一 Space/默认 Tab/GUI/前台不变、注册表为空和 Socket 无服务均通过。24 命令离线专项、原有 6 项 workflow guard、Python 语法与 diff 检查通过。原生源码未改，本轮未重复运行完整可靠性/Whistle/HMR/TLS 或公网/原生 GUI，保留此前实际通过证据的版本归属。Pi 仍未实测，#7 整项不勾选。
+
 ## P1 / #7：仓库 Skill 与真实 Codex 调用（2026-10-28）
 
 新增 `skills/agent-webkit/SKILL.md`，对应 CLI 0.2.0 / 契约 v1，直接调用现有 CLI。覆盖 daemon 连接、Space/Tab 归属、snapshot→action→wait/业务验证、旧引用、超时不重放、弹窗、文件/对话框限制、人工接管、代理与共享服务清理。README/DEVELOPMENT 提供显式安装或单次路径调用说明；没有写入用户技能目录或 Agent 配置，没有新增应用依赖。

@@ -42,6 +42,8 @@ python3 tests/skill_workflow.py
 
 这是可选的真实 Codex CLI 集成测试，需要已有 Codex 登录和正常模型访问，可能消耗账户额度。它使用临时工作目录、独立注册表/Socket、Direct 本地 fixture、两个 Space 与非默认目标 Tab，通过 `codex --no-daemon ... exec --ephemeral` 显式读取仓库 Skill。仅对这次进程开启 sandbox 的网络访问以连接本机服务，不写配置文件；不安装 Skill、Pi 或修改系统代理。场景要求处理已失效按钮引用、保存一次、等待永不出现的确认标记，宿主独立核对保存计数/值、另一 Space、固定默认 Tab、GUI 与前台。逐条 Agent 事件、最终回答、宿主命令和报告保存在 `.artifacts/skill-codex-*/`，退出删除自有 Space 并停止测试服务。
 
+失败清理逐项尝试删除自有 Space，IPC 或删除错误不会跳过后续清理；daemon 优先正常退出，有界等待失败后仅终止自己的进程，HTTP 服务始终独立关闭。清理错误保存为 `cleanup-errors.json`，原测试异常继续上抛；若只有清理失败，整轮仍失败，不生成成功报告。此时数据删除可能未完成，不能把停止进程当作删除 Space。`python3 -m unittest discover -s tests -p test_skill_cleanup.py -v` 注入断连、删除/退出失败、有界终止及 HTTP 关闭错误，不调用模型或操作已有服务。
+
 显式路径调用不等于安装后的自动发现验证；Pi 不可用时不跳过后记作通过，继续在 Issue #7 保留其实际调用待办。普通可靠性、代理与公网回归不依赖 Codex 或 Pi。
 
 ## 操作结果等待
