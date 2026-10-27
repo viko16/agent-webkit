@@ -16,6 +16,14 @@ from whistle_fixture import WhistleFixture
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def verify_hmr_acknowledgements(acknowledgements, expected_documents):
+    for revision, document_ids in expected_documents.items():
+        matches = [event for event in acknowledgements if event['revision'] == revision]
+        expected_ids = set(document_ids)
+        assert (len(expected_ids) == 2 and len(matches) == 2
+                and {event.get('documentId') for event in matches} == expected_ids), (revision, document_ids, matches)
+
+
 @contextmanager
 def vite_site(out):
     assert (ROOT / 'tests/forms/node_modules/vite').is_dir(), 'Run npm ci --prefix tests/forms first'
@@ -147,11 +155,13 @@ def verify_vite_workflow(out, cli, restart):
                 command('vite-a', 'screenshot', '--out', str(directory / 'after-hmr.png'))
                 time.sleep(2)  # Allow WebKit to flush the persistent test Cookie.
                 restart()
+                restored_documents = []
                 for name in names:
                     info = cli('space', 'info', name)
                     for key in ('id', 'dataStoreId', 'defaultTabId', 'proxy', 'tls'):
                         assert info[key] == created[name][key], (key, info)
                     ready(name, final_revision)
+                    restored_documents.append(js(name, 'window.workflowState.documentId'))
                     assert js(name, '({cookie:document.cookie,local:localStorage.getItem("vite")})') == {
                         'cookie': f'vite={name}', 'local': name}
                 # Verify the restored pages reconnect to WSS and still apply a real hot update.
@@ -173,8 +183,10 @@ def verify_vite_workflow(out, cli, restart):
                 assert websocket and all(str(s['res']['statusCode']) == '101' for s in websocket), websocket
                 assert any(e['kind'] == 'upgrade' for e in received)
                 acknowledgements = [e for e in received if e['kind'] == 'hmr-applied']
-                for expected_revision in [f'update-{i}-{nonce}' for i in range(1, 4)] + [revision]:
-                    assert len([e for e in acknowledgements if e['revision'] == expected_revision]) == 2, acknowledgements
+                expected_documents = {states[names[0]]['revision']: [states[name]['documentId'] for name in names]
+                                      for states in report['rounds']}
+                expected_documents[revision] = restored_documents
+                verify_hmr_acknowledgements(acknowledgements, expected_documents)
                 for session in http + websocket:
                     scheme = 'ws' if session in websocket else 'http'
                     assert session.get('realUrl', '').startswith(f'{scheme}://127.0.0.1:{port}/'), session
@@ -182,6 +194,7 @@ def verify_vite_workflow(out, cli, restart):
                     assert session['rules']['rule']['matcher'] == f'http://127.0.0.1:{port}', session
                 report.update(websocketSessionIds=[s['id'] for s in websocket],
                     httpSessionIds=[s['id'] for s in http], hmrAcknowledgements=acknowledgements,
+                    hmrExpectedDocumentIds=expected_documents,
                     foregroundPid=focus, restored=True, syntheticInput=True,
                     explicitTabIsolation=True, waitTimeoutDidNotReplay=True)
             finally:

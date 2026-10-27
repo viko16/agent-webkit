@@ -1,5 +1,11 @@
 # 实际验收记录
 
+## 审查修复：HMR 回执文档归属（2026-10-28）
+
+修复原先仅按版本统计“两条回执”的守卫：现在逐版本同时检查数量和两个实际页面的 `documentId` 集合；重启后在修改版本文件前重新采集 ID，报告保留 `hmrExpectedDocumentIds`。原有页面状态、Whistle 路由/WSS、Direct 对照、隔离、超时、引用失效与恢复断言保留，未修改原生代码或增加应用依赖。
+
+`python3 -m unittest discover -s tests -p test_workflow_guards.py -v` 的 2 项针对性测试通过，包括正常双文档/重启及 6 类负例：重复、缺失、其他文档、重启前 ID、额外回执、缺少有效 ID。`python3 tests/acceptance.py --vite-only --out .artifacts/review-hmr-documents-20261028` [真实专项通过](../.artifacts/review-hmr-documents-20261028/vite-workflow/report.json)：三次热更新与重启后更新的四组实际 ID 均匹配。另核对重启前后 ID 不重合、注册表为空、Socket 与测试 Vite/Whistle 端口释放，[复核记录](../.artifacts/review-hmr-documents-20261028/evidence-check.json)通过。Python 检查及 diff 检查通过；本次只修改测试守卫，未重跑完整代理或原生 GUI 套件。
+
 ## 真实站点回归发现的独立修复：仅剩 tombstone 时的恢复（2026-10-28）
 
 一轮主动取消的 GUI 验收正常删除了网站数据，但 WebKit 仍占用空容器，注册表保留 `deleting: true`。单独重启重试时，系统在 `com.apple.WebKit.WebsiteDataStoreIO` 队列的 `removeDataStoreWithIdentifierImpl → WTF::RunLoop::dispatch → os_unfair_lock_lock` 崩溃（SIGSEGV / 0x48）。保留[原生崩溃摘要](../.artifacts/reliability-20261028-003359/crash-evidence.json)，没有改写删除标记来隐藏问题。

@@ -53,6 +53,8 @@ Vite 8 的服务配置使用 `allowedHosts: ['example.com']` 和 `ws: { protocol
 
 `vite-workflow/` 保存复制后的项目、Vite 日志、HTTP/upgrade/HMR 回执来源日志、Whistle 会话、页面截图和详细报告。必须同时看到实际 HTTPS 模块/fetch 请求、WSS `101` 及本地端口/规则匹配、每版本来自两个文档的 HMR 回执，不能只凭页面脚本或截图认定代理成功。退出或失败时删除测试 Space、停止自有 Whistle/Vite；原有服务与源码不变。`--vite-only` 不与其他专项或复用代理模式混用，`--vite` 的完整验收仍可使用原有参数。
 
+每版本必须恰有两条回执，且 `documentId` 集合与该阶段两个页面实际采集的 ID 一致；重启后在发布新版本前重新采集，不能复用重启前 ID。报告的 `hmrExpectedDocumentIds` 保存对应关系。`python3 -m unittest discover -s tests -p test_workflow_guards.py -v` 可独立验证重复、缺失、错误及重启前文档 ID 的拒绝，不需要启动服务。
+
 ## 公网真实站点回归
 
 ```sh
