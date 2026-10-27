@@ -28,6 +28,22 @@ python3 tests/reliability.py --forms  # 含真实 CLI / IPC 对照和原有可�
 
 既有 `ok/result`、`ok/error.code/error.message`、退出码 0/1 与可选 timing 保持兼容。离线成功响应不伪造 IPC 或 WebKit 耗时。`scope` 明确固定目标、同 Space 串行、DOM 合成、快照/截图、超时恢复及代理限制；声明可用不等于真实站点兼容、代理路径或业务结果已验证。
 
+## Codex / Pi Skill
+
+`skills/agent-webkit/SKILL.md` 是对应 CLI 0.2.0 / 契约 v1 的单文件 Skill，直接调用现有 CLI；无安装脚本、MCP 或另一套浏览器客户端。参数和返回结构查当前二进制的 `capabilities` / `help`，Skill 只保留目标归属、动作与业务验证、失败恢复、弹窗/人工接管和共享服务清理约定。
+
+用户确认安装后，可将整个 `skills/agent-webkit` 目录复制或链接到 `~/.agents/skills/agent-webkit`（个人范围）或使用项目的 `.agents/skills/agent-webkit`（项目范围）。这两种位置由 [Codex 官方文档](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills)和 [Pi 官方文档](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/skills.md#add-it-to-pi)说明；同一位置可能被两个 Agent 发现。已有同名目录时先核对，不覆盖既有内容。仓库中的 `skills/` 只是发布源，构建/测试不会自动安装到发现目录或改动用户配置。
+
+Codex 可显式调用 `$agent-webkit`，Pi 使用 `/skill:agent-webkit`；也可在单次任务里提供本仓库 SKILL.md 的绝对路径，让 Agent 读取后执行，不做持久安装。先把打包应用的 `browser` 加入 PATH，或在任务里提供绝对可执行文件路径与既有 Socket；Skill 不擅自安装 CLI 或启动/停止共享 daemon。
+
+```sh
+python3 tests/skill_workflow.py
+```
+
+这是可选的真实 Codex CLI 集成测试，需要已有 Codex 登录和正常模型访问，可能消耗账户额度。它使用临时工作目录、独立注册表/Socket、Direct 本地 fixture、两个 Space 与非默认目标 Tab，通过 `codex --no-daemon ... exec --ephemeral` 显式读取仓库 Skill。仅对这次进程开启 sandbox 的网络访问以连接本机服务，不写配置文件；不安装 Skill、Pi 或修改系统代理。场景要求处理已失效按钮引用、保存一次、等待永不出现的确认标记，宿主独立核对保存计数/值、另一 Space、固定默认 Tab、GUI 与前台。逐条 Agent 事件、最终回答、宿主命令和报告保存在 `.artifacts/skill-codex-*/`，退出删除自有 Space 并停止测试服务。
+
+显式路径调用不等于安装后的自动发现验证；Pi 不可用时不跳过后记作通过，继续在 Issue #7 保留其实际调用待办。普通可靠性、代理与公网回归不依赖 Codex 或 Pi。
+
 ## 操作结果等待
 
 `wait` 的 `--url`、`--text`、`--state` 互斥，CLI 和原始 IPC 均校验。URL 精确匹配 `location.href`，包括 SPA history/hash；它不保证文档已加载，也不代表服务器完成业务。文本为可见目标的 `innerText` 子串，不带选择器时只查主 frame 的 body。元素状态沿用唯一选择器、`>>>` 和引用作用域：hidden 包含节点不存在，attached/detached 只判断是否存在；enabled/disabled 要求元素可见，并检查原生禁用及 `aria-disabled`，readOnly 不算 disabled。过期引用始终报 `stale_ref`，要等节点被删除应使用选择器。

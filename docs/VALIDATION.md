@@ -1,5 +1,17 @@
 # 实际验收记录
 
+## P1 / #7：仓库 Skill 与真实 Codex 调用（2026-10-28）
+
+新增 `skills/agent-webkit/SKILL.md`，对应 CLI 0.2.0 / 契约 v1，直接调用现有 CLI。覆盖 daemon 连接、Space/Tab 归属、snapshot→action→wait/业务验证、旧引用、超时不重放、弹窗、文件/对话框限制、人工接管、代理与共享服务清理。README/DEVELOPMENT 提供显式安装或单次路径调用说明；没有写入用户技能目录或 Agent 配置，没有新增应用依赖。
+
+`python3 tests/skill_workflow.py` 最终[真实通过](../.artifacts/skill-codex-20261028-011833/report.json)：已登录 Codex CLI 在临时工作目录通过显式路径读取 Skill，操作独立 Direct fixture 的非默认 Tab。真实 `stale_ref` 后重新 snapshot，填写并保存一次；等待不存在标记 150 ms 返回真实 `timeout`，随后观察页面而未重复保存。宿主独立核对 `saves: 1`、结果 `P1-skill`、另一 Space 未变、固定默认 Tab/GUI/前台不变；退出后的注册表为空，测试 Socket 不再接受连接。报告生成在清理核查之后，原始 Agent 事件与宿主命令均保留。
+
+首轮[真实调用](../.artifacts/skill-codex-20261028-011412/report.json)完成业务场景，但 Agent 起初把 `--version` 与 Socket 选项混用、把 `space info` 的位置参数写成选项，均返回 `invalid_arguments`，读契约后自行纠正。据此只明确 Skill 的 `version --socket PATH` 和 `space info NAME_OR_ID` 写法。第二轮功能及错误恢复通过，随后新增的清理断言误把残留 Socket 路径当作仍有服务，整轮[保持失败记录](../.artifacts/skill-codex-20261028-011628/agent-events.jsonl)，未生成成功报告；核查确认注册表为空且连接被拒绝。测试改为检查真实连接，最终完整专项通过，没有修改原生退出或 Socket 行为。
+
+Skill 格式校验通过；本机 Python 缺少 PyYAML，使用 `uv run --no-project --with pyyaml` 的隔离环境运行 skill-creator 验证器，未加入产品依赖。Python 语法与 diff 检查通过。本项只新增文档/Skill/可选集成测试，原生代码与已有验收入口保持上一提交版本；完整可靠性和 Whistle/HMR/TLS 结果见下节，不重复计作本次执行。
+
+本机没有 Pi，未安装或代替它运行，因此 Issue #7 的 Pi 实际调用仍待验证。Codex 此次只验证显式路径调用，不宣称安装后自动发现、所有任务的 Skill 路由或第三方 OAuth 兼容性；#7 整项继续保持未完成。
+
 ## P1 / #7：离线帮助与 CLI 契约（2026-10-28）
 
 新增 `help COMMAND [SUBCOMMAND]` 和 `capabilities`，CLI 离线可用，原始 Socket 返回相同内容。24 个命令的参数范围/允许选项共用既有校验定义，另列必需项、单位、组合约束、错误码、结果外层 schema、可用范围与能力限制；没有更改页面执行、响应字段或退出码，也没有引入依赖或新的客户端。

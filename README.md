@@ -29,6 +29,8 @@ browser daemon
 
 `browser help open`、`browser help space create` 可查看单项命令，`browser capabilities` 返回机器可读契约；这些查询无需启动应用。契约格式见[开发说明](docs/DEVELOPMENT.md#离线帮助与机器可读契约)。
 
+Codex/Pi 可使用仓库内的 [agent-webkit Skill](skills/agent-webkit/SKILL.md)，按 Space/Tab 执行快照、动作、等待和验证，并处理超时与人工接管。需[自行选择安装](docs/DEVELOPMENT.md#codex--pi-skill)，构建不会改动 Agent 配置。
+
 ```sh
 browser space create admin --proxy http://127.0.0.1:8899
 browser space create user --proxy direct
