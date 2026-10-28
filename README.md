@@ -86,6 +86,8 @@ WebKit 操作默认超时为 15000 ms，可用 `--timeout 1–60000` 调整。`e
 
 ## 手动浏览与 Agent 接管
 
+排障时可对指定 Tab 使用 `browser diagnostics --space NAME --tab ID --inspectable on`，允许从 Safari 手动检查页面；用 `off` 关闭。应用不会自动打开 Inspector，步骤见[开发说明](docs/DEVELOPMENT.md#safari-手动-inspector)。
+
 点击工具栏右侧的 **＋** 新建标签页，在地址栏输入网址并按回车。新标签页沿用当前 Space 的登录状态和网络设置；第一次使用时会自动创建直连的 `personal` Space。省略协议的网址会使用 HTTPS，本地 HTTP 页面需输入 `http://`。
 
 你可以先打开网页、登录或填写内容，再点击工具栏的分享按钮，复制接管命令并交给 Agent。命令明确指定当前 Space 和 Tab ID，Agent 会读取同一个页面并继续操作，保留登录状态和页面内容。

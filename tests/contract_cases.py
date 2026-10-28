@@ -30,6 +30,8 @@ def verify_offline(cli):
     assert all(option['ipcType'] == 'string' for command in commands.values() for option in command['options'])
     detail = next(option for option in commands['diagnostics']['options'] if option['name'] == 'detail')
     assert detail['enum'] == ['on', 'off'] and not detail['required']
+    inspectable = next(option for option in commands['diagnostics']['options'] if option['name'] == 'inspectable')
+    assert inspectable['enum'] == ['on', 'off'] and not inspectable['required']
     assert set(contract['exitCodes']) == {'0', '1'}
     assert {'stale_ref', 'timeout', 'space_busy', 'tab_not_found', 'operation_failed'} <= set(contract['errors'])
     for args in [('help', 'missing'), ('help', 'space', 'missing'), ('help', 'open', 'extra'),
@@ -54,6 +56,8 @@ def verify_live_contract(cli, socket_path):
     assert raw('help', ['missing'])['error']['code'] == 'invalid_arguments'
     assert raw('capabilities', options={'tab': 'wrong'})['error']['code'] == 'invalid_arguments'
     assert raw('wait', options={'space': 'work', 'url': 'x', 'text': 'y'})['error']['code'] == 'invalid_arguments'
+    assert raw('diagnostics', options={'space': 'work', 'inspectable': 'yes'})['error']['code'] == 'invalid_arguments'
+    assert raw('diagnostics', options={'space': 'work', 'detail': 'on', 'inspectable': 'on'})['error']['code'] == 'invalid_arguments'
     definitions = contract['schemas']['$defs']
     # Validate schemas against actual host results, rather than only self-consistent metadata.
     for name, result in [('status', before), ('space', cli('space', 'info', 'work')),

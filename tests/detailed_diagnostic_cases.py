@@ -35,6 +35,13 @@ def verify_detailed_diagnostics(cli, base, out, restart, verify_expiry=False):
         command('state', '--detail', 'on', error='invalid_arguments')
         command('open', url)
         cli('open', url, '--space', peer)
+        assert not logs()['inspectable']
+        command('diagnostics', '--inspectable', 'yes', error='invalid_arguments')
+        command('state', '--inspectable', 'on', error='invalid_arguments')
+        command('diagnostics', '--inspectable', 'on', '--detail', 'on', error='invalid_arguments')
+        assert logs('--inspectable', 'on')['inspectable']
+        assert not logs()['detail']['enabled']
+        assert not cli('diagnostics', '--space', peer)['value']['inspectable']
         assert not logs()['detail']['enabled']
         command('evaluate', 'console.error("diagnostic-secret"); true')
         until(lambda v: any(e['kind'] == 'console' for e in v['events']))
@@ -80,6 +87,7 @@ def verify_detailed_diagnostics(cli, base, out, restart, verify_expiry=False):
         command('evaluate', 'Boolean(window.open("about:blank"))')
         child = next(tab['tabId'] for tab in command('tab', 'list') if tab['tabId'] != work['defaultTabId'])
         assert not logs('--tab', child)['detail']['enabled']
+        assert not logs('--tab', child)['inspectable']
         command('evaluate', 'console.warn("diagnostic-secret"); true', '--tab', child)
         until(lambda v: any(e['kind'] == 'console' for e in v['events']), '--tab', child)
         assert not any('detail' in e for e in logs('--tab', child)['events'])
@@ -99,22 +107,33 @@ def verify_detailed_diagnostics(cli, base, out, restart, verify_expiry=False):
                     break
                 time.sleep(.01)
             command('diagnostics', '--detail', 'on', error='space_busy')
+            assert not logs('--inspectable', 'off')['inspectable']
             assert not logs('--detail', 'off')['detail']['enabled']
             assert future.result()['value'] is True
         logs('--detail', 'on')
         command('evaluate', 'while(true){}', '--timeout', '100', error='timeout')
         hung = logs()
         assert any(e['kind'] == 'operation-timeout' and e.get('detail', {}).get('message') for e in hung['events'])
+        assert logs('--inspectable', 'on')['inspectable']
         assert not logs('--detail', 'off')['detail']['enabled']
         command('reload', '--timeout', '5000')
+        assert not logs()['inspectable']
         assert not logs()['detail']['enabled']
         logs('--detail', 'on')
+        assert logs('--inspectable', 'on')['inspectable']
         command('open', url)
+        assert logs()['inspectable']
         assert not logs()['detail']['enabled'] and not any('detail' in e for e in logs()['events'])
         logs('--detail', 'on')
+        assert logs('--inspectable', 'on')['inspectable']
         restart()
         command('wait')
         assert not logs()['detail']['enabled']
+        assert not logs()['inspectable']
+        command('evaluate', 'delete window.__agentWebKitDiagnosticMode; true')
+        command('diagnostics', '--detail', 'on', error='diagnostics_unavailable')
+        assert not logs()['detail']['enabled']
+        command('reload')
         if verify_expiry:
             enabled = logs('--detail', 'on', '--clear')
             command('evaluate', 'console.warn("expiry marker"); true')
@@ -128,7 +147,8 @@ def verify_detailed_diagnostics(cli, base, out, restart, verify_expiry=False):
         assert cli('status')['frontmostPid'] == focus
         return dict(detailedDiagnostics=True, expiryVerified=verify_expiry, requests=len(requests),
                     checks=['errors/stacks/resources/request IDs', 'redaction and bounded lengths', 'default/Space/popup isolation',
-                            'off clears details; busy/hung off; navigation and restart reset', 'foreground unchanged'])
+                            'off clears details; busy/hung off; navigation and restart reset',
+                            'inspectable opt-in/Space/popup/busy/hung/replacement/restart; no UI activation', 'foreground unchanged'])
     finally:
         failed = sys.exc_info()[0] is not None
         errors = []

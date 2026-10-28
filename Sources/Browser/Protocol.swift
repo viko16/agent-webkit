@@ -32,7 +32,7 @@ struct Request: Codable {
         if command == "evaluate" { allowed.insert("await") }
         if command == "wait" { allowed.formUnion(["url", "text", "state"]) }
         if command == "screenshot" { allowed.insert("out") }
-        if command == "diagnostics" { allowed.formUnion(["clear", "detail"]) }
+        if command == "diagnostics" { allowed.formUnion(["clear", "detail", "inspectable"]) }
         return allowed
     }
 
@@ -43,6 +43,12 @@ struct Request: Codable {
         let allowed = Self.allowedOptions(for: command)
         if let detail = options["detail"], !["on", "off"].contains(detail) {
             throw BrowserError("invalid_arguments", "--detail 支持 on 或 off")
+        }
+        if let inspectable = options["inspectable"], !["on", "off"].contains(inspectable) {
+            throw BrowserError("invalid_arguments", "--inspectable 支持 on 或 off")
+        }
+        if options["detail"] != nil && options["inspectable"] != nil {
+            throw BrowserError("invalid_arguments", "每次只能修改详细模式或 Inspector 开关之一")
         }
         if options["wait-for-navigation"] != nil && options["wait-for-popup"] != nil {
             throw BrowserError("invalid_arguments", "--wait-for-navigation 与 --wait-for-popup 不能同时使用")
@@ -97,7 +103,7 @@ struct Options {
         var options: [String: String] = [:]
         var i = 0
         var literal = false
-        let allowed = Set(["space", "tab", "proxy", "ca-cert", "out", "timeout", "socket", "data-dir", "url", "text", "state", "detail"])
+        let allowed = Set(["space", "tab", "proxy", "ca-cert", "out", "timeout", "socket", "data-dir", "url", "text", "state", "detail", "inspectable"])
         while i < arguments.count {
             let arg = arguments[i]
             if arg == "--", !literal { literal = true; i += 1; continue }
@@ -144,7 +150,7 @@ browser tab close ID --space NAME_OR_ID
 browser tab default ID --space NAME_OR_ID
 browser reload --space NAME_OR_ID [--tab ID] [--timeout 15000]
 browser snapshot|state --space NAME_OR_ID [--tab ID]
-browser diagnostics --space NAME_OR_ID [--tab ID] [--clear] [--detail on|off]
+browser diagnostics --space NAME_OR_ID [--tab ID] [--clear] [--detail on|off | --inspectable on|off]
 browser click SELECTOR_OR_REF --space NAME_OR_ID [--tab ID] [--wait-for-navigation | --wait-for-popup] [--timeout 15000]
 browser fill SELECTOR_OR_REF VALUE --space NAME_OR_ID [--tab ID]
 browser evaluate JAVASCRIPT --space NAME_OR_ID [--tab ID] [--await] [--timeout 15000]

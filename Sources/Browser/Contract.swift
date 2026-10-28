@@ -26,7 +26,8 @@ enum CLIContract {
         "text": ["type": "string", "description": "Nonempty visible innerText substring; body when selector omitted"],
         "state": ["type": "string", "enum": ["visible", "hidden", "attached", "detached", "enabled", "disabled"]],
         "clear": ["type": "flag", "description": "Clear received in-memory diagnostics before returning the snapshot"],
-        "detail": ["type": "string", "enum": ["on", "off"], "description": "Opt-in bounded redacted details for this Tab's current document, at most 300000 ms; navigation/restart resets; off erases retained details"]
+        "detail": ["type": "string", "enum": ["on", "off"], "description": "Opt-in bounded redacted details for this Tab's current document, at most 300000 ms; navigation/restart resets; off erases retained details"],
+        "inspectable": ["type": "string", "enum": ["on", "off"], "description": "Public WKWebView.isInspectable for manual Safari investigation; off by default; no automatic Inspector launch; resets with view replacement/close/restart"]
     ]
 
     static func help(_ path: [String]) throws -> [String: Any] {
@@ -104,6 +105,7 @@ enum CLIContract {
             "constraints": [
                 "click": ["mutuallyExclusive": [["wait-for-navigation", "wait-for-popup"]]],
                 "space.create": ["mutuallyExclusive": [["ca-cert", "ignore-certificate-errors"]]],
+                "diagnostics": ["mutuallyExclusive": [["detail", "inspectable"]]],
                 "wait": ["mutuallyExclusive": [["url", "text", "state"]],
                          "urlRequiresNoSelector": true, "stateRequiresSelector": true],
                 "cli": ["literalSeparator": "--", "duplicateOptions": "rejected", "help": "browser help [COMMAND [SUBCOMMAND]]"]

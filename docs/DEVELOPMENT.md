@@ -138,6 +138,20 @@ python3 tests/reliability.py --diagnostics-only  # 含真实 5 分钟自然到�
 
 `--diagnostics-only` 同时回归原摘要及详细模式，包括实际异常/拒绝/失败资源/fetch/XHR、正文/堆栈/资源与关联 ID、脱敏、跨 Space/popup、关闭后的迟到批次、忙碌/卡死关闭、导航/重启及自然到期；普通 `--forms` 包含这些行为检查，但不重复等待 5 分钟。
 
+## Safari 手动 Inspector
+
+```sh
+browser diagnostics --space work --tab TAB_ID --inspectable on
+browser diagnostics --space work --tab TAB_ID   # value.inspectable
+browser diagnostics --space work --tab TAB_ID --inspectable off
+```
+
+直接设置公开 `WKWebView.isInspectable`，默认 false，只影响指定 Tab 的当前 WebView；另一 Space、同 Space 其他 Tab 及新 popup 不继承。不启动 Safari、打开调试窗口、激活应用、改 Safari 设置或使用私有 WebKit 方法。此开关不依赖页面 JS 或 Space 操作锁，忙碌、暂停或卡死时也能设置/读取；true 只表示宿主允许检查，不能当成 Inspector 已连接或页面正常。
+
+用户需要手动排障时，在 Safari 开启网页开发者功能，通过开发菜单选择本机应用和对应页面；这是用户主动的前台操作，详见 [Apple 的应用内容检查说明](https://developer.apple.com/documentation/safari-developer-tools/enabling-inspecting-content-in-your-apps)与 [WebKit 说明](https://webkit.org/blog/13936/enabling-the-inspection-of-web-content-in-apps/)。Inspector 可访问真实页面信息，不受本工具诊断详情的脱敏/容量规则限制；无需把它打开才能使用自动诊断。
+
+普通导航沿用同一 WebView 的开关；显式 off、关闭 Tab、异常恢复时替换 WebView 或重启会结束该开关。它与 5 分钟详细捕获互相独立，详情到期不会代替用户关闭 Inspector。每次请求只能修改 `--detail` 或 `--inspectable` 之一，避免部分配置成功后再因另一操作失败而返回错误。自动回归检查真实属性、隔离、忙碌/卡死设置及恢复/重启复位，不把属性测试表述为 Safari 菜单或 Inspector 面板已经人工实查。
+
 ## Console 与网络诊断
 
 ```sh

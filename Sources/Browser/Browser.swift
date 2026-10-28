@@ -91,6 +91,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
             configuration.userContentController.addUserScript(WKUserScript(source: DiagnosticScript.source, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         }
         webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 1000, height: 700), configuration: configuration)
+        webView.isInspectable = false
         backingWindow = NSPanel(contentRect: webView.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init()
         DiagnosticRouter.shared.logs.setObject(self.diagnostics, forKey: webView)
@@ -130,6 +131,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
 
     func close() {
         closed = true
+        webView.isInspectable = false
         diagnostics.setDetail(false)
         DiagnosticRouter.shared.logs.removeObject(forKey: webView)
         failPending(BrowserError("tab_closed", "标签页已关闭"))
@@ -748,6 +750,7 @@ final class BrowserModel {
             }
             if command == "diagnostics" {
                 // Reads and disabling remain available while busy, blocked or hung.
+                if let inspectable = r.options["inspectable"] { tab.webView.isInspectable = inspectable == "on" }
                 if r.options["detail"] == "off" {
                     tab.disableDiagnosticDetails()
                 } else if r.options["detail"] == "on" {
@@ -764,10 +767,12 @@ final class BrowserModel {
                         guard ack == generation else { throw BrowserError("diagnostics_unavailable", "当前文档没有可用诊断 hook；请检查页面或显式重新加载") }
                     } catch { tab.disableDiagnosticDetails(); throw error }
                 }
+                var value = tab.diagnostics.snapshot(clear: r.options["clear"] == "true")
+                value["inspectable"] = tab.webView.isInspectable
                 return ["spaceId": id.uuidString, "tabId": tab.id.uuidString, "busy": space.busy,
                         "networkBlocked": space.networkError != nil,
                         "networkErrorCode": space.networkError?.code as Any? ?? NSNull(),
-                        "value": tab.diagnostics.snapshot(clear: r.options["clear"] == "true")]
+                        "value": value]
             }
             return ["spaceId": id.uuidString, "space": space.record.name, "proxy": space.record.proxy,
                     "network": space.networkState, "page": tab.state, "busy": space.busy, "value": NSNull()] as [String: Any]

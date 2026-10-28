@@ -1,5 +1,17 @@
 # 实际验收记录
 
+## P1 / #4：可选 Safari Inspector 与最终回归（2026-10-28）
+
+新增 `diagnostics --inspectable on|off`，直接读写公开 `WKWebView.isInspectable`，默认 false，不持久化、不自动启动 Safari 或激活窗口。按 Tab 独立，popup 不继承；普通导航保持当前 WebView 的开关，关闭/替换或重启复位。与详细捕获独立，每次仅允许修改其中一个开关，避免部分配置生效后返回错误；CLI/IPC 校验和机器可读契约同步。
+
+最终 Debug 的 `reliability.py --forms` [完整通过](../.artifacts/reliability-20261028-091017/report.json)，新增真实属性默认值、Space/popup 隔离、忙碌关闭、卡死启用、异常恢复与重启复位、导航保持、hook 缺失时详细模式失败回滚；原有详细模式、诊断摘要、六次框架提交、16 项计时及其他可靠性断言保留。24 命令离线专项（含新选项）、CLI/IPC 对照、11 项既有守卫、Python 语法/diff 均通过。
+
+最终 Release 的 `acceptance.py --vite --direct-conflicts --out .artifacts/issue4-full-20261028` [完整通过](../.artifacts/issue4-full-20261028/report.json)：代理参数、Direct 冲突、弹窗、A/B/C/D、fetch/WSS、TLS、双代理和 Vite/Whistle HMR 均保留。Debug/Release 构建及应用签名通过，仍有既有 CLT 搜索目录警告。没有为验证改动系统代理、安装 CA 或修改已有 Whistle。公网 SPA/登录和观察窗口 GUI 沿用已有证据，没有把本次 Inspector 实查计作它们的重跑。
+
+Release 独立本地页面的 [Safari 原生面板实查通过](../.artifacts/issue4-inspector-manual-20261028/report.json)，明确 `requiresForeground: true`。经 Safari 开发菜单选择本机 Agent WebKit 页面，实际出现 Inspector 控制台；CLI 向唯一目标发出 `Inspector attached 615BC267`，原生 AX 在面板中确认该标记，CLI 同时返回匹配标题、Space/Tab ID。随后 CLI 设置 off，测试 daemon 仍在运行时面板关闭，Safari 回到原起始页；宿主观察目标未变。保留[可见记录](../.artifacts/issue4-inspector-manual-20261028/inspector-visible.txt)、[关闭记录](../.artifacts/issue4-inspector-manual-20261028/inspector-disabled.txt)、上下文和逐条命令。没有修改 Safari 设置或用户标签页；首次原生 app 查询长时间未返回，恢复原 ChatGPT/Codex 前台窗口又被界面工具禁止，这些是实查工具限制，未绕过限制或混入普通 CLI 的不抢前台结论。
+
+[清理复核](../.artifacts/issue4-full-20261028/cleanup-check.json)覆盖本批失败/成功诊断、完整验收和手动 Inspector 的注册表/Socket：网站数据记录为空、Socket 无服务。详细日志的自然到期证据来自上一独立功能提交的真实 5 分钟专项；本功能没有修改其期限逻辑，也没有重复等待。详情仍只覆盖显式启用后的当前文档，不承诺初始导航、跨源 frame/worker、完整网络追踪或任意敏感文本的绝对脱敏。
+
 ## P1 / #4：按 Tab 临时详细诊断（2026-10-28）
 
 新增 `diagnostics --detail on|off`，默认摘要、200 条容量、native/page-script 来源、原 JSON 字段与退出码保留。详情只面向指定 Tab 当前文档的新事件，含有限正文、8 行堆栈、受限资源路径、宿主导航 ID 和每次 fetch/XHR 的请求 ID；不采集 header/body、不序列化 console 对象。表单值在页面就地替换，宿主再次白名单过滤、限长及 URL/凭据/Token 脱敏；自由文本不能保证消除一切敏感信息，保持显式启用和尽力处理的边界。关闭、导航、恢复、重启会抹除详情，popup 不继承；最长 5 分钟，接收/输出前用绝对和单调期限兜底。
