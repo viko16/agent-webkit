@@ -99,6 +99,32 @@ def verify_detailed_diagnostics(cli, base, out, restart, verify_expiry=False):
         assert not any(word in json.dumps(boundary_events) for word in ('alpha', 'beta', 'gamma', 'delta')), boundary_events
         assert all('[redacted]' in json.dumps(detail) for detail in boundary_events), boundary_events
         (out / 'diagnostics-boundary-redaction.json').write_text(json.dumps(boundary_events, indent=2))
+        delayed = []
+        for phase, status in [('before-enable', 201), ('before-reenable', 202), ('current', 203)]:
+            if phase == 'before-enable':
+                logs('--detail', 'off')
+            command('evaluate', f'window.delayedDiagnosticXHR=new XMLHttpRequest(); window.delayedDiagnosticXHR.open("GET","/diagnostic-status?status={status}&token=diagnostic-secret"); true')
+            if phase != 'current':
+                logs('--detail', 'on', '--clear')
+            else:
+                logs('--clear')
+            result = command('evaluate', 'new Promise(resolve=>{const xhr=window.delayedDiagnosticXHR; xhr.onload=()=>resolve(xhr.status); xhr.send()})', '--await')['value']
+            assert result == status
+            sent = until(lambda v: any(e['kind'] == 'xhr' and e.get('status') == status for e in v['events']))
+            event = next(e for e in sent['events'] if e['kind'] == 'xhr' and e.get('status') == status)
+            assert 'detail' in event and event['detail'].get('requestId'), event
+            detail = event['detail']
+            if phase != 'current':
+                assert detail.get('resourcePathUnavailable') is True, detail
+                assert detail['resource'] == urljoin(base, '/').rstrip('/'), detail
+            else:
+                assert not detail.get('resourcePathUnavailable') and detail['resource'].endswith('/diagnostic-status'), detail
+            delayed.append(detail)
+        assert len({detail['requestId'] for detail in delayed}) == 3
+        assert delayed[0]['requestId'].split(':')[0] != delayed[1]['requestId'].split(':')[0]
+        assert delayed[1]['requestId'].split(':')[0] == delayed[2]['requestId'].split(':')[0]
+        generation = delayed[-1]['requestId'].split(':')[0]
+        (out / 'diagnostics-xhr-delayed.json').write_text(json.dumps(delayed, indent=2))
         # Popup content controllers may be shared, but detail opt-in is never inherited.
         command('evaluate', 'Boolean(window.open("about:blank"))')
         child = next(tab['tabId'] for tab in command('tab', 'list') if tab['tabId'] != work['defaultTabId'])
@@ -161,8 +187,9 @@ def verify_detailed_diagnostics(cli, base, out, restart, verify_expiry=False):
             assert not expired['detail']['enabled'] and not any('detail' in e for e in expired['events'])
             (out / 'diagnostics-expired.json').write_text(json.dumps(expired, indent=2))
         assert cli('status')['frontmostPid'] == focus
-        return dict(detailedDiagnostics=True, expiryVerified=verify_expiry, requests=len(requests),
+        return dict(detailedDiagnostics=True, expiryVerified=verify_expiry, requests=len(requests), delayedXHRs=len(delayed),
                     checks=['errors/stacks/resources/request IDs', 'redaction and bounded lengths', 'default/Space/popup isolation',
+                            'quoted message/stack truncation boundaries; XHR open-before-enable and re-enable correlation',
                             'off clears details; busy/hung off; navigation and restart reset',
                             'inspectable opt-in/Space/popup/busy/hung/replacement/restart; no UI activation', 'foreground unchanged'])
     finally:

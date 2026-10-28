@@ -137,7 +137,11 @@ final class DiagnosticLog: NSObject {
                 var detail: [String: Any] = ["navigationId": navigationID]
                 if let message = raw["message"] as? String { detail["message"] = Self.redact(message) }
                 if let frames = raw["stack"] as? [String] { detail["stack"] = frames.prefix(8).map { Self.redact($0, limit: 256) } }
-                if let resource = raw["resource"] as? String { detail["resource"] = Self.resource(resource) }
+                if let resource = raw["resource"] as? String {
+                    let unavailable = raw["resourcePathUnavailable"] as? Bool == true
+                    detail["resource"] = unavailable ? Self.origin(URL(string: String(resource.prefix(2048)))) : Self.resource(resource)
+                    if unavailable { detail["resourcePathUnavailable"] = true }
+                }
                 if let request = raw["requestId"] as? String,
                    request.range(of: "^(fetch|xhr)-[0-9]{1,10}$", options: .regularExpression) != nil {
                     detail["requestId"] = generation + ":" + request
@@ -295,7 +299,12 @@ enum DiagnosticScript {
       };
       XMLHttpRequest.prototype.send=function(...args) {
         const xhr=this, start=now(), requestOrigin=xhrOrigins.get(xhr)||'opaque';
-        const saved=xhrResources.get(xhr), extra=active()&&saved?.generation===mode.generation?{...saved,detail:{...saved.detail,requestId:'xhr-'+(++requestSequence)}}:{};
+        const saved=xhrResources.get(xhr);
+        // Capture each send under its current generation; never recover URLs opened while capture was off.
+        const extra=active()?{generation:mode.generation,detail:{
+          ...(saved?.generation===mode.generation?saved.detail:{resource:requestOrigin,resourcePathUnavailable:true}),
+          requestId:'xhr-'+(++requestSequence)
+        }}:{};
         const terminalEvents=['load','error','abort','timeout'];
         let finished=false;
         function clean() {

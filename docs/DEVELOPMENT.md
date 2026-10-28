@@ -140,6 +140,8 @@ python3 tests/reliability.py --diagnostics-only  # 含真实 5 分钟自然到�
 
 已识别的带引号凭据即使在正文/栈行长度边界被截断，也会从引号起过滤至剩余文本末尾，不退回只过滤第一个词；单、双引号均覆盖。它仍不保证识别任意无标签秘密，原有显式启用和尽力脱敏边界不变。
 
+XHR 按启用期间的每次 `send()` 分配当前代号和请求 ID，不要求 `open()` 发生在同一代号下。若在启用前或前一代号内已经 open，只保留当时已有的摘要 origin，返回 `detail.resourcePathUnavailable: true`；不补读旧 URL，也不把 origin 当成真实请求路径。同代号内 open/send 仍返回有限路径。默认模式不因此额外保留 URL。
+
 ## Safari 手动 Inspector
 
 ```sh

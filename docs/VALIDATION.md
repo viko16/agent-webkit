@@ -1,5 +1,17 @@
 # 实际验收记录
 
+## 详细诊断审查修复：XHR 延后发送关联（2026-10-28）
+
+Standards 与 Spec 两轴均确认 P2：XHR 仅在 open 时捕获代号，send 要求代号仍匹配，因此启用前 open 或两次启用之间已 open 的新请求会只有摘要、没有关联 ID。`.artifacts/reliability-20261028-112047/` 使用真实 HTTP 请求稳定复现 status 201 事件缺少 detail，而非仅凭脚本替身推测。
+
+最小修复在每次启用期间的 send 分配当前代号/请求 ID；缺少当前代号下的路径时仅使用既有摘要 origin，并标记 `resourcePathUnavailable: true`，宿主也强制只保留 origin，不回采旧 URL 或扩大默认采集。永久回归覆盖启用前 open、代号切换后的 send、同代号 open/send 三种实际请求，核对状态、唯一 ID、代号与路径降级；保存 `diagnostics-xhr-delayed.json`。旧代号关停断言继续使用当前有效代号，未放宽原验证。
+
+最终 Debug `python3 tests/reliability.py --forms` [完整通过](../.artifacts/reliability-20261028-112152/report.json)，包含三种 XHR 场景、上一修复的四个脱敏边界、原默认/详细诊断及 Inspector、bridge、frame/shadow、弹窗、wait、React/Vue 六次提交、挂起恢复/删除和 16 项计时。最终 Release 的[真实诊断窄复核通过](../.artifacts/reliability-20261028-112326/report.json)，明确记录 `delayedXHRs: 3` 和边界检查；同样使用现有 helper 的 `verify_expiry: false`，没有替换 WebKit 或页面。
+
+24 命令离线及 CLI/IPC、11 项既有守卫、Debug/Release 构建签名、语法/diff 均通过；仍有既有 CLT 搜索目录警告。[本轮清理核查](../.artifacts/review-issue4-20261028/cleanup-check.json)覆盖两次复现与修复后五轮的全部启动，注册表为空、Socket 无服务。本次没有更改期限或 Inspector 控制，未重复等待 5 分钟或运行 Safari 面板、完整 Whistle/HMR/TLS/公网 GUI；这些证据保留在原功能版本，不倒填为修复后重跑。
+
+两轴结论分别保留：Standards 1 项，最高 P2（XHR 关联），无额外 smell 重构；Spec 2 项，最高 P1（截断凭据）及 P2（XHR 关联）。两项均已最小修复并验证，未发现其他已确认的既有验收退化。
+
 ## 详细诊断审查修复：截断凭据边界（2026-10-28）
 
 对 `4313f0d...4800cdd` 的 Spec 审查发现 P1：页面先截断正文/栈行，宿主带引号凭据正则原先要求闭引号，截断后会退到无引号分支，只删除第一词。真实 WebKit 在 `.artifacts/reliability-20261028-111714/` 稳定复现：正文与栈行仍含 `[redacted] beta...`，未将这个已识别字段的错误归为任意秘密识别率限制。
