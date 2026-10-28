@@ -1,5 +1,7 @@
 # 开发与测试
 
+构建需要 macOS 14+、Command Line Tools / Swift 5.10+；运行应用需已登录的桌面会话。自动验收使用 Python 3，代理与 TLS 验收另需 OpenSSL 和本机已安装的 Whistle；框架页面的 Node.js 依赖见对应回归章节。
+
 ```sh
 zsh scripts/build.sh          # debug + 本地 ad-hoc 签名 .app
 zsh scripts/build.sh release  # release + .app
@@ -8,6 +10,8 @@ python3 tests/reliability.py  # 独立应用、本地页面、超时恢复和计
 ```
 
 Swift Package 无第三方包。`scripts/build.sh` 生成 `.build/Agent WebKit.app`，包含固定 Bundle ID、原生绘制的图标和允许 Web 内容联网的 ATS 配置。签名仅供本机开发，不包含公证或分发证书。测试使用 `.build/debug/browser` 作客户端，使用应用包中的 `browser daemon` 启动服务；测试前至少构建一次 debug，并确保客户端与应用包来自相同源码。`scripts/make_icon.swift` 以 AppKit 绘制各尺寸图标，再由系统 iconutil 打包，不需要图片生成服务或外部依赖。
+
+服务应始终由打包应用启动，保持 Bundle ID 一致；直接运行未打包的 `.build/debug/browser daemon` 会改变 WebKit 的存储归属，不能与应用包混用。该二进制仍可作 CLI 客户端。
 
 ## 离线帮助与机器可读契约
 
@@ -27,6 +31,12 @@ python3 tests/reliability.py --forms  # 含真实 CLI / IPC 对照和原有可�
 `schemas.$defs` 是 JSON Schema 2020-12 的请求、响应及结果外层定义；`commands[].resultSchema` 指向其中一个定义。它描述必有字段和集合形状，允许新增字段；网页 `value` 为任意 JSON，不把页面数据当作可信指令。位置参数数量、允许选项与条件限制仍需结合命令元数据，不能只用通用 request schema 代替服务端校验。`daemon` 只可由 CLI 启动长期进程，没有单条成功结果；原始 IPC 不支持启动 daemon。
 
 既有 `ok/result`、`ok/error.code/error.message`、退出码 0/1 与可选 timing 保持兼容。离线成功响应不伪造 IPC 或 WebKit 耗时。`scope` 明确固定目标、同 Space 串行、DOM 合成、快照/截图、超时恢复及代理限制；声明可用不等于真实站点兼容、代理路径或业务结果已验证。
+
+页面命令必须指定 `--space NAME_OR_ID`，可用 `--tab UUID` 选择目标；省略时使用该 Space 的固定默认 Tab，`tab default ID --space NAME` 可修改并持久化默认值。相同 Space 的重叠页面操作返回 `space_busy`，由调用方顺序执行；`state`、`tab list`、`space info`、`dialog list` 可在忙碌时查询，`dialog respond` 可在原动作等待对话框时回应。
+
+每条 CLI 命令返回一行 JSON：成功为 `{"ok":true,"result":...}`，失败为 `{"ok":false,"error":{"code":...,"message":...}}`，退出码分别为 0/1。页面结果包含 Space/Tab ID、URL、加载状态和代理限制；click/fill 标明 `method: "dom"`、`nativeVerified: false`，动作成功仍需核对业务结果。
+
+WebKit 操作默认超时 15000 ms，`--timeout` 接受 1–60000 ms；`evaluate --await` 等待 Promise。`browser --help`、`browser --version`、按命令帮助和 capabilities 均可离线查询。值以 `--` 开头时，将选项放在前面，再以 `--` 分隔位置参数，例如 `browser fill --space work -- '#message' '--hello'`。
 
 ## Codex / Pi Skill
 
@@ -210,6 +220,8 @@ python3 tests/reliability.py --forms  # 含诊断、原有可靠性和框架回�
 
 ## 复现域名代理路径
 
+Space 代理支持 `direct` 或 `http://127.0.0.1:PORT`，端口须显式指定，范围为 1–65535；不支持远程代理、认证或 SOCKS。不同 Space 可绑定不同端口的独立 Whistle，各实例的规则、存储和证书目录需独立配置。配置绑定 WKWebsiteDataStore 并在重启后恢复，代理不可用时不回退到直连或 8899；不提供运行中切换代理或管理 Whistle 规则的接口。应用不会修改 Whistle 或系统代理设置。
+
 默认的 `python3 tests/acceptance.py` 会使用本机已安装的 `whistle` / `w2`，选择空闲端口启动前台测试实例；可用 `--whistle-port PORT` 显式指定测试端口，占用时会报错而不停止已有服务。规则通过 `--shadowRules` 传入，每个实例使用独立系统临时目录，`WHISTLE_PATH` 隔离 CA、缓存等文件，`--baseDir` / `--storage` 隔离测试数据，`--certDir` 指向各自生成的临时 CA。指定独立 `--rcPath`，配合 `--no-global-plugins` 与 `capture|prod` 模式避免继承用户配置或加载插件。不运行 `w2 proxy`、`w2 ca` 或 `--init`，不安装工具或证书。
 
 若要复用已经运行的 Whistle，在其中准备以下规则：
@@ -255,6 +267,16 @@ Direct 冲突不在 `Space.init` 抛出；恢复跳过受阻导航，数据容�
 
 默认策略为 `system`，完全交给平台处理。`--ca-cert PATH` 将单张 PEM / DER 导入为 `custom-ca`；保存 DER 数据及 SHA-256 指纹，文件随后被移动也不影响重启恢复。新 Tab 继承同一个策略。旧注册表缺少 `tls` 字段时仍使用系统策略。
 
+创建 Space 时可选择额外证书策略，两项互斥：
+
+```sh
+curl --noproxy '*' 'http://127.0.0.1:8899/cgi-bin/rootca?type=pem' -o /tmp/whistle-ca.pem
+browser space create trusted --proxy http://127.0.0.1:8899 --ca-cert /tmp/whistle-ca.pem
+
+# 仅用于显式选择的受控开发环境
+browser space create dev --proxy http://127.0.0.1:8899 --ignore-certificate-errors
+```
+
 实现通过 WKNavigationDelegate 的 server-trust challenge，仅对当前 `SecTrust` 加入 Anchor，并保留原有 SSL / hostname 策略，允许系统 Anchor。异步评估在主队列发起并回到主队列，符合 Security API 的队列要求；仅在评估成功时使用 credential。错误域名、过期证书、无关 CA 和缺少用途的证书仍会拒绝。
 
 `--ignore-certificate-errors` 对应显式 `insecure` 策略，直接接受该 WebView 收到的 server-trust challenge。它会接受证书链、主机名、有效期及用途错误，适合受控开发 Space；不会修改系统设置或其他 Space。此选项与 `--ca-cert` 互斥，不能附加在 `open` 等页面命令上。CLI 始终返回策略与警告，避免把忽略校验伪装成信任校验成功。
@@ -271,7 +293,11 @@ Socket 建立后，`status.ready` 表示元数据恢复与待删除存储的清�
 
 注册表保存 Space UUID、名称、代理、固定默认 Tab UUID、各 Tab UUID/URL 和待删除标记。Cookie、LocalStorage 等由命名 WKWebsiteDataStore 持久化，不手工导入导出。重启恢复的是标签页 URL，不是 DOM、JavaScript 堆、表单草稿或完整后退历史。Cookie 是否跨重启仍服从过期 / 会话属性；验收使用带 Max-Age 的 Cookie。
 
+默认注册表目录为 `~/Library/Application Support/AgentWebKit`。`BROWSER_DATA_DIR` 或 `--data-dir` 可指定独立目录，`BROWSER_SOCKET` 或 `--socket` 可指定 Socket；daemon 与客户端必须使用相同配置。WebKit 网站数据由系统管理，指定注册表目录不会搬移这些数据；`space delete` 才会删除对应 Space 的网站数据。
+
 GUI 的 selectedSpace / selectedTabs 只决定观察哪一个 WebView，并按数据目录记住选择。窗口采用 NSSplitViewController、原生 sidebar、NSToolbar 和系统语义颜色。关闭观察窗口不终止服务。后台 Tab 使用隐藏 NSPanel 持有视图；DOM、Evaluate 和截图不调用 activate / makeKey。GUI 新建、地址栏导航和重新加载都走同一条命令处理路径，遵守 Space 锁及代理检查。没有 Space 时，首次新建显式使用 direct 创建 personal；其余新建沿用当前 Space。分享按钮复制带 Space UUID 和 Tab UUID 的 snapshot 命令，既不新建页面，也不修改默认标签页。地址栏编辑期间，后台刷新不会覆盖输入。
+
+地址栏省略协议时使用 HTTPS，本地 HTTP 页面需显式输入 `http://`。图钉标记 CLI 默认 Tab，底部显示代理和证书策略，忽略证书错误时显示橙色提示。⌘T 新建 Tab，⌘L 聚焦地址栏，⌃⌘S 切换侧栏，⇧⌘F 搜索 Space，⇧⌘[ / ⇧⌘] 切换标签页，⌘W 隐藏观察窗口，⌘Q 退出服务。
 
 本地 RPC 为每连接一条换行分隔的 JSON Request / Response，请求结构：
 
@@ -284,6 +310,8 @@ GUI 的 selectedSpace / selectedTabs 只决定观察哪一个 WebView，并按�
 Snapshot 覆盖主 frame、同源 frame 与开放 Shadow Root 中的可见交互元素，最多 1000 个；文本摘要仅取主 frame，最多 20000 字，达到上限返回 `truncated`。引用在元素对象存续期间稳定，导航、刷新、frame 文档替换或元素被移除后失效；CSS selector 必须恰好命中一个元素，跨作用域使用 `>>>` 或完整引用，边界见下文。Snapshot 包含控件标签、checkbox/radio 状态、select 选项，并隐藏 password 值。`fill` 使用原生 value setter 和非 trusted input/change 事件；拒绝 disabled fieldset、只读字段、无效 select 值以及文件、checkbox、radio 的文字填写。`wait` 默认等待页面加载或唯一元素可见，也可显式等待 URL、文本或 DOM 状态；选择器错误不会被吞掉当成普通超时。
 
 Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 等待表达式返回的 Promise（同样在 page world）。返回不能被 JSON 表示的值时明确失败。alert/confirm/prompt 通过上述 dialog list/respond 显式处理；网站新窗口转为同 Space Tab，不改变 CLI 默认 Tab 或自动抢前台。外部 URL scheme 被明确拒绝，不启动其他应用；弹窗、opener 和合成点击的边界见下文。
+
+`fill` 支持输入框、textarea、select 和 contenteditable；对 contenteditable 只做整段纯文本替换，会移除原有格式。不模拟逐键输入、输入法、光标、原生剪贴板或复杂编辑器协议，旧节点引用失效后需重新 snapshot。
 
 ## 超时与恢复
 

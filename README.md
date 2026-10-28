@@ -2,16 +2,14 @@
 
 一个供本机 AI Agent 共用的原生 macOS 浏览器。每个 Space 独立保存登录状态、网站数据、代理配置和标签页。Agent 通过 CLI 操作页面，你可以在原生窗口中查看进展。
 
-- 多个 Agent 可同时使用不同 Space，页面操作不会串到当前窗口选中的标签页。
-- 支持 DOM 结构、稳定元素引用、点击、填写、JavaScript、元素等待和截图。
-- 支持 Whistle 代理、Space 独立证书策略，以及重启后恢复标签页和网站数据。
-- WebKit 调用有执行期限；页面卡住后可重新加载，保留 Tab ID 和持久化数据。
-
-代理验收使用实际域名：代理 Space 经本机 Whistle 将 `https://example.com` 映射到本地开发页，direct Space 访问同一 URL 时显示公网页面。localhost / 127.0.0.1 的代理路由暂不纳入验收，不能据此保证 loopback 流量经过 Whistle。详见[实际测试结果](docs/VALIDATION.md)。
+- 多个 Agent 可同时使用不同 Space，页面操作不受窗口当前选中标签页的影响。
+- 支持页面快照、点击、填写、JavaScript、条件等待和截图。
+- 支持独立 Whistle 代理、证书策略，以及重启后恢复标签页和持久化网站数据。
+- 提供页面错误诊断和 JS 对话框的显式回应，方便 Agent 判断结果、定位问题。
 
 ## 构建和启动
 
-需要 macOS 14+、Command Line Tools / Swift 5.10+，以及已登录的桌面会话。运行时无第三方依赖；自动验收另需 Python 3、OpenSSL 和本机已安装的 Whistle。
+需要 macOS 14+、Command Line Tools / Swift 5.10+，以及已登录的桌面会话。
 
 ```sh
 zsh scripts/build.sh
@@ -19,151 +17,57 @@ export PATH="$PWD/.build/Agent WebKit.app/Contents/MacOS:$PATH"
 browser daemon
 ```
 
-也可以双击 `.build/Agent WebKit.app`。启动和 CLI 操作不会主动激活应用。关闭窗口会隐藏观察窗口，服务继续运行；通过 Dock 可重新打开窗口。
-
-请始终使用打包后的应用启动服务，保持 Bundle ID 一致。`.build/debug/browser` 可作 CLI 客户端；直接用未打包的二进制启动 daemon 会改变 WebKit 的存储归属，不能与应用包混用。
+也可以双击构建生成的 `.build/Agent WebKit.app`。启动和 CLI 操作不会主动激活应用；关闭窗口后服务继续运行，通过 Dock 可重新打开窗口。
 
 ## CLI
 
-在另一个终端设置同样的 PATH，然后运行：
-
-`browser help open`、`browser help space create` 可查看单项命令，`browser capabilities` 返回机器可读契约；这些查询无需启动应用。契约格式见[开发说明](docs/DEVELOPMENT.md#离线帮助与机器可读契约)。
-
-Codex/Pi 可使用仓库内的 [agent-webkit Skill](skills/agent-webkit/SKILL.md)，按 Space/Tab 执行快照、动作、等待和验证，并处理超时与人工接管。需[自行选择安装](docs/DEVELOPMENT.md#codex--pi-skill)，构建不会改动 Agent 配置。
+在另一个终端设置同样的 PATH，创建专属 Space 并打开页面：
 
 ```sh
-browser space create admin --proxy http://127.0.0.1:8899
-browser space create user --proxy direct
-browser space list
-browser open https://example.com --space admin
-browser snapshot --space admin
-# 使用 snapshot 返回的完整引用，引用包含页面随机后缀
-browser fill '@e1-页面后缀' hello --space admin
-browser click '@e2-页面后缀' --space admin
-browser click '#login' --space admin --wait-for-popup
-# 使用返回的 value.newTabId 查看登录页
-browser snapshot --space admin --tab '返回的新 Tab UUID'
-browser fill '#message' hello --space user
-browser evaluate 'document.title' --space admin
-browser wait '#result' --space admin --timeout 5000
-browser wait '#result' --text '保存成功' --space admin
-browser wait '#submit' --state enabled --space admin
-browser wait --url 'https://example.com/dashboard' --space admin
-browser diagnostics --space admin
-browser diagnostics --space admin --clear
-browser dialog list --space admin --tab '目标 Tab UUID'
-browser dialog respond '待决对话框 ID' dismiss --space admin --tab '目标 Tab UUID'
-browser screenshot --space admin --out /tmp/admin.png
-browser tab new https://example.com --space user
-browser tab list --space user
-browser snapshot --space user --tab '返回的完整 Tab UUID'
-browser tab default '返回的完整 Tab UUID' --space user
-browser tab close '返回的完整 Tab UUID' --space user
-browser evaluate 'fetch("/api/status").then(r => r.json())' --space user --await
-browser reload --space user
-browser space info admin
-browser space delete admin
-browser shutdown
+browser space create work --proxy direct
+browser open https://example.com --space work
+browser snapshot --space work
+browser screenshot --space work --out /tmp/work.png
 ```
 
-所有页面命令必须指定 `--space`，支持名称或 UUID。省略 `--tab` 时使用该 Space 的固定默认标签页，与 GUI 显示哪个页面无关；`tab default` 可显式修改并持久化这个默认值。不同 Agent 使用不同 Space；同一 Space 的重叠操作返回 `space_busy`，由调用方顺序执行。`state`、`tab list`、`space info` 和 `dialog list` 在操作进行中仍可查询；`dialog respond` 也可在原动作等待对话框时回应。
+用 `browser help` 查看命令，`browser help open` 查看单项用法。点击或填写前先获取 snapshot，使用其中的完整元素引用；操作后通过页面内容或等待条件确认结果。
 
-交给 Codex / Pi 时，提供 `browser` 的路径和专属 Space 名称即可；也可直接复制窗口分享按钮给出的接管命令。让 Agent 先 snapshot，再使用返回的引用操作，并读取结果页面确认业务状态；不需要安装 MCP 服务。
-
-WebKit 操作默认超时为 15000 ms，可用 `--timeout 1–60000` 调整。`evaluate --await` 等待 Promise 返回结果。`wait SELECTOR` 等待唯一匹配的元素可见；可改用 `--text` 等待可见元素包含文本，或 `--state visible|hidden|attached|detached|enabled|disabled` 等待状态。`wait --url` 精确匹配完整 URL（包括查询和 hash），可用于 SPA 跳转；无参数 `wait` 等待文档加载完成。无效选择器、匹配多个元素和过期引用会直接报错。值以 `--` 开头时，先写选项，再用 `--` 分隔，例如 `browser fill --space user -- '#message' '--hello'`。`browser --help` 和 `browser --version` 无需启动服务。
-
-每条命令返回一行 JSON，成功为 `{"ok":true,"result":...}`，失败为 `{"ok":false,"error":{"code":...,"message":...}}`，退出码分别为 0 / 1。页面结果包含 Space ID、Tab ID、URL、加载状态和代理限制。`click` / `fill` 使用 DOM 合成事件，返回 `method: "dom"`、`nativeVerified: false`；不提供原生输入或剪贴板模拟。
-
-JS alert/confirm/prompt 会保持待决，不弹出原生窗口或默默接受确认。让触发动作的 CLI 保持运行，再用另一个 CLI 对同一 Space/Tab 查询并以 ID `accept` 或 `dismiss`；接受 prompt 时可带 `--text`，省略则使用页面默认值。响应后仍需核对原动作和业务结果；超时会安全取消，不能据此重试提交。流程见[开发说明](docs/DEVELOPMENT.md#js-对话框)。
-
-`fill` 支持输入框、textarea、select，以及 contenteditable 的整段纯文本替换（会移除原有格式）。已验证 React/Vue 受控表单和动态重渲染；禁用、readOnly、`aria-readonly` 控件会被拒绝，旧节点引用失效后须重新 snapshot。填写会发送非可信 input/change 事件，不模拟逐键输入、输入法、光标或复杂编辑器协议。`businessOutcomeVerified: false` 表示操作返回成功仍需用 `wait --text/--url` 等检查业务结果。
-
-`diagnostics` 查询当前 Tab 最近 200 条诊断，支持 `--tab` 和 `--clear`；页面忙碌或卡住时仍可读取。可查看导航 HTTP 状态、加载失败码与耗时，以及主页面的 console.warn/error 次数、异常类型/行列、资源加载错误和 fetch/XHR 结果。默认不记录 console 正文、Cookie、Authorization、请求/响应体或完整 URL，只保留来源站点等摘要；记录仅在内存，重启后清空。需要定位问题时，可对指定 Tab 使用 `--detail on` 临时收集有限、脱敏的消息、堆栈与资源信息，`--detail off` 关闭并清除详情；范围与边界见[开发说明](docs/DEVELOPMENT.md#临时详细诊断)。页面脚本观测可能遗漏或被网页篡改，与原生 WebKit 记录分开标注；它不覆盖所有网络活动，也不能证明代理路径。
-
-默认数据目录为 `~/Library/Application Support/AgentWebKit`。`BROWSER_DATA_DIR` 可指定独立注册表目录，`BROWSER_SOCKET` 或 `--socket` 可指定 Socket；daemon 和客户端需使用相同设置。WebKit 网站数据由系统管理，`--data-dir` 不会把这些数据搬进该目录。`space delete` 会删除该 Space 的网站数据；普通关闭和重启保留数据及标签页 URL。
-
-删除后若 WebKit 仍占用空的存储容器，结果会注明 `cleanupPending: true`：网站数据已清除并核对，容器将在下次启动时继续删除。新建同名 Space 会使用新的 ID。`status` 可查询 `pendingStoreCleanup`；启动恢复完成后 `ready` 为 `true`，之前的页面命令会返回 `not_ready`。
-
-内部 DOM 操作使用独立脚本环境，网页覆盖同名变量不会替换自动化实现。`evaluate`（含 `--await`）仍访问网页自身的 JavaScript 状态。网页仍能修改 DOM；隔离不保证页面内容或操作结果可信。
-
-`snapshot` 可列出开放 Shadow Root 和同源 iframe 内的控件，引用包含所属上下文，可直接用于 click/fill/wait。也可用 `>>>` 显式进入作用域，例如 `browser fill '#editor >>> input' hello --space user`（`#editor` 是 iframe 或开放 Shadow Root 的宿主）。每段选择器必须唯一；普通 CSS 选择器仍只查询当前作用域。跨源 frame、closed 或不存在的 Shadow Root 返回 `unsupported_context`。closed root 无法自动枚举；snapshot 的 `unsupported` 和 `limitations` 会说明可观测边界，`text` 仍仅提取主 frame 文本。
+每个 Agent 使用独立 Space。页面命令必须指定 `--space`；省略 `--tab` 时操作该 Space 的固定默认标签页，切换窗口中的页面不会改变这个目标。
 
 ## 手动浏览与 Agent 接管
 
-排障时可对指定 Tab 使用 `browser diagnostics --space NAME --tab ID --inspectable on`，允许从 Safari 手动检查页面；用 `off` 关闭。应用不会自动打开 Inspector，步骤见[开发说明](docs/DEVELOPMENT.md#safari-手动-inspector)。
+点击工具栏的 **＋** 新建标签页，在地址栏输入网址。首次使用会创建直连的 `personal` Space。你可以先登录或填写内容，再点击分享按钮，复制接管命令交给 Agent；它会继续操作同一 Space 和标签页。
 
-点击工具栏右侧的 **＋** 新建标签页，在地址栏输入网址并按回车。新标签页沿用当前 Space 的登录状态和网络设置；第一次使用时会自动创建直连的 `personal` Space。省略协议的网址会使用 HTTPS，本地 HTTP 页面需输入 `http://`。
+交给 Codex / Pi 时，提供 `browser` 的路径和专属 Space 名称即可。仓库内的 [agent-webkit Skill](skills/agent-webkit/SKILL.md) 提供快照、动作、验证和失败恢复流程；可按[安装说明](docs/DEVELOPMENT.md#codex--pi-skill)自行安装，也可让 Agent 单次读取该文件。
 
-你可以先打开网页、登录或填写内容，再点击工具栏的分享按钮，复制接管命令并交给 Agent。命令明确指定当前 Space 和 Tab ID，Agent 会读取同一个页面并继续操作，保留登录状态和页面内容。
-
-窗口采用 Safari 风格的原生侧边栏与工具栏，随系统外观显示。左侧搜索和切换 Space，顶部标签栏切换页面；图钉标记 CLI 默认标签页。底部显示代理和证书策略，忽略证书错误的 Space 会显示橙色提示。
-
-每个 Space 会记住上次查看的标签页。窗口大小和观察选择会恢复，但不会改变 Agent 的操作目标。关闭窗口后服务继续运行；退出应用才会停止服务。
-
-网站的 `target=_blank` 和 `window.open` 会打开同一 Space 的新 Tab，沿用登录状态、代理及证书策略，不切换 GUI 选择或 CLI 默认 Tab。用 `tab list` 发现它，或在 `click` 时指定 `--wait-for-popup` 获取 `value.newTabId`，随后对该 Tab 执行 `wait`、`snapshot`。此选项只确认新 Tab 出现，不代表登录完成。父子页可用 opener 回调和 `window.close()`；重启仅恢复 URL，不能恢复尚在内存中的登录回调关系。
-
-DOM 点击的 `isTrusted=false`。若网站要求真实用户操作，`--wait-for-popup` 会在期限内未出现新 Tab 时返回 `popup_not_opened`；请在窗口中手动点击后让 Agent 接管。外部 App 或不支持的 URL scheme 会被拒绝，原因见页面的 `lastNavigationRejection` 和窗口提示；弹窗尺寸、位置、工具栏要求不应用于原生标签页。不能据此宣称第三方 OAuth 已全自动兼容。
-
-| 快捷键 | 操作 |
-| --- | --- |
-| ⌘T | 新建标签页 |
-| ⌘L | 选中地址栏 |
-| ⌃⌘S | 显示／隐藏侧边栏 |
-| ⇧⌘F | 搜索 Space |
-| ⇧⌘[ / ⇧⌘] | 上一个／下一个标签页 |
-| ⌘W | 关闭观察窗口 |
-| ⌘Q | 退出应用 |
-
-页面加载失败会显示原因。若 `state` 返回 `unresponsive: true` 或 `webContentTerminated: true`，可通过 `browser reload --space NAME` 或窗口的重新加载按钮恢复。恢复会重新打开 URL，保留 Tab ID、Cookie 和 LocalStorage；未提交的表单和 JavaScript 内存状态不会保留。超时操作可能已经部分生效，应先核对页面状态，不要直接重试付款、提交等有副作用的动作。
+常用快捷键：⌘T 新建标签页，⌘L 输入网址，⌘W 隐藏观察窗口，⌘Q 退出应用。
 
 ## Whistle 与 direct
 
-应用支持 `http://127.0.0.1:<PORT>`，端口范围为 1–65535，必须显式指定；原有 8899 用法仍有效。不支持远程代理、认证或 SOCKS，不修改 Whistle 或 macOS 系统代理。将域名映射到本地开发服务时，Whistle 使用以下规则，并开启 HTTPS 抓包：
-
-```text
-example.com http://127.0.0.1:5173
-example.com enable://capture
-```
-
-两个 Space 均打开 `https://example.com`：代理 Space 应看到本地页面，direct Space 应看到公网 Example Domain。浏览器地址仍保持原域名，映射由 Whistle 完成。
-
-多个 Agent 可分别创建 Space，连接不同端口的独立 Whistle，例如 `--proxy http://127.0.0.1:18899` 与 `--proxy http://127.0.0.1:18900`。各 Whistle 的规则、存储和证书目录应独立配置。代理绑定各 Space 的 WKWebsiteDataStore，重启后恢复原地址；代理不可用时返回失败，不回退到直连或 8899。应用不提供运行中切换代理或代理规则管理。
-
-Vite 开发页可沿用上述域名映射；让 Vite 允许 `example.com`，并将 HMR 客户端指向 `wss://example.com:443`。已验证两个 Space 的连续热更新、独立页面状态和重启后重连；配置及自动验收入口见[开发说明](docs/DEVELOPMENT.md#vite--whistle-域名与-hmr-回归)。
-
-默认使用系统证书校验。创建 Space 时可选择一种额外证书策略，之后该 Space 的全部 Tab 及应用重启均沿用它：
+已启动本机 Whistle 后，可为开发任务创建代理 Space：
 
 ```sh
-# 推荐：为该 Space 添加一个本机 CA；支持单张 PEM / DER，保留系统 CA 和主机名、有效期、用途校验
-curl --noproxy '*' 'http://127.0.0.1:8899/cgi-bin/rootca?type=pem' -o /tmp/whistle-ca.pem
-browser space create trusted --proxy http://127.0.0.1:8899 --ca-cert /tmp/whistle-ca.pem
-
-# 仅供受控开发环境：该 Space 显式忽略证书链、主机名、有效期等证书错误
-browser space create dev --proxy http://127.0.0.1:8899 --ignore-certificate-errors
+browser space create dev --proxy http://127.0.0.1:8899
+browser open https://example.com --space dev
 ```
 
-两项互斥，且只能在 `space create` 时设置。CA 证书内容会保存在 Space 注册表中，不依赖原文件一直存在；不会写入钥匙串或改变其他 Space。`space info` 和页面结果返回 `tls.policy`、CA 指纹或忽略错误的警告。
+将实际域名映射到本地服务后，即可在页面中调试开发项目；规则和 Vite 热更新配置见[域名与 HMR 配置](docs/DEVELOPMENT.md#vite--whistle-域名与-hmr-回归)。多个 Space 可连接不同端口的 Whistle。localhost / 127.0.0.1 的代理路由暂不保证，开发页请使用域名映射。
 
-本机 Whistle 2.10.2 的动态站点证书缺少 `serverAuth` 用途，在添加 CA 后仍可能被严格校验拒绝（`ServerAuthEKU`）。如果 Whistle CA 已受系统信任，通常直接使用默认策略即可；需要在未受系统信任的开发环境使用这些动态证书时，可显式选择 `--ignore-certificate-errors`，或为 Whistle 配置符合要求的站点证书。`--ca-cert` 不会掩盖证书本身的用途错误。
+默认使用系统证书校验，也可为 Space 配置本机 CA；忽略证书错误仅适用于显式选择的受控开发环境，详见[证书配置](docs/DEVELOPMENT.md#space-证书策略)。
 
-`direct` 清除自定义代理，并检测系统 HTTP、HTTPS、SOCKS、PAC 和自动发现代理。冲突时仅暂停受影响的 Direct Space，返回 `direct_system_proxy_conflict`；应用、Whistle Space 和状态查询继续可用。`space info` 的 `network.blocked/error`、`status.blockedSpaces` 和窗口提示可定位原因。关闭系统代理后执行 `browser reload --space NAME` 即可恢复，保留 Cookie、Tab ID 和 URL，无需删除重建。
+`direct` 遇到已启用的系统代理会暂停该 Space。关闭系统代理后，执行 `browser reload --space work` 恢复。应用不会修改系统代理设置。
 
-恢复和每次导航前都会检查系统代理。公开 API 没有强制直连开关；已经加载的页面在系统配置动态变化期间，后续 fetch、WebSocket 等请求仍可能受影响。VPN、透明代理和内容过滤器也不在绕过保证内。
+## 使用边界
 
-## 验证
+- 点击和填写使用 DOM 合成事件，不等同于真实键鼠输入。网站要求可信点击、复杂编辑器操作或人工登录时，可在窗口中完成后再交给 Agent。
+- 页面卡住时可用 `browser reload --space work` 恢复；未提交表单和页面内存状态不会保留。超时动作可能已经生效，先核对结果，再决定是否重试。
+- 支持开放 Shadow Root 和同源 iframe；跨源 iframe、closed Shadow Root 暂不支持。截图目前仅覆盖视口。
+- JS alert/confirm/prompt 需要显式查询和回应，操作流程见[对话框说明](docs/DEVELOPMENT.md#js-对话框)。弹窗能打开不代表第三方 OAuth 已全自动兼容。
+- 普通关闭和重启保留持久化网站数据，登录是否延续仍由网站决定。`browser space delete work` 会删除该 Space 的网站数据。
 
-```sh
-python3 tests/acceptance.py
-python3 tests/acceptance.py --independent-proxies-only
-python3 tests/reliability.py
-```
+## 更多文档
 
-测试会启动真实应用、本地 HTML 站点和本机已安装的 Whistle，自动选择空闲端口，使用临时规则、独立数据目录及测试 CA；不改动已有规则、系统代理或钥匙串。它检查主页面、fetch 与 WSS 的域名分流、HTTPS 证书策略、会话持久化、并发、截图与资源回收，并保存 Whistle 会话和来源站点日志。完整测试还包含两路独立 Whistle 的并发、重启恢复与单路断连检查；`--independent-proxies-only` 可单独运行这组检查及代理参数校验。测试结束会停止自己启动的 Whistle。`reliability.py` 无需 Whistle，验证真实死循环、Promise、超时恢复、参数校验、DOM 边界及计时。
-
-若 8899 已被占用，默认测试仍会选择其他空闲端口。需复用已有 Whistle 时，配置好域名规则后运行 `python3 tests/acceptance.py --whistle-existing --origin-port 5173`（代理端口默认 8899，可加 `--whistle-port PORT`），测试会直接核对 Whistle 会话。复用模式不执行停止代理或两路独立代理测试。完整复现步骤见[开发说明](docs/DEVELOPMENT.md)。
-
-可用 `python3 tests/acceptance.py --real-sites-only` 回归 Vue 官方 SPA 和 The Internet 公开账号的登录／弹窗流程；加 `--real-sites-gui` 实查 Space/Tab 切换及关窗后的后台操作。它使用独立测试会话，依赖公网和当前站点布局，不代表第三方 OAuth 全自动兼容，具体覆盖范围见[开发说明](docs/DEVELOPMENT.md#公网真实站点回归)。
-
-源码研究与 API 核实见[实现依据](docs/RESEARCH.md)，测试证据和功能边界见[验收记录](docs/VALIDATION.md)。借鉴部分的许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
-
-应用启动后，可运行 `python3 scripts/google_demo.py` 重现 Google 搜索、滚动、点击跳转、结构提取和截图。脚本逐条启动 CLI，分别记录完整进程耗时、IPC、服务端与 WebKit 耗时，结果和截图保存在 `.artifacts/google-timing-时间戳/`。默认复用 `google-demo` Space，也可用 `--space NAME` 指定其他名称。计时口径见[开发说明](docs/DEVELOPMENT.md#逐步计时)。
+- [开发说明](docs/DEVELOPMENT.md)：CLI 契约、代理与证书、诊断、存储、构建和测试。
+- [验收记录](docs/VALIDATION.md)：实际运行证据、失败和未测范围。
+- [实现依据](docs/RESEARCH.md)：参考项目与 API 选择。
+- [第三方许可](THIRD_PARTY_NOTICES.md)。
