@@ -28,6 +28,8 @@ def verify_offline(cli):
     timeout = next(option for option in commands['open']['options'] if option['name'] == 'timeout')
     assert (timeout['minimum'], timeout['maximum'], timeout['default'], timeout['unit']) == (1, 60000, 15000, 'ms')
     assert all(option['ipcType'] == 'string' for command in commands.values() for option in command['options'])
+    detail = next(option for option in commands['diagnostics']['options'] if option['name'] == 'detail')
+    assert detail['enum'] == ['on', 'off'] and not detail['required']
     assert set(contract['exitCodes']) == {'0', '1'}
     assert {'stale_ref', 'timeout', 'space_busy', 'tab_not_found', 'operation_failed'} <= set(contract['errors'])
     for args in [('help', 'missing'), ('help', 'space', 'missing'), ('help', 'open', 'extra'),

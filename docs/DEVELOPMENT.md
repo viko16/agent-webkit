@@ -119,6 +119,25 @@ GUI 模式复制一个独立 Bundle ID 的测试应用，打印原生操作检�
 
 `status.observer` 是只读宿主快照：`visible` 为原生观察窗口可见性，`spaceId`、`tabId` 为 GUI 正在观察的目标（空选择为 null）。它不执行网页脚本、不激活窗口、不改变 CLI 默认目标，也不持久化新状态。测试报告、逐条命令、GUI 检查点和截图写入该次输出目录；退出时删除自有测试 Space 并停止测试 daemon。
 
+## 临时详细诊断
+
+后台清理定时任务之外，宿主也会在接收事件及生成快照前检查绝对/单调期限，先抹除过期详情，再接受或输出数据，不依赖后台定时器准时唤醒。
+
+```sh
+browser diagnostics --space work --tab TAB_ID --detail on
+browser diagnostics --space work --tab TAB_ID
+browser diagnostics --space work --tab TAB_ID --detail off
+python3 tests/reliability.py --diagnostics-only  # 含真实 5 分钟自然到期检查
+```
+
+默认摘要与 200 条容量不变。显式启用后，仅指定 Tab 当前文档的新事件可包含 `detail`：错误/console 正文最多 512 字符、堆栈最多 8 行且每行 256 字符、有限 `resource`，以及宿主 `navigationId`、fetch/XHR 的 `requestId`。每次启用生成新代号，迟到的旧代号详情不接受；页面仍能伪造自己这一来源的数据，ID 不能作为可信审计或代理证据。请求 ID 对应每次 fetch/send 的终态，包含 HTTP 错误、拒绝、取消和超时，不读取响应体、header 或上传内容；这是有限定位信息，不是 DevTools 请求追踪。
+
+详细模式最长 300000 ms，导航、关闭 Tab、显式恢复或重启会关闭；popup 不继承。它不补回启用前的错误，也不捕获下一次完整文档导航的初始详情；SPA 同文档更新不关闭。开启需等待该 Space 空闲，以现有有界 WebKit 调用确认 hook（最长 2 秒）；hook 不可用返回 `diagnostics_unavailable`，超时沿用现有恢复规则。普通读取仍不执行 JS，忙碌、暂停或卡死页面可用；关闭会立即在宿主拒绝/抹除所有已保留详情，并向页面尽力发送停止信号，不等待失联页面。`--clear` 仅清除记录，不关闭模式。
+
+详情只保留在 Tab 的内存环形缓冲，不写 Space 注册表或其他磁盘日志；CLI 输出及调用方自行保存的内容不在此保证内。页面仅在启用期间读取最多 100 个表单控件的当前值用于本地字符串替换，不把这些值单独传出；超出数量或读取失败时省略对应自由文本。宿主再过滤字段、限长，删除 URL 凭据/query/hash，将数字、长串等动态路径片段替换为 `[redacted]`，并过滤带标签凭据、Bearer/Basic 和长 Token。只保留有限路径，不保证完整资源 URL；脱敏是尽力处理，任意页面文本仍可能包含未识别的敏感信息，不能当成绝对安全的导出或可信日志。关闭、到期、导航也会抹除已存详情，保留原摘要与事件 ID。
+
+`--diagnostics-only` 同时回归原摘要及详细模式，包括实际异常/拒绝/失败资源/fetch/XHR、正文/堆栈/资源与关联 ID、脱敏、跨 Space/popup、关闭后的迟到批次、忙碌/卡死关闭、导航/重启及自然到期；普通 `--forms` 包含这些行为检查，但不重复等待 5 分钟。
+
 ## Console 与网络诊断
 
 ```sh
@@ -139,7 +158,7 @@ python3 tests/reliability.py --forms  # 含诊断、原有可靠性和框架回�
 
 页面 hook 在 documentStart 注入 page world，通过公开 WKScriptMessageHandler 发送摘要；内部 DOM bridge 仍留在原有隔离 world。console 包装调用原方法且不遍历参数，fetch 保留响应和拒绝。XHR 每次 send 固定请求 origin，在捕获阶段观察 DONE 状态及 load/error/abort/timeout，先保存结果并解绑该次监听，再由普通页面回调处理，避免 onload/onreadystatechange 复用对象时串用状态；不读写 body/header。页面队列最多 100 条，约每 100 ms 批量发送，导航卸载尝试 flush；后台调度、导航和进程退出可能延迟或丢失批次。宿主再次按字段/枚举/数值范围过滤，不接收任意消息键；共享 popup controller 按 WKScriptMessage.webView 路由，不接受网页提供的 Tab/Space ID，并拒绝子 frame 消息。
 
-默认只保留 http(s) origin（含端口），删除用户名、密码、路径、query 和 hash；全部自由文本消息、栈、Cookie、Authorization、表单值和请求/响应内容不采集。`pageTimeMs` 是网页相对时间，`durationMs` 是对应调用/导航耗时，`receivedAtMs` 可能晚于实际发生时间。Request/URL 对象在失败前无法安全读取目标时、opaque 响应等场景 origin 为 `opaque`。fetch 拒绝无法单独区分网络/CORS/策略问题；状态码 0 不能当成网络失败。
+默认摘要只保留 http(s) origin（含端口），删除用户名、密码、路径、query 和 hash；自由文本消息、栈、Cookie、Authorization、表单值和请求/响应内容不采集。显式开启的有界详情见上节。`pageTimeMs` 是网页相对时间，`durationMs` 是对应调用/导航耗时，`receivedAtMs` 可能晚于实际发生时间。Request/URL 对象在失败前无法安全读取目标时、opaque 响应等场景 origin 为 `opaque`。fetch 拒绝无法单独区分网络/CORS/策略问题；状态码 0 不能当成网络失败。
 
 本期不覆盖子 frame、worker、WebSocket 消息或所有 CSS/媒体/缓存/Service Worker 请求，不是 DevTools 的完整网络追踪；没有私有 WebKit delegate 或代理路径验证。`routeVerified` 始终 false，实际代理证据仍来自独立 Whistle 与来源日志。测试主动制造真实异常、HTTP 错误、断连、XHR 超时/取消、opaque 响应，并核对保留响应内容、容量、字段过滤、popup/Space/frame 归属、忙碌/卡死查询、恢复/重启和前台不变；完整验收另验证 TLS 拒绝及 Direct 暂停诊断。
 

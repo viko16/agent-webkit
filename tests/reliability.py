@@ -15,6 +15,7 @@ from context_cases import verify_contexts
 from wait_cases import verify_waits
 from form_cases import framework_site, verify_forms
 from diagnostic_cases import verify_diagnostics
+from detailed_diagnostic_cases import verify_detailed_diagnostics
 from store_cleanup_cases import verify_pending_store_only
 from contract_cases import verify_offline, verify_live_contract
 
@@ -82,6 +83,7 @@ def main():
         start()
         if args.diagnostics_only:
             checks.append(verify_diagnostics(cli, base, out, lambda: (stop(), start())))
+            checks.append(verify_detailed_diagnostics(cli, base, out, lambda: (stop(), start()), verify_expiry=True))
             report = dict(ok=True, checks=checks, artifacts=str(out))
             (out / 'report.json').write_text(json.dumps(report, indent=2))
             print(json.dumps(report))
@@ -136,6 +138,7 @@ def main():
         checks.append(verify_contexts(cli, base))
         checks.append(verify_waits(cli, base))
         checks.append(verify_diagnostics(cli, base, out, lambda: (stop(), start())))
+        checks.append(verify_detailed_diagnostics(cli, base, out, lambda: (stop(), start())))
         if args.forms:
             with framework_site(out) as (form_url, nonce):
                 checks.append(verify_forms(cli, form_url, nonce, out))

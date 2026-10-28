@@ -25,7 +25,8 @@ enum CLIContract {
         "url": ["type": "string", "description": "Nonempty exact location.href, including SPA query/hash"],
         "text": ["type": "string", "description": "Nonempty visible innerText substring; body when selector omitted"],
         "state": ["type": "string", "enum": ["visible", "hidden", "attached", "detached", "enabled", "disabled"]],
-        "clear": ["type": "flag", "description": "Clear received in-memory diagnostics before returning the snapshot"]
+        "clear": ["type": "flag", "description": "Clear received in-memory diagnostics before returning the snapshot"],
+        "detail": ["type": "string", "enum": ["on", "off"], "description": "Opt-in bounded redacted details for this Tab's current document, at most 300000 ms; navigation/restart resets; off erases retained details"]
     ]
 
     static func help(_ path: [String]) throws -> [String: Any] {
@@ -148,7 +149,7 @@ enum CLIContract {
 
     private static let errorCodes = [
         "already_running", "certificate_rejected", "data_removal_failed", "data_removal_timeout",
-        "direct_system_proxy_conflict", "element_not_actionable", "element_not_editable", "element_readonly",
+        "direct_system_proxy_conflict", "diagnostics_unavailable", "element_not_actionable", "element_not_editable", "element_readonly",
         "invalid_arguments", "invalid_certificate", "invalid_json_result", "invalid_name", "invalid_option",
         "invalid_proxy", "invalid_response", "invalid_selector", "invalid_timeout", "invalid_url", "ipc_error",
         "javascript_error", "last_tab", "message_too_large", "not_ready", "operation_failed", "png_failed",

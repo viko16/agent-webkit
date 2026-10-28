@@ -74,7 +74,7 @@ WebKit 操作默认超时为 15000 ms，可用 `--timeout 1–60000` 调整。`e
 
 `fill` 支持输入框、textarea、select，以及 contenteditable 的整段纯文本替换（会移除原有格式）。已验证 React/Vue 受控表单和动态重渲染；禁用、readOnly、`aria-readonly` 控件会被拒绝，旧节点引用失效后须重新 snapshot。填写会发送非可信 input/change 事件，不模拟逐键输入、输入法、光标或复杂编辑器协议。`businessOutcomeVerified: false` 表示操作返回成功仍需用 `wait --text/--url` 等检查业务结果。
 
-`diagnostics` 查询当前 Tab 最近 200 条诊断，支持 `--tab` 和 `--clear`；页面忙碌或卡住时仍可读取。可查看导航 HTTP 状态、加载失败码与耗时，以及主页面的 console.warn/error 次数、异常类型/行列、资源加载错误和 fetch/XHR 结果。默认不记录 console 正文、Cookie、Authorization、请求/响应体或完整 URL，只保留来源站点等摘要；记录仅在内存，重启后清空。页面脚本观测可能遗漏或被网页篡改，与原生 WebKit 记录分开标注；它不覆盖所有网络活动，也不能证明代理路径。详细消息需在页面调试工具中查看。
+`diagnostics` 查询当前 Tab 最近 200 条诊断，支持 `--tab` 和 `--clear`；页面忙碌或卡住时仍可读取。可查看导航 HTTP 状态、加载失败码与耗时，以及主页面的 console.warn/error 次数、异常类型/行列、资源加载错误和 fetch/XHR 结果。默认不记录 console 正文、Cookie、Authorization、请求/响应体或完整 URL，只保留来源站点等摘要；记录仅在内存，重启后清空。需要定位问题时，可对指定 Tab 使用 `--detail on` 临时收集有限、脱敏的消息、堆栈与资源信息，`--detail off` 关闭并清除详情；范围与边界见[开发说明](docs/DEVELOPMENT.md#临时详细诊断)。页面脚本观测可能遗漏或被网页篡改，与原生 WebKit 记录分开标注；它不覆盖所有网络活动，也不能证明代理路径。
 
 默认数据目录为 `~/Library/Application Support/AgentWebKit`。`BROWSER_DATA_DIR` 可指定独立注册表目录，`BROWSER_SOCKET` 或 `--socket` 可指定 Socket；daemon 和客户端需使用相同设置。WebKit 网站数据由系统管理，`--data-dir` 不会把这些数据搬进该目录。`space delete` 会删除该 Space 的网站数据；普通关闭和重启保留数据及标签页 URL。
 

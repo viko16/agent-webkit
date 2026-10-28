@@ -130,6 +130,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
 
     func close() {
         closed = true
+        diagnostics.setDetail(false)
         DiagnosticRouter.shared.logs.removeObject(forKey: webView)
         failPending(BrowserError("tab_closed", "标签页已关闭"))
         observations.removeAll()
@@ -140,6 +141,12 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         networkCheck = nil
         createPopup = nil; closeRequested = nil
         navigationSpans.removeAll()
+    }
+
+    func disableDiagnosticDetails() {
+        diagnostics.setDetail(false)
+        // Host filtering and erasure are immediate, even if a hung page cannot acknowledge this.
+        webView.evaluateJavaScript("window.__agentWebKitDiagnosticMode?.(null)", completionHandler: nil)
     }
 
     var state: [String: Any] {
@@ -319,6 +326,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        diagnostics.beginNavigation()
         navigationError = nil
         certificateError = nil
         if !navigationPending { navigationStartedAt = monotonicNow() }
@@ -739,8 +747,23 @@ final class BrowserModel {
                 throw BrowserError("tab_not_found", "Space 中不存在该标签页")
             }
             if command == "diagnostics" {
-                // No JS evaluation or raw page.state: usable when busy, blocked or hung,
-                // and cannot leak full URLs/titles/TLS error text through the response envelope.
+                // Reads and disabling remain available while busy, blocked or hung.
+                if r.options["detail"] == "off" {
+                    tab.disableDiagnosticDetails()
+                } else if r.options["detail"] == "on" {
+                    guard !space.busy else { throw BrowserError("space_busy", "启用详细诊断需要等待当前操作完成") }
+                    space.busy = true
+                    tab.operationTiming = timing; tab.deadline = monotonicNow() + 2_000_000_000
+                    defer { space.busy = false; tab.operationTiming = nil; tab.deadline = nil }
+                    tab.diagnostics.setDetail(true)
+                    let generation = tab.diagnostics.detailGeneration!
+                    let config: [String: Any] = ["generation": generation, "expiresAtMs": Date().addingTimeInterval(300).timeIntervalSince1970 * 1000]
+                    do {
+                        let literal = String(decoding: try jsonData(config), as: UTF8.self)
+                        let ack = try await tab.runJS("typeof window.__agentWebKitDiagnosticMode === 'function' ? window.__agentWebKitDiagnosticMode(\(literal)) : null") as? String
+                        guard ack == generation else { throw BrowserError("diagnostics_unavailable", "当前文档没有可用诊断 hook；请检查页面或显式重新加载") }
+                    } catch { tab.disableDiagnosticDetails(); throw error }
+                }
                 return ["spaceId": id.uuidString, "tabId": tab.id.uuidString, "busy": space.busy,
                         "networkBlocked": space.networkError != nil,
                         "networkErrorCode": space.networkError?.code as Any? ?? NSNull(),

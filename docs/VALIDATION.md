@@ -1,5 +1,15 @@
 # 实际验收记录
 
+## P1 / #4：按 Tab 临时详细诊断（2026-10-28）
+
+新增 `diagnostics --detail on|off`，默认摘要、200 条容量、native/page-script 来源、原 JSON 字段与退出码保留。详情只面向指定 Tab 当前文档的新事件，含有限正文、8 行堆栈、受限资源路径、宿主导航 ID 和每次 fetch/XHR 的请求 ID；不采集 header/body、不序列化 console 对象。表单值在页面就地替换，宿主再次白名单过滤、限长及 URL/凭据/Token 脱敏；自由文本不能保证消除一切敏感信息，保持显式启用和尽力处理的边界。关闭、导航、恢复、重启会抹除详情，popup 不继承；最长 5 分钟，接收/输出前用绝对和单调期限兜底。
+
+`python3 tests/reliability.py --diagnostics-only` [真实通过](../.artifacts/reliability-20261028-090352/report.json)，保留原摘要专项，新增异常/拒绝堆栈、失败资源、7 个唯一 fetch/XHR 请求 ID、表单及带标签凭据/Token/URL 脱敏、伪造字段/动态路径过滤、长度限制、Space/popup 隔离、关闭后的旧代号批次拒绝、忙碌/卡死读取与关闭、导航/恢复/重启复位。实际等待 5 分钟后，模式关闭且已有详情全部移除，保留[到期快照](../.artifacts/reliability-20261028-090352/diagnostics-expired.json)，不是缩短期限或修改系统时钟的测试。
+
+`reliability.py --forms` [完整通过](../.artifacts/reliability-20261028-090354/report.json)，包括新增详细模式、原有 pending-only Store 恢复、CLI/IPC 契约、bridge、弹窗、frame/shadow、wait、诊断摘要、React/Vue 六次提交、失联恢复/删除重建及 16 项计时。Debug 构建签名、24 命令离线、11 项既有守卫、Python 语法和 diff 检查通过。完整模式不重复等待自然到期，报告明确 `expiryVerified: false`；专项为 true。
+
+保留两轮开发失败：`.artifacts/reliability-20261028-085514/` 在卡死超时的详细正文断言处失败，原 native 回调传空正文，现用已有原因码补足，不改超时行为；其自有待删除 Store 经正常恢复[完成清理](../.artifacts/reliability-20261028-085514/cleanup-check.json)。`.artifacts/reliability-20261028-085621/` 的其余路径通过，但等待至 310 秒后原后台任务仍未清除详情；现于接收/生成快照前强制检查期限并先擦除，再复制事件。修复后上述两套真实回归通过，没有放宽断言。当前文档模式不补录启用前或下一次完整导航的初始错误；Inspector 与最终 Release 代理验收由下一独立功能记录。
+
 ## P1 双轴审查修复：Skill 测试失败清理（2026-10-28）
 
 审查范围为 `git diff 15e6b77...8d3021b`，即 `91386dd`、`8d3021b` 两个提交，依据 Issue #2/#7、用户约束及仓库运行/验收约定。Standards 与 Spec 各报告 1 项 P2，指向同一缺陷：原 `finally` 中列举、删除 Space 或 shutdown 任一步失败，会跳过其余清理并掩盖原测试异常。未发现命令校验语义、原生页面执行、JSON/退出码或既有验收入口/断言退化；没有为启发式代码气味另做重构。
