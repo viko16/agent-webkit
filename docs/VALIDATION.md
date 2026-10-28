@@ -1,5 +1,13 @@
 # 实际验收记录
 
+## 详细诊断审查修复：截断凭据边界（2026-10-28）
+
+对 `4313f0d...4800cdd` 的 Spec 审查发现 P1：页面先截断正文/栈行，宿主带引号凭据正则原先要求闭引号，截断后会退到无引号分支，只删除第一词。真实 WebKit 在 `.artifacts/reliability-20261028-111714/` 稳定复现：正文与栈行仍含 `[redacted] beta...`，未将这个已识别字段的错误归为任意秘密识别率限制。
+
+最小修复只修改凭据正则，使单/双引号字段延伸至闭引号或剩余文本末尾；长度限制、默认摘要、临时开关、容量、来源和其他接口不变。永久回归新增 512 字符正文、256 字符栈行各自的单/双引号四项边界，要求保留安全标记而不残留任何测试凭据词，保存 `diagnostics-boundary-redaction.json`。
+
+修复后真实诊断窄跑[通过](../.artifacts/reliability-20261028-111829/report.json)，包括原摘要及全部既有详细诊断/Inspector 行为。调用现有真实应用与 helper，仅将既有 `verify_expiry` 参数设为 false，不替换页面或 WebKit；报告明确 `expiryVerified: false`，未改期限逻辑或重复等待 5 分钟。Debug 构建签名、Python 语法及 diff 检查通过；最终完整可靠性和推送随下一项独立修复记录。
+
 ## P1 / #4：可选 Safari Inspector 与最终回归（2026-10-28）
 
 新增 `diagnostics --inspectable on|off`，直接读写公开 `WKWebView.isInspectable`，默认 false，不持久化、不自动启动 Safari 或激活窗口。按 Tab 独立，popup 不继承；普通导航保持当前 WebView 的开关，关闭/替换或重启复位。与详细捕获独立，每次仅允许修改其中一个开关，避免部分配置生效后返回错误；CLI/IPC 校验和机器可读契约同步。

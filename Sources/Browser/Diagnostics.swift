@@ -59,7 +59,7 @@ final class DiagnosticLog: NSObject {
             if let range = Range(match.range, in: value) { value.replaceSubrange(range, with: resource(String(value[range]))) }
         }
         for pattern in [#"(?i)\b(?:bearer|basic)\s+[^\s,;]+"#,
-                        #"(?i)\b(?:password|passwd|token|secret|authorization|cookie|api[_-]?key)["']?\s*[=:]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)"#,
+                        #"(?i)\b(?:password|passwd|token|secret|authorization|cookie|api[_-]?key)["']?\s*[=:]\s*(?:"[^"]*(?:"|$)|'[^']*(?:'|$)|[^\s,;]+)"#,
                         #"\b[A-Za-z0-9_+/=-]{24,}\b"#] {
             value = value.replacingOccurrences(of: pattern, with: "[redacted]", options: .regularExpression)
         }

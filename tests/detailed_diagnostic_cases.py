@@ -83,6 +83,22 @@ def verify_detailed_diagnostics(cli, base, out, restart, verify_expiry=False):
         command('evaluate', 'console.warn("a".repeat(10000)); true')
         until(lambda v: any(e['kind'] == 'console' and 'detail' in e for e in v['events']))
         assert all(len(e['detail'].get('message', '')) <= 512 and len(e['detail'].get('stack', [])) <= 8 for e in logs()['events'] if 'detail' in e)
+        # Truncation may remove a credential's closing quote before host redaction.
+        logs('--clear')
+        command('evaluate', '''console.warn('message-boundary '+ 'safe '.repeat(92)+'password="alpha beta gamma delta epsilon zeta eta theta"');
+            const error=new Error('stack-boundary');
+            error.stack='stack-boundary '+ 'safe '.repeat(44)+'token="alpha beta gamma delta epsilon zeta eta theta"';
+            console.error(error);
+            console.warn("message-single-boundary "+ "safe ".repeat(90)+"password='alpha beta gamma delta epsilon zeta eta theta'");
+            const single=new Error('stack-single-boundary');
+            single.stack="stack-single-boundary "+ "safe ".repeat(42)+"token='alpha beta gamma delta epsilon zeta eta theta'";
+            console.error(single); true''')
+        boundary = until(lambda v: len([e for e in v['events'] if 'boundary' in e.get('detail', {}).get('message', '')]) == 4)
+        boundary_events = [e['detail'] for e in boundary['events'] if 'boundary' in e.get('detail', {}).get('message', '')]
+        assert len(boundary_events) == 4, boundary_events
+        assert not any(word in json.dumps(boundary_events) for word in ('alpha', 'beta', 'gamma', 'delta')), boundary_events
+        assert all('[redacted]' in json.dumps(detail) for detail in boundary_events), boundary_events
+        (out / 'diagnostics-boundary-redaction.json').write_text(json.dumps(boundary_events, indent=2))
         # Popup content controllers may be shared, but detail opt-in is never inherited.
         command('evaluate', 'Boolean(window.open("about:blank"))')
         child = next(tab['tabId'] for tab in command('tab', 'list') if tab['tabId'] != work['defaultTabId'])
