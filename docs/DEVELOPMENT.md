@@ -267,7 +267,7 @@ Whistle 2.10.2 动态证书的 SAN 存在，但缺少 EKU `serverAuth`。本机�
 
 单进程负责 AppKit、Space 注册表和 Unix Socket。WKWebView 操作在主 Actor 上执行，网络等待异步让出执行权；WebKit 自己管理 WebContent / Networking / GPU 进程。每个 Space 同时执行一条页面命令，不同 Space 可以并发。没有全局 activeSpace 供 RPC 隐式使用。
 
-Socket 建立后，`status.ready` 表示元数据恢复与待删除存储的清理尝试是否完成。恢复期间只有 status/help/version 可用，其他命令返回 `not_ready`，避免 Agent 与恢复任务同时修改会话。ready 不表示全部网页加载完成；页面仍用 `wait` 等待。
+Socket 建立后，`status.ready` 表示元数据恢复与待删除存储的清理尝试是否完成。恢复期间只有 status/help/capabilities/version 可用，其他命令返回 `not_ready`，避免 Agent 与恢复任务同时修改会话。ready 不表示全部网页加载完成；页面仍用 `wait` 等待。
 
 注册表保存 Space UUID、名称、代理、固定默认 Tab UUID、各 Tab UUID/URL 和待删除标记。Cookie、LocalStorage 等由命名 WKWebsiteDataStore 持久化，不手工导入导出。重启恢复的是标签页 URL，不是 DOM、JavaScript 堆、表单草稿或完整后退历史。Cookie 是否跨重启仍服从过期 / 会话属性；验收使用带 Max-Age 的 Cookie。
 

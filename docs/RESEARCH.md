@@ -21,7 +21,7 @@
 | --- | --- | --- |
 | [WKWebsiteDataStore(forIdentifier:)](https://developer.apple.com/documentation/webkit/wkwebsitedatastore/init(foridentifier:)) | 14.0 | UUID 命名持久化 Store，在创建 WebView 前指定。不同 Store 的 Cookie、LocalStorage 隔离及重启持久化已测试；不是完整浏览器进程或操作系统隔离 |
 | [proxyConfigurations](https://developer.apple.com/documentation/webkit/wkwebsitedatastore/proxyconfigurations) | 14.0 | 同一 Store 的全部 WebView 使用相同配置。创建后不提供热切换代理。空数组清除覆盖配置，不能证明绕过系统代理 |
-| [evaluateJavaScript](https://developer.apple.com/documentation/webkit/wkwebview/evaluatejavascript(_:completionhandler:)) | 10.10 | completionHandler 版本返回值或错误；本项目使用主 frame / page world。并非真实输入。content world / frame 重载最低为 11.0 |
+| [evaluateJavaScript](https://developer.apple.com/documentation/webkit/wkwebview/evaluatejavascript(_:completionhandler:)) | 10.10 | completionHandler 版本返回值或错误；`browser evaluate` 保留主 frame / page world 语义，内部 DOM bridge 使用独立的 `AgentWebKit.DOM` content world。并非真实输入。content world / frame 重载最低为 11.0 |
 | [takeSnapshot](https://developer.apple.com/documentation/webkit/wkwebview/takesnapshot(with:completionhandler:)) | 10.13 | 截取当前 WebView 视口，不依赖系统屏幕截图权限。后台 Tab 在未显示的非激活 Panel 中保留视图；已检查实际图像内容 |
 | [callAsyncJavaScript](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/API/Cocoa/WKWebView.h) | 11.0 | 0.2.0 的 `evaluate --await` 等待表达式返回的 Promise；宿主另设截止时间，不将超时解释为 JS 已取消 |
 

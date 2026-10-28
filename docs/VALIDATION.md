@@ -1,5 +1,16 @@
 # 实际验收记录
 
+## 当前状态与记录口径（2026-10-28）
+
+本节依据 `af35732` 及下列已有报告整理，没有重新运行验收。后文各批次的“未实现”“待验证”和命令数量只描述当时提交；当前用法见 [README](../README.md) 和 [DEVELOPMENT](DEVELOPMENT.md)。
+
+- 已验证：独立 DOM world、Direct 冲突的进程内设置注入恢复、同 Space 弹窗、同源 frame/open Shadow Root、React/Vue 表单、Vite/Whistle 域名及 HMR、公网 SPA/登录与 GUI 观察隔离。最新[完整可靠性](../.artifacts/reliability-20261028-140227/report.json)及 [Release 代理/TLS/HMR](../.artifacts/issue3-full-20261028/report.json)报告通过；公网与 GUI 证据保留在各自批次，不视为最新提交重跑。
+- [#3](https://github.com/viko16/agent-webkit/issues/3) 的 JS 对话框与 [#4](https://github.com/viko16/agent-webkit/issues/4) 的临时详细诊断/Inspector 已完成。CLI 当前为 26 个命令；[#7](https://github.com/viko16/agent-webkit/issues/7) 的契约、Skill 和显式路径 Codex 调用已验证，仅剩 Pi 实测，安装后自动发现也不在已有验证结论内。
+- [#1](https://github.com/viko16/agent-webkit/issues/1) 的 CLI 产品化及打包说明已达到原任务范围：最低声明 macOS 14+，注明未测系统，签名为本机 ad-hoc；不代表旧系统实机兼容或正式分发通过。GUI 已实查 Space/Tab 观察、Direct 暂停/恢复、卡死后手动重载与关窗后台操作，其余状态按已有证据保留待核对。
+- 仍未完成：真实 OS 代理开关、真实 WebContent 强制终止、复杂页面长期资源与异常断电验证、旧版 macOS 实机及 Pi 调用。延迟清理与仅 tombstone 启动恢复已验证，不能再把这些分支统称为未测，也不能据此将故障/长稳整项判为完成。
+
+[#2](https://github.com/viko16/agent-webkit/issues/2) 维护路线图和任务索引；任务状态与必要过程记录归各自 issue。本文件保存可复现命令、报告、失败和测试版本归属；新增记录须注明实际运行范围与未测项，历史报告不得改写为新版本通过。
+
 ## JS 对话框双轴审查（2026-10-28）
 
 固定范围 `1246fa7...48e7843`，仅含 `a3cd5e9`、`48e7843` 两个提交。Standards 与 Spec 独立审查，分别为0项已确认发现；对照 Issue #2/#3，未发现规范违例、范围扩张或既有验收退化，无需源码修复或额外气味重构。按 Space/Tab 归属且绕过 busy 的原生回应、显式接受/取消、prompt 输入语义、有界期限、导航/关闭/退出失效与页面结果核验符合声明；原有普通锁、参数校验、JSON/退出码和测试入口/断言保留。
@@ -326,7 +337,9 @@ Debug 应用实测通过 `python3 tests/reliability.py`（[报告](../.artifacts
 
 这不防止页面修改 DOM 或伪造业务内容；未增加跨源 frame、原生输入或其他能力声明。
 
-## 0.2.0：2026-10-24
+## 0.2.0 初始验收历史：2026-10-24
+
+以下能力范围对应 2026-10-24 初始版本，后续新增能力见前面的批次记录。
 
 在同一台 macOS 27.0.1 / Apple Silicon 机器上完成 Debug 与 Release 构建。最终应用包为 Release，`codesign --verify --deep --strict` 通过。下面两套测试均以最终应用包运行并退出 0：
 
@@ -351,7 +364,7 @@ Debug 应用实测通过 `python3 tests/reliability.py`（[报告](../.artifacts
 
 ## 0.1.0 历史记录
 
-以下保留上一版测试证据。其“未实现”和后续建议反映当时状态，当前能力以上面的 0.2.0 记录为准。
+以下保留上一版测试证据。其“未实现”和后续建议只反映 0.1.0 当时状态；当前结论见本文开头的“当前状态与记录口径”。
 
 2026-10-23，在本机 macOS 27.0.1（26A434、Apple Silicon）、Swift 6.4、macOS 27 SDK 上构建并运行。未安装完整 Xcode，使用 Command Line Tools 完成构建和应用包 ad-hoc 签名校验。
 
@@ -376,7 +389,7 @@ Debug 应用实测通过 `python3 tests/reliability.py`（[报告](../.artifacts
 | C：两独立 CLI 进程并发 | 通过 | 两个 Agent 同时导航到故意延迟 0.8 秒的站点，来源站点收到请求的时间差小于 1 ms；分别填写 Alpha / Beta、点击并截图。整个并发流程约 1.298 秒；没有串台 |
 | D：5 Space、销毁和重启 | 通过，含资源观察 | 5 Space 各有一个页面，全部重启恢复；公开删除 API 返回成功，同名重建分配新 UUID 且读不到旧数据；资源变化见下表 |
 
-## B 与 HTTPS 的实际证据
+### B 与 HTTPS 的实际证据
 
 两个 Space 同时使用 `https://example.com/?agent_webkit=9ac318c3dbbe4fbb9a56a8b32681673c`。Whistle 规则将 example.com 转到 `http://127.0.0.1:54522`，浏览器地址不变。
 
@@ -393,7 +406,7 @@ Debug 应用实测通过 `python3 tests/reliability.py`（[报告](../.artifacts
 
 前一次基于 loopback 的失败记录保留在 [.artifacts/20261023-193643](../.artifacts/20261023-193643/report.json)，不把域名分流通过解释为 loopback 也通过。
 
-## 前台与 GUI
+### 前台与 GUI
 
 本轮自动测试通过 NSWorkspace 读取前台进程：启动前后及两 Agent 操作前后均为 PID **56420**，没有变成浏览器进程。后台截图分别显示 Alpha / Beta，页面 click 的 `isTrusted` 实际为 false，与 CLI 报告的 DOM 合成语义一致。
 
@@ -401,7 +414,7 @@ Debug 应用实测通过 `python3 tests/reliability.py`（[报告](../.artifacts
 
 同时验证了：缺少 Space、跨 Space Tab ID、无效代理、互斥证书参数、等待超时、旧元素引用、重复 daemon 均返回错误；重复 daemon 没有覆盖运行中的 Socket。
 
-## 资源实测
+### 资源实测
 
 以下是 `ps` 的 RSS 合计和约 2.06 秒 CPU 时间差采样，100% 表示一颗 CPU 核心。RSS 包含共享页重复计算，不是独占物理内存；WebKit XPC 的 PPID 为 1，测试根据启动前后新增的 WebKit PID 归属，其他应用活动可能影响该归属。简单站点、短采样，不能代表复杂网站或长期稳定性。
 
@@ -415,7 +428,7 @@ Debug 应用实测通过 `python3 tests/reliability.py`（[报告](../.artifacts
 
 首次 5 页采样前已经运行证书和多页面测试，因此还有两个额外 WebContent 进程；仅重启恢复 5 页后为 5 个 WebContent。删除后仍保留的 GPU 进程及应用内存属于本次观察到的 WebKit / AppKit 常驻开销，没有声称内存完全回到初始值。退出应用后这些进程已退出。没有进行额外性能优化或长期压力测试。
 
-## 已实现且验证
+### 0.1.0 当时已实现且验证
 
 - 原生应用包、AppKit 观察窗口、Space 切换、CLI + 本机 Unix Socket JSON 服务。
 - Space 创建 / 查询 / 删除，持久化 UUID DataStore、多 Tab、重启恢复 URL 和数据。
@@ -423,14 +436,14 @@ Debug 应用实测通过 `python3 tests/reliability.py`（[报告](../.artifacts
 - 不同 Space 并发、隐藏 Space 的 DOM 与截图、命令不依赖 GUI 选择、不抢前台。
 - 真实 Whistle 的 HTTPS 域名分流、代理断开后失败、按 Space 的证书策略与持久化。
 
-## 已实现但尚未完整验证
+### 0.1.0 当时尚未完整验证
 
 - 复用带 UI 认证的已有 Whistle 实例；当前自动脚本未提供认证参数。
 - WebSocket、媒体、Service Worker 和全部子资源的网络与证书路径。
 - 系统代理已启用时的拒绝分支；未为测试改动用户系统配置。当前系统代理状态均为关闭。
 - macOS 14–26 实机兼容性、长期运行、异常断电 / 强制结束时的持久化耐久性。待删除 tombstone 的重启重试已实现，未故意注入删除失败验证该恢复分支。
 
-## 当前失败与限制
+### 0.1.0 当时的失败与限制
 
 - loopback 代理路径此前未通过，当前暂不纳入验收，不能保证经过 Whistle。
 - Whistle 2.10.2 动态证书缺少 EKU 时，`--ca-cert` 仍会拒绝；可使用符合要求的站点证书，或为受控开发 Space 显式忽略证书错误。忽略模式也接受主机名和过期错误，不应用于需要 TLS 真实性保证的 Space。
@@ -438,6 +451,6 @@ Debug 应用实测通过 `python3 tests/reliability.py`（[报告](../.artifacts
 - Snapshot 仅主 frame 普通 DOM；无 iframe / Shadow DOM 深入遍历。截图仅视口。DOM 事件不等于真实输入。
 - WebKit 会节流隐藏页面；无限 JS 的可靠取消、进程崩溃后恢复、弹窗新标签、完整后退历史均未实现。
 
-## 下一阶段
+### 0.1.0 当时的后续计划
 
 继续验证 WebSocket / 子资源路径、JS 超时取消和 WebContent 崩溃恢复；需要时再决定是否恢复 loopback 代理实验。原生输入与剪贴板仍是后续独立能力，不能以 DOM 合成事件替代。
