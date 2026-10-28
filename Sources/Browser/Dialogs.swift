@@ -17,6 +17,7 @@ final class DialogStore {
     private var pending: [Pending] = []
     private var ended: [(id: String, code: String)] = []
     private var lastExpiry: UInt64 = 0
+    private var stoppedCode: String?
     var automaticallyDismissed: (() -> Void)?
     static let limit = 8
 
@@ -28,6 +29,11 @@ final class DialogStore {
                  mainFrame: Bool, deadline operationDeadline: UInt64?, reply: @escaping (Bool, String?) -> Void) {
         expire()
         let id = UUID().uuidString
+        if let code = stoppedCode {
+            remember(id, code: code)
+            automaticallyDismissed?(); reply(false, nil)
+            return
+        }
         guard pending.count < Self.limit else {
             remember(id, code: "dialog_capacity")
             automaticallyDismissed?(); reply(false, nil)
@@ -67,6 +73,11 @@ final class DialogStore {
     func cancelAll(code: String) {
         if code == "dialog_expired", !pending.isEmpty { lastExpiry = monotonicNow() }
         for id in pending.map(\.id) { finish(id, accepted: false, text: nil, code: code) }
+    }
+
+    func stop(code: String) {
+        stoppedCode = code
+        cancelAll(code: code)
     }
 
     func snapshot() -> [String: Any] {

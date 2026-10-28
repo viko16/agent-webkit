@@ -1,5 +1,17 @@
 # 实际验收记录
 
+## P1 / #3：对话框生命周期与最终回归（2026-10-28）
+
+在基础接口提交 `a3cd5e9` 上补齐关闭/退出后的停用保护：先移除待决项，再结束 WebKit completion；迟到回调安全取消，不重新积累待决项。显式退出仅在配置保存成功后停用，AppKit 实际退出也释放 completion。普通导航仍只取消旧 ID，新文档可以继续产生对话框；不扩大锁绕过范围，也不自动接受确认或重放动作。仓库 Skill 同步并行查询/回应、旧 ID、页面指令边界和业务结果核验，不安装到用户环境。
+
+最终 Debug `python3 tests/reliability.py --forms` [完整通过](../.artifacts/reliability-20261028-140227/report.json)：包含原有 CLI/IPC、bridge、frame/shadow、弹窗、wait、默认/详细诊断、Inspector、React/Vue 六次提交、恢复/删除和16项计时。对话框新增链式、初始导航、frame/popup 归属、导航取消、关闭后迟到回调、退出保存失败后仍可回应、重启旧 ID 和真实15秒自主到期；8组显式分支、双 Space 并发、忙碌回应、页面结果/调用次数及固定目标/前台断言保留。最终 Release [同一真实专项通过](../.artifacts/reliability-20261028-140356/report.json)，未缩短自主期限或修改系统时钟。
+
+最终 Release `acceptance.py --vite --direct-conflicts --out .artifacts/issue3-full-20261028` [完整通过](../.artifacts/issue3-full-20261028/report.json)：原有代理参数、Direct 冲突、弹窗、A/B/C/D、fetch/WSS、TLS、双独立代理和 Vite/Whistle HMR 通过，未修改系统代理、安装 CA 或改动已有 Whistle。资源采样与对话框窄跑短暂重叠，不将其 RSS 当作独占单进程基准；[清理核查](../.artifacts/issue3-full-20261028/cleanup-check.json)包含本批失败与成功的全部自有启动，注册表为空、Socket 无服务。
+
+保留两次开发失败：`.artifacts/reliability-20261028-135243/` 是测试错误地为 `tab list` 传 `--tab`，被既有校验拒绝，仅修正测试调用；`.artifacts/reliability-20261028-135957/` 对自有临时状态目录禁写，复现保存失败后提前停用记录器导致后续 confirm 被取消。最小修复将停用移到保存成功之后；测试在 finally 恢复目录权限，断言退出失败、服务仍 ready、后续 confirm 待决及显式接受结果。修复后窄跑 `.artifacts/reliability-20261028-140200/` 及上述最终两轮通过，没有放宽断言。
+
+26命令离线/CLI-IPC、11项既有守卫、Debug/Release 构建签名、Python 语法/diff 和 Skill 结构校验通过，仍有既有 CLT 搜索目录警告。未注入真实 WebContent 强制终止，也未重跑公网/原生 GUI 或详细日志五分钟到期，保留原证据版本；此次真实15秒等待只验证对话框自主期限，不替代其他故障/长稳验收。
+
 ## P1 / #3：待决 JS 对话框与显式响应（2026-10-28）
 
 新增按 Space/Tab 的 `dialog list/respond`，直接持有公开 WKUIDelegate completion，不激活窗口、不自动接受确认。宿主记录 ID、类型、文本/默认值、frame origin、期限；查询和响应在常规 Space 锁之前处理，仍校验归属。prompt 区分显式输入、空字符串、默认值和取消 null；alert 仅能结束通知并继续脚本，两个响应动作不等于业务成功。容量与展示有界、最近结束 ID 保留有限原因；原 JSON/退出码、默认目标及所有既有入口保留。

@@ -3,6 +3,7 @@
 <button id="alert">Show alert</button>
 <button id="confirm">Show confirm</button>
 <button id="prompt">Show prompt</button>
+<button id="chain">Two dialogs</button>
 <output id="result">Ready</output>
 <script>
 window.dialogCalls=0;
@@ -14,4 +15,6 @@ function record(value) {
 document.querySelector('#alert').onclick=()=>{window.dialogCalls++;alert('Notice');record('alert-continued')};
 document.querySelector('#confirm').onclick=()=>{window.dialogCalls++;record(confirm('Confirm action'))};
 document.querySelector('#prompt').onclick=()=>{window.dialogCalls++;record(prompt('Enter value','default value'))};
+document.querySelector('#chain').onclick=()=>{window.dialogCalls++;const answer=confirm('Step 1');record([answer,prompt('Step 2','next')])};
+if(new URL(location.href).searchParams.has('initial'))record(confirm('Initial navigation'));
 </script>

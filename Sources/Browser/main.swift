@@ -29,6 +29,7 @@ final class Application: NSObject, NSApplicationDelegate {
         }
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+    func applicationWillTerminate(_ notification: Notification) { model?.finishDialogsForExit() }
     private func configureMenu() {
         let menu = NSMenu()
         func section(_ title: String) -> NSMenu {

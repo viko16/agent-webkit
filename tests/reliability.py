@@ -84,7 +84,7 @@ def main():
         cli('open', 'https://example.com', '--space', 'work', '--proxy', 'direct', error='invalid_arguments')
         start()
         if args.dialogs_only:
-            checks.append(verify_dialogs(cli, base, out))
+            checks.append(verify_dialogs(cli, base, out, lambda: (stop(), start()), state))
             report = dict(ok=True, checks=checks, artifacts=str(out))
             (out / 'report.json').write_text(json.dumps(report, indent=2))
             print(json.dumps(report))
@@ -145,7 +145,7 @@ def main():
         checks.append(verify_popups(popup_cli, base, lambda: (stop(), start())))
         checks.append(verify_contexts(cli, base))
         checks.append(verify_waits(cli, base))
-        checks.append(verify_dialogs(cli, base, out))
+        checks.append(verify_dialogs(cli, base, out, lambda: (stop(), start()), state))
         checks.append(verify_diagnostics(cli, base, out, lambda: (stop(), start())))
         checks.append(verify_detailed_diagnostics(cli, base, out, lambda: (stop(), start())))
         if args.forms:

@@ -133,7 +133,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
 
     func close() {
         closed = true
-        dialogs.cancelAll(code: "tab_closed")
+        dialogs.stop(code: "tab_closed")
         webView.isInspectable = false
         diagnostics.setDetail(false)
         DiagnosticRouter.shared.logs.removeObject(forKey: webView)
@@ -425,7 +425,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         terminated = true
-        dialogs.cancelAll(code: "web_content_terminated")
+        dialogs.stop(code: "web_content_terminated")
         let error = BrowserError("web_content_terminated", "WebContent 进程已退出；reload 可恢复页面，未提交的表单不会保留")
         navigationError = error
         diagnostics.native("web-content-terminated", url: webView.url, error: error)
@@ -683,6 +683,12 @@ final class BrowserModel {
         return response
     }
 
+    func finishDialogsForExit() {
+        for space in spaces {
+            for tab in space.tabs { tab.dialogs.stop(code: "dialog_cancelled") }
+        }
+    }
+
     private func execute(_ r: Request, timing: RequestTiming) async throws -> Any {
         guard !shuttingDown else { throw BrowserError("shutting_down", "应用正在退出") }
         try r.validate()
@@ -717,6 +723,7 @@ final class BrowserModel {
             guard !spaces.contains(where: \.busy) else { throw BrowserError("space_busy", "仍有操作执行中") }
             for space in spaces { try save(space) }
             shuttingDown = true
+            finishDialogsForExit()
             // Give the reply time to reach the client; terminate through AppKit to release WebKit cleanly.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { NSApp.terminate(nil) }
             return ["shutdown": true]
