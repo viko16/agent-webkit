@@ -1,5 +1,13 @@
 # 实际验收记录
 
+## P1 / #3：待决 JS 对话框与显式响应（2026-10-28）
+
+新增按 Space/Tab 的 `dialog list/respond`，直接持有公开 WKUIDelegate completion，不激活窗口、不自动接受确认。宿主记录 ID、类型、文本/默认值、frame origin、期限；查询和响应在常规 Space 锁之前处理，仍校验归属。prompt 区分显式输入、空字符串、默认值和取消 null；alert 仅能结束通知并继续脚本，两个响应动作不等于业务成功。容量与展示有界、最近结束 ID 保留有限原因；原 JSON/退出码、默认目标及所有既有入口保留。
+
+`python3 tests/reliability.py --dialogs-only` [真实通过](../.artifacts/reliability-20261028-134435/report.json)：8 组 alert/confirm 接受/取消和 prompt 中文/多行/引号、空值、默认值、取消；每次确认原 click 尚未完成、busy 为 true、同 Space 普通动作拒绝，但对话框仍可查询回应，另一 Space 仍能操作。双 Space 同时待决分别回应，错误归属、重复/过期 ID、非法响应/文本拒绝；核对页面结果及调用次数，未重放动作。命令超时安全取消 confirm 为 false，不把单纯 modal 等待误判为内容进程卡死；固定默认 Tab、GUI 观察目标及前台不变。
+
+补全机器可读 schema/响应约束后，Debug `reliability.py --forms` [完整通过](../.artifacts/reliability-20261028-134730/report.json)，包含对话框、原 pending-only Store 恢复、CLI/IPC、bridge、弹窗、frame/shadow、wait、默认/详细诊断、Inspector、六次框架提交、恢复/删除及16项计时。26 命令离线、11项既有守卫、构建签名、语法/diff通过，仍有既有CLT搜索目录警告。此提交先交付基础接口及安全期限；自主事件、导航/关闭/重启的深入生命周期和最终Release代理回归由下一功能记录，不提前计作本轮通过。
+
 ## 详细诊断审查修复：XHR 延后发送关联（2026-10-28）
 
 Standards 与 Spec 两轴均确认 P2：XHR 仅在 open 时捕获代号，send 要求代号仍匹配，因此启用前 open 或两次启用之间已 open 的新请求会只有摘要、没有关联 ID。`.artifacts/reliability-20261028-112047/` 使用真实 HTTP 请求稳定复现 status 201 事件缺少 detail，而非仅凭脚本替身推测。

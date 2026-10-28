@@ -62,7 +62,7 @@ def origin(port=0, events=None, tls_context=None):
                 self.send_header('Content-Length', '0')
                 self.end_headers()
                 return
-            fixture = {'/popups': 'popups.html', '/contexts': 'contexts.html', '/context-frame': 'context-frame.html', '/diagnostics': 'diagnostics.html'}.get(urllib.parse.urlsplit(self.path).path)
+            fixture = {'/popups': 'popups.html', '/contexts': 'contexts.html', '/context-frame': 'context-frame.html', '/diagnostics': 'diagnostics.html', '/dialogs': 'dialogs.html'}.get(urllib.parse.urlsplit(self.path).path)
             if fixture:
                 body = (Path(__file__).parent / 'site' / fixture).read_bytes()
                 self.send_response(200)

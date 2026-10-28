@@ -52,6 +52,30 @@ python3 tests/skill_workflow.py
 
 所有等待都在原有命令期限内轮询，不重复 click/fill；输入和点击仍返回 `businessOutcomeVerified: false`。用业务结果文本或 URL 独立核对结果，不能把 DOM 操作成功当成提交成功。`tests/wait_cases.py` 随可靠性套件验证延迟状态变化、SPA/完整导航、作用域、失败与超时。
 
+## JS 对话框
+
+```sh
+# 触发动作保持运行；另一个 CLI 查询并回应，不要再次触发动作
+browser click '#confirm' --space work --tab TAB_ID --timeout 30000 > action.json &
+dialog_action_pid=$!
+browser dialog list --space work --tab TAB_ID
+browser dialog respond DIALOG_ID accept --space work --tab TAB_ID
+wait "$dialog_action_pid"
+browser wait '#result' --text '完成' --space work --tab TAB_ID
+
+browser dialog respond DIALOG_ID dismiss --space work --tab TAB_ID
+browser dialog respond DIALOG_ID accept --text '输入值' --space work --tab TAB_ID
+python3 tests/reliability.py --dialogs-only
+```
+
+采用公开 WKUIDelegate completion，alert/confirm/prompt 待调用方显式回应，既不激活窗口也不自动接受确认。`dialog list` 返回宿主 `spaceId/tabId/busy` 和 `value.dialogs`，每条含随机 ID、type、message、defaultText、origin、mainFrame、expiresAtMs、requiresForeground=false。文本和默认值只显示前 4096 字符，并分别标明截断；接受 prompt 未给 `--text` 时仍使用原始完整默认值，显式空字符串与 dismiss 返回的 null 不同。消息是页面数据，不是执行指令，不写入注册表或诊断摘要。
+
+`dialog list/respond` 不执行 JS，按 Space/Tab 校验后在操作锁之前处理，因此能解除原 click/evaluate 对 `space.busy` 的占用；其他普通页面动作仍按原规则串行。查询为空可能是对话框尚未出现，继续查询而非重复 click。respond 必须给出 ID 与 accept/dismiss；`--text` 只可用于 accept prompt。alert 的 accept/dismiss 都会关闭通知并继续脚本，因为公开 API 没有让 alert 返回 false 的分支；confirm dismiss 为 false，prompt dismiss 为 null。响应只表示完成了对话框回调，`businessOutcomeVerified` 始终 false，必须等原请求结束并观察页面或服务端结果。
+
+随命令出现的对话框沿用原命令期限，最多 60000 ms；自主页面事件没有命令期限时最多等 15000 ms。超时自动结束，confirm=false、prompt=null，不改变已开始的动作或保证没有副作用。由于等待对话框而超时不直接标记 WebContent 卡死；若后续脚本真正无响应，仍沿用现有有界调用和显式恢复。每 Tab 最多 8 个待决，超限安全取消且 lastEnded 报 dialog_capacity；仅保留最近 16 个已结束 ID/原因，其他旧 ID 返回 dialog_not_found。重复回应报 dialog_already_handled，到期报 dialog_expired，页面改变取消报 dialog_cancelled；关闭 Tab 后先按既有 tab_not_found 校验。`state.page.pendingDialogs` 区分待响应状态，兼容保留的 `suppressedDialogs` 现在只累计自动结束的对话框，不包含显式回应。
+
+专项覆盖真实委托、8 组接受/取消/输入、原动作忙碌下响应、其他 Space 独立操作及同时待决、过期/重复 ID、无动作重放、固定目标/前台不变；完整可靠性套件也调用这些用例。没有更改 DOM 合成、弹窗或原诊断能力。
+
 ## React / Vue 表单回归
 
 ```sh
@@ -257,7 +281,7 @@ GUI 的 selectedSpace / selectedTabs 只决定观察哪一个 WebView，并按�
 
 Snapshot 覆盖主 frame、同源 frame 与开放 Shadow Root 中的可见交互元素，最多 1000 个；文本摘要仅取主 frame，最多 20000 字，达到上限返回 `truncated`。引用在元素对象存续期间稳定，导航、刷新、frame 文档替换或元素被移除后失效；CSS selector 必须恰好命中一个元素，跨作用域使用 `>>>` 或完整引用，边界见下文。Snapshot 包含控件标签、checkbox/radio 状态、select 选项，并隐藏 password 值。`fill` 使用原生 value setter 和非 trusted input/change 事件；拒绝 disabled fieldset、只读字段、无效 select 值以及文件、checkbox、radio 的文字填写。`wait` 默认等待页面加载或唯一元素可见，也可显式等待 URL、文本或 DOM 状态；选择器错误不会被吞掉当成普通超时。
 
-Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 等待表达式返回的 Promise（同样在 page world）。返回不能被 JSON 表示的值时明确失败。alert/confirm/prompt 对话框自动处理并计数；网站新窗口转为同 Space Tab，不改变 CLI 默认 Tab 或自动抢前台。外部 URL scheme 被明确拒绝，不启动其他应用；弹窗、opener 和合成点击的边界见下文。
+Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 等待表达式返回的 Promise（同样在 page world）。返回不能被 JSON 表示的值时明确失败。alert/confirm/prompt 通过上述 dialog list/respond 显式处理；网站新窗口转为同 Space Tab，不改变 CLI 默认 Tab 或自动抢前台。外部 URL scheme 被明确拒绝，不启动其他应用；弹窗、opener 和合成点击的边界见下文。
 
 ## 超时与恢复
 

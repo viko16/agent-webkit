@@ -18,7 +18,8 @@ struct Request: Codable {
             "space.info":1...1, "space.delete":1...1, "tab.list":0...0, "tab.new":0...1,
             "tab.close":1...1, "tab.default":1...1, "open":1...1, "reload":0...0,
             "snapshot":0...0, "state":0...0, "evaluate":1...1, "click":1...1,
-            "fill":2...2, "screenshot":0...0, "wait":0...1, "diagnostics":0...0]
+            "fill":2...2, "screenshot":0...0, "wait":0...1, "diagnostics":0...0,
+            "dialog.list":0...0, "dialog.respond":2...2]
 
     static func allowedOptions(for command: String) -> Set<String> {
         var allowed: Set<String> = ["socket", "data-dir"]
@@ -33,6 +34,7 @@ struct Request: Codable {
         if command == "wait" { allowed.formUnion(["url", "text", "state"]) }
         if command == "screenshot" { allowed.insert("out") }
         if command == "diagnostics" { allowed.formUnion(["clear", "detail", "inspectable"]) }
+        if command == "dialog.respond" { allowed.insert("text") }
         return allowed
     }
 
@@ -41,6 +43,9 @@ struct Request: Codable {
             throw BrowserError("invalid_arguments", "未知命令或参数数量不正确：\(command)；browser help 查看用法")
         }
         let allowed = Self.allowedOptions(for: command)
+        if command == "dialog.respond", !["accept", "dismiss"].contains(args[1]) {
+            throw BrowserError("invalid_arguments", "dialog respond 的响应必须为 accept 或 dismiss")
+        }
         if let detail = options["detail"], !["on", "off"].contains(detail) {
             throw BrowserError("invalid_arguments", "--detail 支持 on 或 off")
         }
@@ -123,7 +128,7 @@ struct Options {
             i += 1
         }
         var command = positionals.isEmpty ? "help" : positionals.removeFirst()
-        if ["space", "tab"].contains(command) {
+        if ["space", "tab", "dialog"].contains(command) {
             guard !positionals.isEmpty else { throw BrowserError("invalid_arguments", "需要子命令") }
             command += "." + positionals.removeFirst()
         }
@@ -151,6 +156,8 @@ browser tab default ID --space NAME_OR_ID
 browser reload --space NAME_OR_ID [--tab ID] [--timeout 15000]
 browser snapshot|state --space NAME_OR_ID [--tab ID]
 browser diagnostics --space NAME_OR_ID [--tab ID] [--clear] [--detail on|off | --inspectable on|off]
+browser dialog list --space NAME_OR_ID [--tab ID]
+browser dialog respond ID accept|dismiss --space NAME_OR_ID [--tab ID] [--text PROMPT_VALUE]
 browser click SELECTOR_OR_REF --space NAME_OR_ID [--tab ID] [--wait-for-navigation | --wait-for-popup] [--timeout 15000]
 browser fill SELECTOR_OR_REF VALUE --space NAME_OR_ID [--tab ID]
 browser evaluate JAVASCRIPT --space NAME_OR_ID [--tab ID] [--await] [--timeout 15000]

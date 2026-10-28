@@ -41,6 +41,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     let webView: WKWebView
     let backingWindow: NSPanel
     let diagnostics: DiagnosticLog
+    let dialogs = DialogStore()
     var navigationError: Error?
     var changed: (() -> Void)?
     var statusChanged: (() -> Void)?
@@ -94,6 +95,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         webView.isInspectable = false
         backingWindow = NSPanel(contentRect: webView.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init()
+        dialogs.automaticallyDismissed = { [weak self] in self?.suppressedDialogs += 1 }
         DiagnosticRouter.shared.logs.setObject(self.diagnostics, forKey: webView)
         backingWindow.isReleasedWhenClosed = false
         backingWindow.contentView = webView
@@ -131,6 +133,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
 
     func close() {
         closed = true
+        dialogs.cancelAll(code: "tab_closed")
         webView.isInspectable = false
         diagnostics.setDetail(false)
         DiagnosticRouter.shared.logs.removeObject(forKey: webView)
@@ -154,6 +157,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     var state: [String: Any] {
         ["tabId": id.uuidString, "url": persistedURL, "title": webView.title ?? "",
          "loading": webView.isLoading, "webContentTerminated": terminated, "suppressedDialogs": suppressedDialogs,
+         "pendingDialogs": dialogs.pendingCount,
          "unresponsive": unresponsive, "lastError": navigationError.map { failure($0)["error"]! } ?? NSNull(),
          "requiresForeground": false, "tls": tls?.summary ?? TLSConfiguration.systemSummary,
          "lastTLSChallenge": tlsChallenge, "openerTabId": openerTabID?.uuidString as Any? ?? NSNull(),
@@ -182,7 +186,11 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
             let call = PendingOperation(continuation)
             pending[id] = { call.finish(.failure($0)) }
             call.arm(milliseconds: remaining) { [weak self] in
-                self?.unresponsive = true
+                if let self {
+                    let waitingForDialog = self.dialogs.hasPending || self.dialogs.expired(since: now)
+                    self.dialogs.cancelAll(code: "dialog_expired")
+                    self.unresponsive = !waitingForDialog
+                }
                 self?.diagnostics.native("operation-timeout", url: self?.webView.url,
                     error: BrowserError("timeout", ""), duration: milliseconds(from: now))
                 self?.changed?()
@@ -227,6 +235,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
 
     func load(_ url: URL) {
+        dialogs.cancelAll(code: "dialog_cancelled")
         persistedURL = url.absoluteString
         navigationError = nil; lastNavigationRejection = nil; certificateError = nil; tlsChallenge = [:]; terminated = false
         // A repeated failed load can return nil and still deliver a terminal delegate callback.
@@ -328,6 +337,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        dialogs.cancelAll(code: "dialog_cancelled")
         diagnostics.beginNavigation()
         navigationError = nil
         certificateError = nil
@@ -415,6 +425,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         terminated = true
+        dialogs.cancelAll(code: "web_content_terminated")
         let error = BrowserError("web_content_terminated", "WebContent 进程已退出；reload 可恢复页面，未提交的表单不会保留")
         navigationError = error
         diagnostics.native("web-content-terminated", url: webView.url, error: error)
@@ -459,9 +470,15 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     func webViewDidClose(_ webView: WKWebView) {
         closeRequested?()
     }
-    func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) { suppressedDialogs += 1; completionHandler() }
-    func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) { suppressedDialogs += 1; completionHandler(false) }
-    func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String, defaultText: String?, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (String?) -> Void) { suppressedDialogs += 1; completionHandler(nil) }
+    func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
+        dialogs.present(kind: "alert", message: message, origin: DiagnosticLog.origin(frame.request.url), mainFrame: frame.isMainFrame, deadline: deadline) { _, _ in completionHandler() }
+    }
+    func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
+        dialogs.present(kind: "confirm", message: message, origin: DiagnosticLog.origin(frame.request.url), mainFrame: frame.isMainFrame, deadline: deadline) { accepted, _ in completionHandler(accepted) }
+    }
+    func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String, defaultText: String?, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (String?) -> Void) {
+        dialogs.present(kind: "prompt", message: prompt, defaultText: defaultText, origin: DiagnosticLog.origin(frame.request.url), mainFrame: frame.isMainFrame, deadline: deadline) { accepted, text in completionHandler(accepted ? text : nil) }
+    }
 }
 
 @MainActor
@@ -743,10 +760,14 @@ final class BrowserModel {
         guard let space = spaces.first(where: { $0.record.id == id }) else { throw BrowserError("space_not_found", "Space 已删除") }
         if command == "space.info" { return space.summary }
         if command == "tab.list" { return space.tabs.map(\.state) }
-        if command == "state" || command == "diagnostics" {
+        if command == "state" || command == "diagnostics" || command.hasPrefix("dialog.") {
             let tabID = r.options["tab"] ?? space.record.defaultTab.uuidString
             guard let tab = space.tabs.first(where: { $0.id.uuidString.lowercased() == tabID.lowercased() }) else {
                 throw BrowserError("tab_not_found", "Space 中不存在该标签页")
+            }
+            if command.hasPrefix("dialog.") {
+                let value = command == "dialog.list" ? tab.dialogs.snapshot() : try tab.dialogs.respond(id: arg(0), action: arg(1), text: r.options["text"])
+                return ["spaceId": id.uuidString, "tabId": tab.id.uuidString, "busy": space.busy, "value": value]
             }
             if command == "diagnostics" {
                 // Reads and disabling remain available while busy, blocked or hung.

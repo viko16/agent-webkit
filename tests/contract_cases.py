@@ -22,7 +22,7 @@ def verify_offline(cli):
         assert command['resultSchema'] in definitions
         assert cli('help', *name.split('.'))['commands'] == [command]
         assert command['args']['maximum'] == len(command['args']['names'])
-    for group in ('space', 'tab'):
+    for group in ('space', 'tab', 'dialog'):
         assert {item['command'] for item in cli('help', group)['commands']} == {
             name for name in commands if name.startswith(group + '.')}
     timeout = next(option for option in commands['open']['options'] if option['name'] == 'timeout')
@@ -32,6 +32,8 @@ def verify_offline(cli):
     assert detail['enum'] == ['on', 'off'] and not detail['required']
     inspectable = next(option for option in commands['diagnostics']['options'] if option['name'] == 'inspectable')
     assert inspectable['enum'] == ['on', 'off'] and not inspectable['required']
+    assert contract['constraints']['dialog.respond']['actions'] == ['accept', 'dismiss']
+    assert {'space', 'tab', 'text'} <= {option['name'] for option in commands['dialog.respond']['options']}
     assert set(contract['exitCodes']) == {'0', '1'}
     assert {'stale_ref', 'timeout', 'space_busy', 'tab_not_found', 'operation_failed'} <= set(contract['errors'])
     for args in [('help', 'missing'), ('help', 'space', 'missing'), ('help', 'open', 'extra'),
@@ -58,6 +60,8 @@ def verify_live_contract(cli, socket_path):
     assert raw('wait', options={'space': 'work', 'url': 'x', 'text': 'y'})['error']['code'] == 'invalid_arguments'
     assert raw('diagnostics', options={'space': 'work', 'inspectable': 'yes'})['error']['code'] == 'invalid_arguments'
     assert raw('diagnostics', options={'space': 'work', 'detail': 'on', 'inspectable': 'on'})['error']['code'] == 'invalid_arguments'
+    assert raw('dialog.respond', ['unknown', 'yes'], {'space': 'work'})['error']['code'] == 'invalid_arguments'
+    assert raw('dialog.list', options={'space': 'work', 'text': 'wrong'})['error']['code'] == 'invalid_arguments'
     definitions = contract['schemas']['$defs']
     # Validate schemas against actual host results, rather than only self-consistent metadata.
     for name, result in [('status', before), ('space', cli('space', 'info', 'work')),

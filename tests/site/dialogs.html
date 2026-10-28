@@ -1,0 +1,17 @@
+<!doctype html>
+<meta charset="utf-8"><title>JavaScript dialog fixture</title>
+<button id="alert">Show alert</button>
+<button id="confirm">Show confirm</button>
+<button id="prompt">Show prompt</button>
+<output id="result">Ready</output>
+<script>
+window.dialogCalls=0;
+window.dialogResults=[];
+function record(value) {
+  window.dialogResults.push(value);
+  document.querySelector('#result').textContent=JSON.stringify(value);
+}
+document.querySelector('#alert').onclick=()=>{window.dialogCalls++;alert('Notice');record('alert-continued')};
+document.querySelector('#confirm').onclick=()=>{window.dialogCalls++;record(confirm('Confirm action'))};
+document.querySelector('#prompt').onclick=()=>{window.dialogCalls++;record(prompt('Enter value','default value'))};
+</script>

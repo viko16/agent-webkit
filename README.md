@@ -51,6 +51,8 @@ browser wait '#submit' --state enabled --space admin
 browser wait --url 'https://example.com/dashboard' --space admin
 browser diagnostics --space admin
 browser diagnostics --space admin --clear
+browser dialog list --space admin --tab '目标 Tab UUID'
+browser dialog respond '待决对话框 ID' dismiss --space admin --tab '目标 Tab UUID'
 browser screenshot --space admin --out /tmp/admin.png
 browser tab new https://example.com --space user
 browser tab list --space user
@@ -64,13 +66,15 @@ browser space delete admin
 browser shutdown
 ```
 
-所有页面命令必须指定 `--space`，支持名称或 UUID。省略 `--tab` 时使用该 Space 的固定默认标签页，与 GUI 显示哪个页面无关；`tab default` 可显式修改并持久化这个默认值。不同 Agent 使用不同 Space；同一 Space 的重叠操作返回 `space_busy`，由调用方顺序执行。`state`、`tab list` 和 `space info` 在操作进行中仍可查询。
+所有页面命令必须指定 `--space`，支持名称或 UUID。省略 `--tab` 时使用该 Space 的固定默认标签页，与 GUI 显示哪个页面无关；`tab default` 可显式修改并持久化这个默认值。不同 Agent 使用不同 Space；同一 Space 的重叠操作返回 `space_busy`，由调用方顺序执行。`state`、`tab list`、`space info` 和 `dialog list` 在操作进行中仍可查询；`dialog respond` 也可在原动作等待对话框时回应。
 
 交给 Codex / Pi 时，提供 `browser` 的路径和专属 Space 名称即可；也可直接复制窗口分享按钮给出的接管命令。让 Agent 先 snapshot，再使用返回的引用操作，并读取结果页面确认业务状态；不需要安装 MCP 服务。
 
 WebKit 操作默认超时为 15000 ms，可用 `--timeout 1–60000` 调整。`evaluate --await` 等待 Promise 返回结果。`wait SELECTOR` 等待唯一匹配的元素可见；可改用 `--text` 等待可见元素包含文本，或 `--state visible|hidden|attached|detached|enabled|disabled` 等待状态。`wait --url` 精确匹配完整 URL（包括查询和 hash），可用于 SPA 跳转；无参数 `wait` 等待文档加载完成。无效选择器、匹配多个元素和过期引用会直接报错。值以 `--` 开头时，先写选项，再用 `--` 分隔，例如 `browser fill --space user -- '#message' '--hello'`。`browser --help` 和 `browser --version` 无需启动服务。
 
 每条命令返回一行 JSON，成功为 `{"ok":true,"result":...}`，失败为 `{"ok":false,"error":{"code":...,"message":...}}`，退出码分别为 0 / 1。页面结果包含 Space ID、Tab ID、URL、加载状态和代理限制。`click` / `fill` 使用 DOM 合成事件，返回 `method: "dom"`、`nativeVerified: false`；不提供原生输入或剪贴板模拟。
+
+JS alert/confirm/prompt 会保持待决，不弹出原生窗口或默默接受确认。让触发动作的 CLI 保持运行，再用另一个 CLI 对同一 Space/Tab 查询并以 ID `accept` 或 `dismiss`；接受 prompt 时可带 `--text`，省略则使用页面默认值。响应后仍需核对原动作和业务结果；超时会安全取消，不能据此重试提交。流程见[开发说明](docs/DEVELOPMENT.md#js-对话框)。
 
 `fill` 支持输入框、textarea、select，以及 contenteditable 的整段纯文本替换（会移除原有格式）。已验证 React/Vue 受控表单和动态重渲染；禁用、readOnly、`aria-readonly` 控件会被拒绝，旧节点引用失效后须重新 snapshot。填写会发送非可信 input/change 事件，不模拟逐键输入、输入法、光标或复杂编辑器协议。`businessOutcomeVerified: false` 表示操作返回成功仍需用 `wait --text/--url` 等检查业务结果。
 

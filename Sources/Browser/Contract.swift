@@ -7,7 +7,7 @@ enum CLIContract {
         "space.info": ["NAME_OR_ID"], "space.delete": ["NAME_OR_ID"],
         "tab.new": ["URL"], "tab.close": ["ID"], "tab.default": ["ID"],
         "open": ["URL"], "evaluate": ["JAVASCRIPT"], "click": ["SELECTOR_OR_REF"],
-        "fill": ["SELECTOR_OR_REF", "VALUE"], "wait": ["SELECTOR_OR_REF"]
+        "fill": ["SELECTOR_OR_REF", "VALUE"], "wait": ["SELECTOR_OR_REF"], "dialog.respond": ["ID", "ACTION"]
     ]
     private static let optionDetails: [String: [String: Any]] = [
         "socket": ["type": "string", "description": "Unix socket path; overrides BROWSER_SOCKET"],
@@ -23,7 +23,7 @@ enum CLIContract {
         "wait-for-navigation": ["type": "flag", "description": "Wait for navigation after one DOM click; not business verification"],
         "wait-for-popup": ["type": "flag", "description": "Wait for same-Space popup; value.newTabId identifies it, not login success"],
         "url": ["type": "string", "description": "Nonempty exact location.href, including SPA query/hash"],
-        "text": ["type": "string", "description": "Nonempty visible innerText substring; body when selector omitted"],
+        "text": ["type": "string", "description": "wait: nonempty visible innerText substring; dialog respond: prompt input (empty allowed), only with accept"],
         "state": ["type": "string", "enum": ["visible", "hidden", "attached", "detached", "enabled", "disabled"]],
         "clear": ["type": "flag", "description": "Clear received in-memory diagnostics before returning the snapshot"],
         "detail": ["type": "string", "enum": ["on", "off"], "description": "Opt-in bounded redacted details for this Tab's current document, at most 300000 ms; navigation/restart resets; off erases retained details"],
@@ -80,6 +80,8 @@ enum CLIContract {
         case "tab.close": result = "tabClose"
         case "tab.default": result = "tabDefault"
         case "diagnostics": result = "diagnostics"
+        case "dialog.list": result = "dialogs"
+        case "dialog.respond": result = "dialogResponse"
         default: result = "page"
         }
         return ["command": name, "usage": synopsis(name),
@@ -106,6 +108,7 @@ enum CLIContract {
                 "click": ["mutuallyExclusive": [["wait-for-navigation", "wait-for-popup"]]],
                 "space.create": ["mutuallyExclusive": [["ca-cert", "ignore-certificate-errors"]]],
                 "diagnostics": ["mutuallyExclusive": [["detail", "inspectable"]]],
+                "dialog.respond": ["actions": ["accept", "dismiss"], "textRequires": ["type": "prompt", "action": "accept"]],
                 "wait": ["mutuallyExclusive": [["url", "text", "state"]],
                          "urlRequiresNoSelector": true, "stateRequiresSelector": true],
                 "cli": ["literalSeparator": "--", "duplicateOptions": "rejected", "help": "browser help [COMMAND [SUBCOMMAND]]"]
@@ -128,7 +131,11 @@ enum CLIContract {
                     "tabs": ["type": "array", "items": tab], "page": page,
                     "deletion": object(["deleted", "spaceId", "websiteDataRemoved", "dataStoreRemoved", "cleanupPending"]),
                     "tabClose": object(["closed", "defaultTabId"]), "tabDefault": object(["defaultTabId"]),
-                    "diagnostics": object(["spaceId", "tabId", "busy", "networkBlocked", "networkErrorCode", "value"])
+                    "diagnostics": object(["spaceId", "tabId", "busy", "networkBlocked", "networkErrorCode", "value"]),
+                    "dialogs": object(["spaceId", "tabId", "busy", "value"], ["value": object(["dialogs", "limit"], [
+                        "dialogs": ["type": "array", "items": object(["id", "type", "message", "defaultText", "expiresAtMs", "origin", "mainFrame"], [
+                            "type": ["enum": ["alert", "confirm", "prompt"]]])]])]),
+                    "dialogResponse": object(["spaceId", "tabId", "busy", "value"], ["value": object(["id", "type", "action", "handled", "businessOutcomeVerified"])])
                 ]
             ],
             "errors": errorCodes,
@@ -144,14 +151,15 @@ enum CLIContract {
                 "screenshot": "viewport PNG; background operation; no foreground activation",
                 "recovery": "never automatically replay actions after timeout; inspect state/diagnostics; explicit reload/open can replace unresponsive view retaining Tab ID and Space data",
                 "proxy": "direct rejects enabled system proxy; no VPN/content-filter bypass; loopback routing unverified; routeVerified=false",
-                "unsupported": "native keyboard/mouse; file chooser/upload/download control; JavaScript dialog control; complete DevTools network trace"
+                "dialogs": "explicit per-Space/Tab list/respond; no automatic confirm acceptance; queries and replies work while busy; deadlines dismiss safely; no foreground activation",
+                "unsupported": "native keyboard/mouse; file chooser/upload/download control; complete DevTools network trace"
             ]
         ]
     }
 
     private static let errorCodes = [
         "already_running", "certificate_rejected", "data_removal_failed", "data_removal_timeout",
-        "direct_system_proxy_conflict", "diagnostics_unavailable", "element_not_actionable", "element_not_editable", "element_readonly",
+        "direct_system_proxy_conflict", "diagnostics_unavailable", "dialog_not_found", "dialog_already_handled", "dialog_expired", "dialog_cancelled", "dialog_capacity", "element_not_actionable", "element_not_editable", "element_readonly",
         "invalid_arguments", "invalid_certificate", "invalid_json_result", "invalid_name", "invalid_option",
         "invalid_proxy", "invalid_response", "invalid_selector", "invalid_timeout", "invalid_url", "ipc_error",
         "javascript_error", "last_tab", "message_too_large", "not_ready", "operation_failed", "png_failed",

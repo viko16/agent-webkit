@@ -18,6 +18,7 @@ from diagnostic_cases import verify_diagnostics
 from detailed_diagnostic_cases import verify_detailed_diagnostics
 from store_cleanup_cases import verify_pending_store_only
 from contract_cases import verify_offline, verify_live_contract
+from dialog_cases import verify_dialogs
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -27,9 +28,10 @@ def main():
     parser.add_argument('--forms', action='store_true', help='Run real React/Vue fixtures (npm ci --prefix tests/forms)')
     parser.add_argument('--diagnostics-only', action='store_true', help='Run only the diagnostic regression cases')
     parser.add_argument('--cleanup-only', action='store_true', help='Run only pending-store restoration with no live Spaces')
+    parser.add_argument('--dialogs-only', action='store_true', help='Run only real JavaScript dialog cases')
     args = parser.parse_args()
-    if args.cleanup_only and (args.forms or args.diagnostics_only):
-        parser.error('--cleanup-only cannot be combined with --forms or --diagnostics-only')
+    if sum([args.cleanup_only, args.diagnostics_only, args.dialogs_only]) > 1 or (args.forms and (args.cleanup_only or args.dialogs_only)):
+        parser.error('专项选项不能互相混用；--dialogs-only / --cleanup-only 不与 --forms 混用')
     out = ROOT / '.artifacts' / time.strftime('reliability-%Y%m%d-%H%M%S')
     out.mkdir(parents=True)
     state = Path(tempfile.mkdtemp(prefix='awr-'))
@@ -81,6 +83,12 @@ def main():
         verify_offline(cli)
         cli('open', 'https://example.com', '--space', 'work', '--proxy', 'direct', error='invalid_arguments')
         start()
+        if args.dialogs_only:
+            checks.append(verify_dialogs(cli, base, out))
+            report = dict(ok=True, checks=checks, artifacts=str(out))
+            (out / 'report.json').write_text(json.dumps(report, indent=2))
+            print(json.dumps(report))
+            return
         if args.diagnostics_only:
             checks.append(verify_diagnostics(cli, base, out, lambda: (stop(), start())))
             checks.append(verify_detailed_diagnostics(cli, base, out, lambda: (stop(), start()), verify_expiry=True))
@@ -137,6 +145,7 @@ def main():
         checks.append(verify_popups(popup_cli, base, lambda: (stop(), start())))
         checks.append(verify_contexts(cli, base))
         checks.append(verify_waits(cli, base))
+        checks.append(verify_dialogs(cli, base, out))
         checks.append(verify_diagnostics(cli, base, out, lambda: (stop(), start())))
         checks.append(verify_detailed_diagnostics(cli, base, out, lambda: (stop(), start())))
         if args.forms:
