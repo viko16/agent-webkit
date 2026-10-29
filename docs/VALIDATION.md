@@ -1,5 +1,15 @@
 # 实际验收记录
 
+## P2 / #8：元素截图（2026-10-29）
+
+`screenshot --element SELECTOR_OR_REF` 滚入视口，换算同源 iframe 坐标并裁剪到各层容器/视口，输出 mode/range 与 PNG 像素尺寸，还原各层滚动；普通视口路径保留。超出可见范围的元素只返回实际裁剪区，不展开嵌套滚动容器；变换或 zoom 影响 iframe/裁剪链时明确拒绝，不把不可靠范围当成功。
+
+Debug [完整可靠性/表单](../.artifacts/reliability-20261029-105547/report.json)通过，原全部能力、六次框架提交和16项计时保留。最终[截图专项](../.artifacts/reliability-20261029-105843/report.json)通过真实 PNG 通道核查主文档、同源 iframe、open Shadow Root、overflow 裁剪；含非零主文档/frame/容器双轴滚动还原、不可见/零尺寸/选择器错误、变换拒绝、写入失败、25ms期限、非默认Tab/Space隔离和重启旧引用。32命令离线契约通过，未激活观察窗口。
+
+保留开发失败：`.artifacts/reliability-20261029-104956/`、`105035/` 的颜色断言来自测试探针重复转换 calibrated RGB 标签；原始PNG通道实际为220/30/40，改为读取编码通道后保留原精确颜色断言。`105317/` 的“零尺寸”button仍受默认padding影响，修正fixture实际为零后通过。没有改截图颜色或放宽像素断言。
+
+以 `495cedb` 为基准独立审查：Standards 2项P2（外层变换裁剪、Skill旧边界），Spec 1项P2（同一裁剪错误）。已检查完整变换祖先链、同步Skill，并新增真实回归，经原两轴审查者复核关闭。任意遮挡、动画/页面自主变化不承诺稳定；超时或进程未响应可能无法还原滚动，错误不写成功文件。整页截图在下一独立步骤验证，#8 此时仍open。
+
 ## P1 / #6：后台 CLI 上传与最终可靠性（2026-10-29）
 
 `upload` 读取显式本机绝对普通文件，最多 16 个、总计 4 MiB，通过原隔离 world 和同一目标解析设置 DataTransfer/File；不修改原文件、不自动提交。输出明确 `method=dom-data-transfer`、`nativeVerified=false`、`requiresForeground=false`、`businessOutcomeVerified=false`。Skill 与帮助/契约同步；站点对合成事件或 accept 的接受仍需业务核对。

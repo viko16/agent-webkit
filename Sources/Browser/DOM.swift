@@ -147,7 +147,72 @@ enum DOM {
         }
         return {method:'dom',nativeVerified:false,businessOutcomeVerified:false,requiresForeground:false,target};
       }
-      window.__agentWebKit={snapshot,resolve,act,visible,matchesCondition};
+      let screenshotState=null;
+      function prepareScreenshot(target) {
+        const el=resolve(target);
+        if(!visible(el)) throw new Error('element_not_actionable: invisible or zero-sized screenshot target');
+        const positions=[], views=new Set();
+        for(let node=el;node;node=node.parentElement||node.getRootNode().host||node.ownerDocument.defaultView?.frameElement) {
+          if(typeof node.scrollTo==='function') positions.push({node,left:node.scrollLeft,top:node.scrollTop});
+          views.add(node.ownerDocument.defaultView);
+        }
+        const token=crypto.getRandomValues(new Uint32Array(4)).join('-');
+        screenshotState={token,el,positions,views:Array.from(views,view=>({view,left:view.scrollX,top:view.scrollY}))};
+        el.scrollIntoView({block:'center',inline:'center',behavior:'instant'});
+        return token;
+      }
+      function screenshotBounds(token) {
+        if(screenshotState?.token!==token||!connected(screenshotState.el)) throw new Error('stale_ref: screenshot document changed');
+        const el=screenshotState.el;
+        if(!visible(el)) throw new Error('element_not_actionable: screenshot target became invisible');
+        const original=el.getBoundingClientRect();
+        let rect={x:original.x,y:original.y,width:original.width,height:original.height},clipped=false;
+        function intersect(x,y,width,height,clipX=true,clipY=true) {
+          const left=clipX?Math.max(rect.x,x):rect.x, top=clipY?Math.max(rect.y,y):rect.y;
+          const right=clipX?Math.min(rect.x+rect.width,x+width):rect.x+rect.width;
+          const bottom=clipY?Math.min(rect.y+rect.height,y+height):rect.y+rect.height;
+          clipped ||= left!==rect.x||top!==rect.y||right!==rect.x+rect.width||bottom!==rect.y+rect.height;
+          rect={x:left,y:top,width:right-left,height:bottom-top};
+        }
+        let node=el;
+        function requireUntransformedAncestors(start) {
+          for(let parent=start;parent;parent=parent.parentElement||parent.getRootNode().host) {
+            const style=parent.ownerDocument.defaultView.getComputedStyle(parent);
+            if(style.transform!=='none'||![undefined,'normal','1'].includes(style.zoom)) throw new Error('unsupported_screenshot_geometry: transformed clipping or iframe ancestor');
+          }
+        }
+        while(node) {
+          const view=node.ownerDocument.defaultView;
+          for(let parent=node.parentElement||node.getRootNode().host;parent;parent=parent.parentElement||parent.getRootNode().host) {
+            const style=view.getComputedStyle(parent), box=parent.getBoundingClientRect();
+            const clipX=['hidden','clip','auto','scroll'].includes(style.overflowX),clipY=['hidden','clip','auto','scroll'].includes(style.overflowY);
+            if(clipX||clipY) {
+              requireUntransformedAncestors(parent);
+              intersect(box.x+parent.clientLeft,box.y+parent.clientTop,parent.clientWidth,parent.clientHeight,clipX,clipY);
+            }
+          }
+          intersect(0,0,view.innerWidth,view.innerHeight);
+          if(view===window) break;
+          const frame=view.frameElement;
+          if(!frame) throw new Error('unsupported_context: inaccessible screenshot frame');
+          requireUntransformedAncestors(frame);
+          const box=frame.getBoundingClientRect();
+          intersect(0,0,frame.clientWidth,frame.clientHeight);
+          rect.x+=box.x+frame.clientLeft;rect.y+=box.y+frame.clientTop;
+          node=frame;
+        }
+        if(![rect.x,rect.y,rect.width,rect.height].every(Number.isFinite)||rect.width<=0||rect.height<=0) throw new Error('element_not_actionable: screenshot target is fully clipped');
+        return {...rect,clipped,viewportWidth:innerWidth,viewportHeight:innerHeight};
+      }
+      function restoreScreenshot(token) {
+        if(screenshotState?.token!==token) return false;
+        const state=screenshotState;screenshotState=null;
+        for(const entry of state.positions) entry.node.scrollTo({left:entry.left,top:entry.top,behavior:'instant'});
+        for(const entry of state.views) entry.view.scrollTo({left:entry.left,top:entry.top,behavior:'instant'});
+        return state.positions.every(e=>Math.abs(e.node.scrollLeft-e.left)<1&&Math.abs(e.node.scrollTop-e.top)<1)&&
+          state.views.every(e=>Math.abs(e.view.scrollX-e.left)<1&&Math.abs(e.view.scrollY-e.top)<1);
+      }
+      window.__agentWebKit={snapshot,resolve,act,visible,matchesCondition,prepareScreenshot,screenshotBounds,restoreScreenshot};
     })();
     """#
 }

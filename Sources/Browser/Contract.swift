@@ -22,6 +22,7 @@ enum CLIContract {
         "ca-cert": ["type": "string", "description": "Single PEM/DER CA path; preserves system trust checks"],
         "ignore-certificate-errors": ["type": "flag", "description": "Explicit development-only TLS bypass for this Space"],
         "out": ["type": "string", "description": "PNG output path on daemon host"],
+        "element": ["type": "string", "description": "Unique selector or full snapshot ref; scroll into view, crop visible border box through same-origin frame/open shadow scopes, then restore scrolling; unsupported frame transforms reject"],
         "all": ["type": "flag", "description": "Required explicit intent to stop the shared daemon and every Space; preview status.shutdownImpact first"],
         "await": ["type": "flag", "description": "Await the evaluated Promise within timeout"],
         "wait-for-navigation": ["type": "flag", "description": "Wait for navigation after one DOM click; not business verification"],
@@ -161,7 +162,7 @@ enum CLIContract {
                 "lifecycle": "space suspend releases WebViews, retaining its data-store coordinator and IDs/URLs/website data/proxy/TLS; suspended Spaces restart without WebViews; resume starts loading; page actions resume on demand; state/list/info never wake; JS memory is lost",
                 "input": "DOM synthetic; nativeVerified=false; businessOutcomeVerified=false",
                 "snapshot": "same-origin frames and open shadow roots; cross-origin frames and closed roots unsupported",
-                "screenshot": "viewport PNG; background operation; no foreground activation",
+                "screenshot": "viewport or --element PNG; mode/range and pixel dimensions; element scrolls and restores, clips to viewport/scroll containers; same-origin frames/open shadow roots; no foreground activation",
                 "recovery": "never automatically replay actions after timeout; inspect state/diagnostics; explicit reload/open can replace unresponsive view retaining Tab ID and Space data",
                 "proxy": "direct rejects enabled system proxy; no VPN/content-filter bypass; loopback routing unverified; routeVerified=false",
                 "dialogs": "explicit per-Space/Tab list/respond; no automatic confirm acceptance; queries and replies work while busy; deadlines dismiss safely; no foreground activation",
@@ -175,7 +176,7 @@ enum CLIContract {
 
     private static let errorCodes = [
         "already_running", "certificate_rejected", "data_removal_failed", "data_removal_timeout", "download_not_found", "download_failed",
-        "file_unreadable", "upload_too_large", "unsupported_upload_target", "upload_multiple_not_allowed", "upload_unavailable",
+        "file_unreadable", "upload_too_large", "unsupported_upload_target", "upload_multiple_not_allowed", "upload_unavailable", "unsupported_screenshot_geometry", "screenshot_changed",
         "direct_system_proxy_conflict", "diagnostics_unavailable", "dialog_not_found", "dialog_already_handled", "dialog_expired", "dialog_cancelled", "dialog_capacity", "element_not_actionable", "element_not_editable", "element_readonly",
         "invalid_arguments", "invalid_certificate", "invalid_json_result", "invalid_name", "invalid_option",
         "invalid_proxy", "invalid_response", "invalid_selector", "invalid_timeout", "invalid_url", "ipc_error",

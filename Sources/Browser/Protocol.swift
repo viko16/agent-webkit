@@ -33,7 +33,7 @@ struct Request: Codable {
         if command == "click" { allowed.formUnion(["wait-for-navigation", "wait-for-popup"]) }
         if command == "evaluate" { allowed.insert("await") }
         if command == "wait" { allowed.formUnion(["url", "text", "state"]) }
-        if command == "screenshot" { allowed.insert("out") }
+        if command == "screenshot" { allowed.formUnion(["out", "element"]) }
         if command == "shutdown" { allowed.insert("all") }
         if command == "download.wait" { allowed.insert("timeout") }
         if command == "upload" { allowed.insert("timeout") }
@@ -115,7 +115,7 @@ struct Options {
         var options: [String: String] = [:]
         var i = 0
         var literal = false
-        let allowed = Set(["space", "tab", "proxy", "ca-cert", "out", "timeout", "socket", "data-dir", "url", "text", "state", "detail", "inspectable"])
+        let allowed = Set(["space", "tab", "proxy", "ca-cert", "out", "timeout", "socket", "data-dir", "url", "text", "state", "detail", "inspectable", "element"])
         while i < arguments.count {
             let arg = arguments[i]
             if arg == "--", !literal { literal = true; i += 1; continue }
@@ -172,7 +172,7 @@ browser upload SELECTOR_OR_REF FILE_PATH [FILE_PATH ...] --space NAME_OR_ID [--t
 browser click SELECTOR_OR_REF --space NAME_OR_ID [--tab ID] [--wait-for-navigation | --wait-for-popup] [--timeout 15000]
 browser fill SELECTOR_OR_REF VALUE --space NAME_OR_ID [--tab ID]
 browser evaluate JAVASCRIPT --space NAME_OR_ID [--tab ID] [--await] [--timeout 15000]
-browser screenshot --space NAME_OR_ID [--tab ID] --out PATH
+browser screenshot --space NAME_OR_ID [--tab ID] --out PATH [--element SELECTOR_OR_REF]
 browser wait [SELECTOR_OR_REF] --space NAME_OR_ID [--tab ID] [--timeout 15000]
 browser wait --url EXACT_URL --space NAME_OR_ID
 browser wait [SELECTOR_OR_REF] --text TEXT --space NAME_OR_ID

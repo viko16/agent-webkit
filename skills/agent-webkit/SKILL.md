@@ -54,7 +54,7 @@ browser snapshot --space SPACE_ID --tab TAB_ID
 
 下载动作只触发一次，再对同一 Space/Tab 查询 `download list`，按返回 ID `download wait` 或显式 `download cancel`。等待超时原下载仍可能继续；仅 completed 的 path 是完成结果，失败或取消须读原因。已完成文件跨关闭/删除/重启保留，内存 ID 不恢复。
 
-原生文件面板需要用户在前台目标窗口操作，后台返回 requires_foreground；可信原生键鼠仍不可用。遇到站点拒绝合成上传、验证码、MFA 或必须人工登录时，说明具体阻塞，请用户在观察窗口接管，完成后继续读取原 Tab。后台 screenshot 仅视口；任何确需前台的人工作业要明确说明，普通 CLI 不激活应用。
+原生文件面板需要用户在前台目标窗口操作，后台返回 requires_foreground；可信原生键鼠仍不可用。遇到站点拒绝合成上传、验证码、MFA 或必须人工登录时，说明具体阻塞，请用户在观察窗口接管，完成后继续读取原 Tab。screenshot 默认视口，可用 --element SELECTOR_OR_REF 截取元素的可见裁剪范围并还原滚动，核对 mode/range 和像素尺寸；任何确需前台的人工作业要明确说明，普通 CLI 不激活应用。
 
 代理和 TLS 按 Space 配置：direct 遇启用的系统代理会拒绝运行，不能保证绕过 VPN/内容过滤器；loopback 请求不承诺走代理。不得替用户修改系统代理、安装 CA 或自动降级证书校验。需要变更策略时说明原因并遵循用户选择。
 

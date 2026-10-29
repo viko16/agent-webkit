@@ -214,7 +214,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
                 if let error {
                     let nsError = error as NSError
                     if let message = nsError.userInfo["WKJavaScriptExceptionMessage"] as? String {
-                        let codes = ["stale_ref", "selector_count", "invalid_selector", "unsupported_context", "element_not_actionable", "element_readonly", "unsupported_fill_type", "element_not_editable", "invalid_option", "unsupported_upload_target", "upload_multiple_not_allowed", "upload_unavailable"]
+                        let codes = ["stale_ref", "selector_count", "invalid_selector", "unsupported_context", "element_not_actionable", "element_readonly", "unsupported_fill_type", "element_not_editable", "invalid_option", "unsupported_upload_target", "upload_multiple_not_allowed", "upload_unavailable", "unsupported_screenshot_geometry"]
                         let code = codes.first { message.contains($0) } ?? "javascript_error"
                         complete(.failure(BrowserError(code, message)))
                     } else { complete(.failure(error)) }
@@ -323,23 +323,60 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         throw BrowserError("timeout", "等待页面条件超时（\(timeout) ms）")
     }
 
-    func screenshot(path: String) async throws -> [String: Any] {
+    func screenshot(path: String, element: String? = nil) async throws -> [String: Any] {
         let configuration = WKSnapshotConfiguration()
         configuration.rect = webView.bounds
-        let image: NSImage = try await perform("takeSnapshot") { complete in
-            webView.takeSnapshot(with: configuration) { image, error in
-                if let error { complete(.failure(error)) }
-                else if let image { complete(.success(image)) }
-                else { complete(.failure(BrowserError("snapshot_failed", "WebKit 未返回图像"))) }
+        var token: String?
+        var range: [String: Any] = ["x": 0, "y": 0, "width": webView.bounds.width, "height": webView.bounds.height, "coordinateSpace": "view-points"]
+        func restore() async throws {
+            guard let current = token else { return }
+            token = nil
+            let previousDeadline = deadline
+            deadline = monotonicNow() + 1_000_000_000
+            defer { deadline = previousDeadline }
+            guard try await runJS("window.__agentWebKit.restoreScreenshot(\(try quoteJS(current)))", world: DOM.world) as? Bool == true else {
+                throw BrowserError("screenshot_changed", "截图期间页面改变，未能还原全部滚动位置")
             }
         }
-        guard let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
-              let data = bitmap.representation(using: .png, properties: [:]) else {
-            throw BrowserError("png_failed", "无法编码 PNG")
+        do {
+            if let element {
+                guard let current = try await runJS("window.__agentWebKit.prepareScreenshot(\(try quoteJS(element)))", world: DOM.world) as? String else {
+                    throw BrowserError("snapshot_failed", "无法准备元素截图")
+                }
+                token = current
+                try await Task.sleep(nanoseconds: 50_000_000)
+                guard let bounds = try await runJS("window.__agentWebKit.screenshotBounds(\(try quoteJS(current)))", world: DOM.world) as? [String: Any],
+                      let x = bounds["x"] as? Double, let y = bounds["y"] as? Double,
+                      let width = bounds["width"] as? Double, let height = bounds["height"] as? Double,
+                      let viewportWidth = bounds["viewportWidth"] as? Double, let viewportHeight = bounds["viewportHeight"] as? Double,
+                      viewportWidth > 0, viewportHeight > 0 else { throw BrowserError("snapshot_failed", "无效元素截图范围") }
+                let scaleX = webView.bounds.width / viewportWidth, scaleY = webView.bounds.height / viewportHeight
+                configuration.rect = CGRect(x: x * scaleX, y: y * scaleY, width: width * scaleX, height: height * scaleY).intersection(webView.bounds)
+                guard !configuration.rect.isEmpty else { throw BrowserError("element_not_actionable", "元素完全位于可截图范围之外") }
+                range = ["x": x, "y": y, "width": width, "height": height, "coordinateSpace": "main-viewport-css", "clipped": bounds["clipped"] ?? false]
+            }
+            let image: NSImage = try await perform("takeSnapshot") { complete in
+                webView.takeSnapshot(with: configuration) { image, error in
+                    if let error { complete(.failure(error)) }
+                    else if let image { complete(.success(image)) }
+                    else { complete(.failure(BrowserError("snapshot_failed", "WebKit 未返回图像"))) }
+                }
+            }
+            guard let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
+                  bitmap.pixelsWide > 0, bitmap.pixelsHigh > 0,
+                  let data = bitmap.representation(using: .png, properties: [:]) else {
+                throw BrowserError("png_failed", "无法编码 PNG")
+            }
+            try await restore()
+            let url = URL(fileURLWithPath: path)
+            try data.write(to: url, options: .atomic)
+            return ["path": url.path, "width": bitmap.pixelsWide, "height": bitmap.pixelsHigh, "requiresForeground": false,
+                    "mode": element == nil ? "viewport" : "element", "range": range, "scrollRestored": true]
+        } catch let originalError {
+            do { try await restore() }
+            catch { throw BrowserError((originalError as? BrowserError)?.code ?? "snapshot_failed", "\(originalError.localizedDescription)；滚动还原未完成：\(error.localizedDescription)") }
+            throw originalError
         }
-        let url = URL(fileURLWithPath: path)
-        try data.write(to: url, options: .atomic)
-        return ["path": url.path, "width": bitmap.pixelsWide, "height": bitmap.pixelsHigh, "requiresForeground": false]
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
@@ -790,7 +827,7 @@ final class BrowserModel {
                     "pendingStoreCleanup": records.filter(\.deleting).count,
                     "blockedSpaces": spaces.filter { $0.networkError != nil }.map { $0.record.id.uuidString },
                     "systemProxy": systemProxyState(), "frontmostPid": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1,
-                    "capabilities": ["input":"dom-synthetic", "snapshot":"same-origin-frames-and-open-shadow-roots", "screenshot":"viewport", "foregroundRequired":false],
+                    "capabilities": ["input":"dom-synthetic", "snapshot":"same-origin-frames-and-open-shadow-roots", "screenshot":"viewport", "screenshotModes":["viewport", "element"], "foregroundRequired":false],
                     "directPolicy":"reject-enabled-system-proxy; no VPN/content-filter bypass guarantee"] as [String: Any]
         }
         if command == "shutdown" {
@@ -1012,7 +1049,7 @@ final class BrowserModel {
             try await tab.wait(selector: r.args.first, timeout: timeout, state: r.options["state"] ?? "visible", text: r.options["text"], url: r.options["url"])
         case "screenshot":
             guard let path = r.options["out"] else { throw BrowserError("invalid_arguments", "截图需要 --out PATH") }
-            value = try await tab.screenshot(path: path)
+            value = try await tab.screenshot(path: path, element: r.options["element"])
         case "upload": value = try await tab.upload(target: arg(0), paths: Array(r.args.dropFirst()))
         default: throw BrowserError("unknown_command", "未知命令")
         }

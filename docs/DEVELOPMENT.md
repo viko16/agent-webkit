@@ -363,6 +363,14 @@ Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 
 
 手动 GUI 回归可运行 `python3 tests/ui_fixture.py --conflict`。它复制生成的应用并使用独立测试 Bundle ID、数据目录和本地页面，不干扰已打开的用户应用；输出 `fixture.json` 标明 socket、代理设置文件和 URL。解除测试设置（将该文件写为 `{}`）后点击重新加载，检查 Direct 恢复；在页面点击 Require trusted click、切换新 Tab 并点击 Send result and close，检查回调和关闭。终端按 Enter 清理测试 Space 并退出。这个人工测试工具不会操作系统代理。
 
+## 元素截图
+
+`screenshot --element SELECTOR_OR_REF --space NAME --tab ID --out PATH` 复用隔离 world 的唯一选择器、完整引用及同源 frame/open Shadow Root 作用域。先滚入视口，再把元素 border box 转换为主视口坐标，按各层 iframe、overflow 容器和主视口裁剪；截图后恢复原各层滚动位置。不展开嵌套滚动容器，不截取超出可见裁剪区的部分，不保证未被其他元素遮挡。
+
+成功保留 path/width/height/requiresForeground，新增 `mode: viewport|element`、`range` 和 `scrollRestored`；width/height 是 PNG 像素，元素 range 为 main-viewport-css，视口 range 为 view-points。像素比例由 WebKit 决定，不把 CSS 尺寸当成像素尺寸。不可见/零尺寸/完全裁剪返回 element_not_actionable；frame 或裁剪祖先的变换/zoom 无法可靠转换时返回 unsupported_screenshot_geometry；还原受页面变化阻碍则报 screenshot_changed，不写成功文件。错误或期限后仍须观察页面，未响应时可能无法还原滚动。
+
+`python3 tests/reliability.py --screenshots-only` 通过真实 PNG 像素检查定位和裁剪，而非只检查截图尺寸；也覆盖错误、滚动还原、目标隔离和重启。无 --element 的既有视口路径保留，普通截图不会激活观察窗口。
+
 ## DOM bridge 隔离
 
 `snapshot/click/fill/wait` 的脚本注入与调用统一使用命名 `WKContentWorld`（`AgentWebKit.DOM`），不注册跨 world 消息处理器。`evaluate` 和 `evaluate --await` 明确留在 `.page`，可读取网页全局变量；等待 readyState 也在隔离 world 执行。

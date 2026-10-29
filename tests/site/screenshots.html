@@ -1,0 +1,14 @@
+<!doctype html><meta charset="utf-8"><title>Screenshot geometry</title>
+<style>
+html,body{margin:0;padding:0;background:white} *{box-sizing:border-box} button{appearance:none}
+#above{height:1100px} #target{width:180px;height:100px;background:rgb(220,30,40);display:block;border:0;padding:0}
+#scroller{width:140px;height:80px;overflow:hidden;margin:30px;border:4px solid black}
+#wide{width:260px;height:160px;background:rgb(20,160,70);display:block;border:0}
+iframe{width:300px;height:200px;border:7px solid black;margin:30px}
+#hidden{display:none} #zero{display:block;width:0;height:0;min-width:0;min-height:0;padding:0;border:0;font-size:0} #tail{height:1000px}
+</style>
+<div id="above"></div><button id="target" aria-label="Red target"></button>
+<div id="scroller"><button id="wide" aria-label="Clipped green"></button></div>
+<iframe id="frame" src="/screenshots-frame"></iframe>
+<div id="shadow"></div><button id="hidden">Hidden</button><button id="zero"></button><div id="tail"></div>
+<script>document.querySelector('#shadow').attachShadow({mode:'open'}).innerHTML='<button aria-label="Blue shadow" style="display:block;width:120px;height:60px;background:rgb(30,60,220);border:0"></button>';</script>

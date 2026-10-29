@@ -38,6 +38,7 @@ def verify_offline(cli):
     shutdown_flag = next(option for option in commands['shutdown']['options'] if option['name'] == 'all')
     assert shutdown_flag['required'] and shutdown_flag['type'] == 'flag' and shutdown_flag['ipcValue'] == 'true'
     assert commands['shutdown']['usage'] == 'browser shutdown --all'
+    assert next(option for option in commands['screenshot']['options'] if option['name'] == 'element')['type'] == 'string'
     assert {'stale_ref', 'timeout', 'space_busy', 'tab_not_found', 'operation_failed'} <= set(contract['errors'])
     for args in [('help', 'missing'), ('help', 'space', 'missing'), ('help', 'open', 'extra'),
                  ('capabilities', 'extra'), ('capabilities', '--space', 'work'), ('help', '--tab', 'id'),
@@ -66,6 +67,7 @@ def verify_live_contract(cli, socket_path):
     assert raw('diagnostics', options={'space': 'work', 'detail': 'on', 'inspectable': 'on'})['error']['code'] == 'invalid_arguments'
     assert raw('dialog.respond', ['unknown', 'yes'], {'space': 'work'})['error']['code'] == 'invalid_arguments'
     assert raw('dialog.list', options={'space': 'work', 'text': 'wrong'})['error']['code'] == 'invalid_arguments'
+    assert raw('snapshot', options={'space': 'work', 'element': '#message'})['error']['code'] == 'invalid_arguments'
     for options in ({}, {'all': 'false'}, {'all': 'yes'}, {'all': 'true', 'tab': 'wrong'}):
         assert raw('shutdown', options=options)['error']['code'] == 'invalid_arguments'
     cli('shutdown', error='invalid_arguments')
