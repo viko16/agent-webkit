@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -27,6 +28,7 @@ from state_integrity_cases import verify_state_integrity
 from direct_conflict_cases import verify_proxy_summary
 from capacity_cases import verify_capacity
 from snapshot_budget_cases import verify_snapshot_budget
+from skill_workflow import cleanup_test_services, verify_cleanup
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -57,6 +59,7 @@ def main():
     daemon = None
     logs = []
     checks = []
+    report = dict(ok=False, checks=checks, artifacts=str(out))
 
     def cli(*args, error=None):
         started = time.monotonic()
@@ -108,61 +111,43 @@ def main():
             checks.append(verify_capacity(cli, base, out, start, stop))
             checks.append(verify_snapshot_budget(cli, base, out))
             report = dict(ok=True, checks=checks, artifacts=str(out))
-            (out / 'report.json').write_text(json.dumps(report, indent=2))
-            print(json.dumps(report))
             return
         if args.integrity_only:
             checks.append(verify_state_integrity(cli, base, out, start, stop, state))
             checks.append(verify_proxy_summary(cli, start, stop, out, base))
             report = dict(ok=True, checks=checks, artifacts=str(out))
-            (out / 'report.json').write_text(json.dumps(report, indent=2))
-            print(json.dumps(report))
             return
         if args.screenshots_only:
             checks.append(verify_screenshots(cli, base, out, lambda: (stop(), start())))
             checks.append(verify_fullpage(cli, base, out, lambda: (stop(), start())))
             report = dict(ok=True, checks=checks, artifacts=str(out))
-            (out / 'report.json').write_text(json.dumps(report, indent=2))
-            print(json.dumps(report))
             return
         if args.uploads_only:
             checks.append(verify_uploads(cli, base, out, site_events, site.fixture_nonce))
             report = dict(ok=True, checks=checks, artifacts=str(out))
-            (out / 'report.json').write_text(json.dumps(report, indent=2))
-            print(json.dumps(report))
             return
         if args.downloads_only:
             checks.append(verify_downloads(cli, base, out, lambda: (stop(), start()), state))
             report = dict(ok=True, checks=checks, artifacts=str(out))
-            (out / 'report.json').write_text(json.dumps(report, indent=2))
-            print(json.dumps(report))
             return
         if args.lifecycle_only:
             checks.append(verify_lifecycle(cli, base, out, lambda: (stop(), start()), state, interrupt_restart, site_events))
             report = dict(ok=True, checks=checks, artifacts=str(out))
-            (out / 'report.json').write_text(json.dumps(report, indent=2))
-            print(json.dumps(report))
             return
         if args.dialogs_only:
             checks.append(verify_dialogs(cli, base, out, lambda: (stop(), start()), state))
             report = dict(ok=True, checks=checks, artifacts=str(out))
-            (out / 'report.json').write_text(json.dumps(report, indent=2))
-            print(json.dumps(report))
             return
         if args.diagnostics_only:
             checks.append(verify_diagnostics(cli, base, out, lambda: (stop(), start())))
             checks.append(verify_detailed_diagnostics(cli, base, out, lambda: (stop(), start()), verify_expiry=True))
             report = dict(ok=True, checks=checks, artifacts=str(out))
-            (out / 'report.json').write_text(json.dumps(report, indent=2))
-            print(json.dumps(report))
             return
         checks.append(verify_pending_store_only(cli, start, stop, state, base))
         checks.append(verify_store_cleanup_failures(cli, start, stop, state, base, out))
         checks.append(verify_delete_persistence_failure(cli, start, stop, state, base))
         if args.cleanup_only:
             report = dict(ok=True, checks=checks, artifacts=str(out))
-            (out / 'report.json').write_text(json.dumps(report, indent=2))
-            print(json.dumps(report))
             return
         checks.append(verify_state_integrity(cli, base, out, start, stop, state))
         checks.append(verify_proxy_summary(cli, start, stop, out, base))
@@ -324,26 +309,37 @@ def main():
         assert json.loads((state / 'spaces.json').read_text()) == []
         checks.append('deletion after recovery clears data; same-name recreation is isolated; restart completes deferred container cleanup')
         report = {'ok': True, 'checks': checks, 'artifacts': str(out)}
+    finally:
+        original_error = sys.exc_info()[1]
+        cleanup_errors = cleanup_test_services(cli, daemon, site)
+        registry = state / 'spaces.json'
+        if not cleanup_errors and daemon is not None:
+            try:
+                if registry.exists() and json.loads(registry.read_text()):
+                    # A clean shutdown releases deferred empty Store containers.
+                    start()
+                    cleanup_errors.extend(cleanup_test_services(cli, daemon, site))
+                if not cleanup_errors:
+                    verify_cleanup(state)
+            except Exception as error:
+                cleanup_errors.append(error)
+                cleanup_errors.extend(cleanup_test_services(cli, daemon, site))
+        for log in logs:
+            try:
+                log.close()
+            except Exception as error:
+                cleanup_errors.append(error)
+        if original_error is not None:
+            report['ok'] = False
+            report['error'] = dict(type=type(original_error).__name__, message=str(original_error))
+        if cleanup_errors:
+            report['ok'] = False
+            report['cleanupErrors'] = [dict(type=type(error).__name__, message=str(error)) for error in cleanup_errors]
+            (out / 'cleanup-errors.json').write_text(json.dumps(report['cleanupErrors'], indent=2))
         (out / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2))
         print(json.dumps(report, ensure_ascii=False))
-    finally:
-        if daemon and daemon.poll() is None:
-            try:
-                remaining = [space['name'] for space in cli('space', 'list')]
-            except Exception:
-                remaining = []
-            for name in remaining:
-                try:
-                    cli('space', 'delete', name)
-                except Exception:
-                    pass
-            try:
-                stop()
-            except Exception:
-                daemon.terminate(); daemon.wait(timeout=10)
-        site.shutdown(); site.server_close()
-        for log in logs:
-            log.close()
+        if cleanup_errors and original_error is None:
+            raise RuntimeError(f'Test cleanup failed; see {out / "cleanup-errors.json"}') from cleanup_errors[0]
 
 
 if __name__ == '__main__':

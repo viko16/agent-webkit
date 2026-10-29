@@ -19,6 +19,7 @@ from independent_proxy_cases import verify_proxy_arguments, verify_independent_p
 from vite_cases import verify_vite_workflow
 from real_site_cases import verify_real_spa, verify_real_login, prepare_site_gui
 from upload_cases import verify_proxy_uploads
+from skill_workflow import cleanup_test_services, verify_cleanup
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -84,13 +85,8 @@ def main():
     report = {'out': str(out), 'stateDirectory': str(state), 'tests': {}, 'resources': {}, 'proxyKind': 'real local Whistle', 'loopbackProxyInScope': False}
     daemon = None
     logs = []
-    site, site_events = origin(args.origin_port, events=Events(out / 'origin.jsonl'))
-    port = site.server_address[1]
-    base = f'http://127.0.0.1:{port}/index.html'
-    whistle = WhistleFixture(out, port, existing=args.whistle_existing, port=args.whistle_port)
-    baseline = {p['pid'] for p in processes()}
-    launch_focus = int(subprocess.check_output(['osascript', '-l', 'JavaScript', '-e',
-        'ObjC.import("AppKit"); $.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier'], text=True).strip())
+    site = None
+    whistle = None
 
     def cli(*arguments, ok=True):
         result = subprocess.run([str(binary), *arguments], env=env, capture_output=True, text=True, timeout=80)
@@ -160,17 +156,17 @@ def main():
         if args.real_site_case in ('login', 'all'):
             report['tests']['realLogin'] = verify_real_login(cli, out, lambda: (stop(), start()), site_observer)
 
-    try:
+    def run_cases():
         if args.real_sites_only:
             start()
             real_sites()
             report['passed'] = True
-            return 0
+            return
         if args.vite_only:
             start()
             report['tests']['viteWorkflow'] = verify_vite_workflow(out, cli, lambda: (stop(), start()))
             report['passed'] = True
-            return 0
+            return
         whistle.start()
         report['proxyURL'] = whistle.url
         report['whistleRules'] = whistle.rules
@@ -179,7 +175,7 @@ def main():
         if args.uploads_only:
             report['tests']['uploads'] = verify_proxy_uploads(cli, 'https://example.com', out, site_events, site.fixture_nonce, whistle)
             report['passed'] = True
-            return 0
+            return
         if args.real_sites:
             real_sites()
         if args.vite:
@@ -188,7 +184,7 @@ def main():
             report['tests']['independentProxies'] = verify_independent_proxies(
                 out, cli, lambda: (stop(), start()), whistle, site, site_events)
             report['passed'] = True
-            return 0
+            return
         focus_before = cli('status')['frontmostPid']
         sample('empty')
         if args.direct_conflicts:
@@ -354,24 +350,57 @@ def main():
         time.sleep(3)
         sample('after_shutdown')
         report['passed'] = all(test['passed'] for test in report['tests'].values())
+    try:
+        site, site_events = origin(args.origin_port, events=Events(out / 'origin.jsonl'))
+        port = site.server_address[1]
+        base = f'http://127.0.0.1:{port}/index.html'
+        whistle = WhistleFixture(out, port, existing=args.whistle_existing, port=args.whistle_port)
+        baseline = {p['pid'] for p in processes()}
+        launch_focus = int(subprocess.check_output(['osascript', '-l', 'JavaScript', '-e',
+            'ObjC.import("AppKit"); $.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier'], text=True).strip())
+        run_cases()
     except Exception:
         report['passed'] = False
         report['failure'] = traceback.format_exc()
         print(report['failure'], flush=True)
     finally:
-        if daemon and daemon.poll() is None:
+        cleanup_errors = []
+        if site is not None:
             try:
-                # Remove test stores through the public WebKit API before stopping.
-                for space in cli('space', 'list'):
-                    cli('space', 'delete', space['id'])
-                stop()
-            except Exception:
-                daemon.terminate()
-                daemon.wait(timeout=15)
-        whistle.close()
-        site.shutdown(); site.server_close()
+                cleanup_errors.extend(cleanup_test_services(cli, daemon, site))
+            except Exception as error:
+                cleanup_errors.append(error)
+        registry = state / 'spaces.json'
+        if not cleanup_errors and registry.exists():
+            try:
+                if json.loads(registry.read_text()):
+                    # WebKit can retain an empty container until the process exits.
+                    # Let normal restoration retry this run's pending stores.
+                    try:
+                        start()
+                    finally:
+                        cleanup_errors.extend(cleanup_test_services(cli, daemon, site))
+            except Exception as error:
+                cleanup_errors.append(error)
+        if whistle is not None:
+            try:
+                whistle.close()
+            except Exception as error:
+                cleanup_errors.append(error)
         for log in logs:
-            log.close()
+            try:
+                log.close()
+            except Exception as error:
+                cleanup_errors.append(error)
+        if registry.exists() or report.get('passed'):
+            try:
+                verify_cleanup(state)
+            except Exception as error:
+                cleanup_errors.append(error)
+        if cleanup_errors:
+            report['passed'] = False
+            report['cleanupErrors'] = [dict(type=type(error).__name__, message=str(error)) for error in cleanup_errors]
+            (out / 'cleanup-errors.json').write_text(json.dumps(report['cleanupErrors'], ensure_ascii=False, indent=2))
         (out / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2))
         print(json.dumps({'passed': report.get('passed'), 'tests': {name: item['passed'] for name, item in report['tests'].items()}, 'report': str(out / 'report.json')}, ensure_ascii=False), flush=True)
     return 0 if report.get('passed') else 1
