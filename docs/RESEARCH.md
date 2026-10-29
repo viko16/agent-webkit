@@ -31,6 +31,20 @@ SDK 的 `WKWebsiteDataStore.h` 明确要求先释放使用该 Store 的 WKWebVie
 
 Apple 的 [WWDC23 Network Relay 介绍](https://developer.apple.com/videos/play/wwdc2023/10002/) 展示了同一个 `ProxyConfiguration` 用于 Network、URLSession 与 WebKit。HTTP CONNECT 支持 TCP；`allowFailover=false` 禁止代理失败后改走直连。以上说明不能替代路径验证：本机的 loopback 流量没有采用该代理。
 
+## 跨源 iframe 可行性（2026-10-29，#9）
+
+独立 spike 使用公开 `WKUserScript(forMainFrameOnly:false)`、隔离 `WKContentWorld` 的 `WKScriptMessage.frameInfo`，以及 `evaluateJavaScript(in:in:)`。复用当前 DOM.bootstrap，只在实验配置中注入所有 frame，两个 nonPersistent Store 代表 Space、三个 WKWebView 代表 Tab；同组两个 Tab 共享 Store。没有连接产品 daemon 或更改正式命令。
+
+本机 SDK 的 WKFrameInfo.h 明确其为 transient/data-only，不唯一标识跨回调的 frame；公开属性只有 mainFrame、request、securityOrigin、webView，没有父 frame 身份。实际同一文档的重复消息产生不同且不 isEqual 的对象；两个兄弟 frame 可有完全相同 URL。隔离脚本产生的随机文档代号必须和宿主 WebView/Tab 归属绑定，URL、对象地址和层数均不能单独作为稳定身份或父子路径。
+
+实测不同端口及不同主机名两种来源：原父文档 contentDocument 仍受 SOP 限制，frame 的 page world 也不能读取跨源 parent.document；原生定向调用可在子 frame 与嵌套 frame 执行现有 snapshot/ref/fill/click，实际 POST/服务端 nonce 被宿主独立核对。page world 无法访问该隔离消息处理器或覆盖隔离代号。合成事件仍不可信，动作成功仍需业务确认。第一方 LocalStorage 检查确认实验 Store 的同组共享/跨组隔离，不把它扩大为第三方 Cookie/Storage Access 兼容性。
+
+关键反例：子 frame 完整导航后，保留的旧 WKFrameInfo 可指向新文档。实验把“代号相符才动作”放在同一次定向 JS 回合，旧代号在触及 DOM 前被拒绝；frame 移除、父 frame 导航和顶层 reload 后也验证原生 invalid-frame target 或文档失效。pagehide 只记录观察，不作为可靠失效前提。
+
+定向 `callAsyncJavaScript` 也能返回隔离文档代号；保留引用的挂起Promise验证150ms宿主超时，另一Store/Tab的异步调用仍可用。未保留引用的Promise曾返回“Completion handler for function call is no longer reachable”；SDK明确允许thenable被GC后报不可达错误，不能把任意不resolve表达式都假定会等到宿主期限。宿主超时不代表取消JS。
+
+结论：公开 API 足以支持受控的跨源定向 DOM bridge，可进入后续独立正式实现；本项完成可行性验证，当前 CLI 仍返回 unsupported_context。正式范围需先确定可寻址 frame/document 目标、父子路由与有界生命周期，不自动按 URL/深度拼接现有 >>>，不扩展到 closed Shadow Root。跨源可见性/坐标、截图/上传/对话框归属、sandbox/opaque origin、进程切换、CSP/跨站跟踪策略和任意网站均未由本 spike 验证，不宣称已支持。
+
 ## 代理实验结论
 
 在 macOS 27.0.1 上测试过无域限制、空字符串匹配、显式 `localhost` / `127.0.0.1` 匹配，以及命名持久化 / 临时 Store。结果：loopback 请求均没有到达记录代理。最终配置使用空的 `matchDomains`，表示不限制域；不保留会缩小域范围的实验配置。

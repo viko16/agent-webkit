@@ -397,6 +397,14 @@ Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 
 
 遍历上限为 1000 个控件、10000 个扫描节点、16 层边界；达到上限标记 `truncated`。`tests/context_cases.py` 随 reliability 执行，覆盖嵌套作用域、同名 ID 不串用、frame 的输入事件、隐藏祖先、display:contents 宿主、跨源/closed 错误、frame 导航及宿主替换后的旧引用拒绝。尚未覆盖全部 slot/富文本组件或跨源 frame 内容。
 
+## 跨源 frame 独立实验
+
+`python3 tests/cross_origin_probe.py` 编译并签名独立测试应用，运行两个受控 HTTP origin，分别检查端口差异和 127.0.0.1/localhost 主机差异。只使用两个临时 nonPersistent Store，禁止激活窗口；不连接既有 Socket、不创建产品 Space、不修改系统代理、hosts 或 Agent 设置。需要现有 Swift/WebKit/已登录桌面会话，无新依赖。
+
+测试复用 DOM.bootstrap，原生通过 frameInfo 定向到隔离 world，核查重复 URL/嵌套、页内消息隔离、实际服务端提交、同/跨 Store 与 Tab 归属、同文档导航/节点移除、完整导航/父导航/顶层 reload/移除/关闭的旧引用拒绝；定向异步JS另验证有界Promise等待与另一Store可用。输出 `.artifacts/cross-origin-*/` 中的原生分组报告、宿主 POST 记录、构建/运行日志与综合报告；两个 fixture 服务关闭且端口不再监听后才生成成功报告。
+
+可行性结论和正式功能边界见 [RESEARCH](RESEARCH.md)。当前 CLI 的 >>> 仍限同源 frame，跨源操作仍报 unsupported_context；实验没有把 WKFrameInfo 的临时对象或 URL 当成稳定 frame ID。
+
 ## 逐步计时
 
 重新构建并重启应用，然后运行：

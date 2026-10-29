@@ -1,5 +1,25 @@
 # 实际验收记录
 
+## P2 / #9：跨源 frame 可行性（2026-10-29）
+
+独立 `tests/cross_origin_probe.py` 复用产品 DOM.bootstrap、结构化错误和有界回调，分别运行不同端口、127.0.0.1/localhost 两种受控跨源拓扑。真实WebKit的两个nonPersistent Store代表Space，其中一组共享两个WebView，共三Tab；每Tab有主文档、相同URL的两个兄弟frame和各自的跨源嵌套frame。实验不连接产品daemon，不修改正式Sources或当前CLI跨源限制。
+
+[双拓扑报告](../.artifacts/cross-origin-20261029-122405/report.json)通过：每组15个文档各自的隔离代号、native origin/mainFrame、同源策略仍生效、page world不可见消息处理器/不能覆盖隔离代号、跨源和嵌套DOM引用/合成fill/click、宿主独立核查的真实POST值/nonce（每组恰好2次）、同/跨Store及Tab归属拒绝。同文档导航保留引用；移除节点、子frame完整导航、父frame导航、移除iframe、顶层reload和关闭Tab拒绝旧目标。第一方LocalStorage用于Store隔离，不宣称第三方Cookie或Storage Access兼容性。
+
+关键观察：同文档重复消息的WKFrameInfo对象和isEqual均不同；旧WKFrameInfo在子frame导航后实际指向新文档。实验将文档代号校验与DOM操作放入同一次定向JS调用，验证旧代号在修改新DOM前被拒绝；pagehide只作观察，不用它保证安全。原生销毁frame返回WKError的invalid-frame target。
+
+首轮 `.artifacts/cross-origin-20261029-120822/native-report.json` 已完成真实定向操作，但测试只看NSError.localizedDescription，没读取WKJavaScriptExceptionMessage，误判stale_frame拒绝；修正异常提取后通过，原失败保留。成功报告在两个fixture服务关闭、端口不再接受连接之后生成。
+
+本项结论是公开API路线可行，正式范围仍需明确frame/document目标、父子路由及有界生命周期；本次不扩展>>>或生产CLI。父子身份不能靠URL/深度猜测；跨源坐标/截图/文件/对话框、sandbox/opaque origin、CSP/进程切换/任意网站未验证。实际可复现结果和限制见 [RESEARCH](RESEARCH.md)。
+
+最终复核通过120条运行断言，含旧节点引用不修改替代节点，以及frame定向异步JS：150ms挂起Promise宿主等待有界，另一Space的Promise正常返回。宿主逐项关联native business-result的value/nonce、slot/epoch与注册文档，再对照真实POST记录（两组共4次）；没有以宿主自行记录的nonce代替网页实际回执。源码仍未改，现有[完整可靠性/表单](../.artifacts/reliability-20261029-121848/report.json)、32命令离线契约及11项守卫通过，原跨源unsupported_context、截图、文件、诊断、对话框、恢复和计时断言保留。
+
+异步增强的 `.artifacts/cross-origin-20261029-122130/`、`122256/` 曾在未保留引用的Promise上返回“Completion handler for function call is no longer reachable”，不属于已通过轮；SDK允许thenable不可达时报错。为明确测试宿主超时，fixture改为在globalThis保留Promise引用后通过。没有改生产异步语义或把宿主停止等待当作JS取消。
+
+以 `ede2b90` 为基准独立code-review：Standards 1项P2（网页nonce未关联宿主POST），已补value/nonce/slot/epoch/角色深度关联并复核关闭；Spec 0项。异步增量经两轴复核无新发现。产品Sources和配置均未更改，保留此前Release代理/TLS/HMR证据的原提交归属，本轮未重复该套或公网/GUI/系统代理/长稳测试。
+
+[最终清理核查](../.artifacts/cross-origin-20261029-122405/cleanup-check.json)确认两个原生实验进程均已退出、fixture端口关闭；既有完整回归注册表为空，Socket无服务。实验只使用nonPersistent Store，不包含持久登录数据的迁移或删除验收。
+
 ## P2 / #8：整页实验与有界分块（2026-10-29）
 
 先以独立 nonPersistent、禁止激活的 `tests/full_page_probe.swift` 实测单次超视口 rect。[原始结果](../.artifacts/issue8-full-page-probe-20261029/result.json)为2000×4200像素，但[图像](../.artifacts/issue8-full-page-probe-20261029/single.png)只有首屏红色，中/尾通道均为白色；文档本应为红/绿/蓝三屏。SDK明确rect应在view bounds内，没有把尺寸正确当作整页成功。

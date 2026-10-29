@@ -67,7 +67,7 @@ browser open https://example.com --space dev
 
 - 点击和填写使用 DOM 合成事件，不等同于真实键鼠输入。网站要求可信点击、复杂编辑器操作或人工登录时，可在窗口中完成后再交给 Agent。
 - 页面卡住时可用 `browser reload --space work` 恢复；未提交表单和页面内存状态不会保留。超时动作可能已经生效，先核对结果，再决定是否重试。
-- 支持开放 Shadow Root 和同源 iframe；跨源 iframe、closed Shadow Root 暂不支持。截图默认视口，`--element SELECTOR_OR_REF` 截取元素可见范围，`--full-page` 有界拼接整页并还原滚动；动态页面边界见开发说明。
+- 支持开放 Shadow Root 和同源 iframe；[跨源 iframe](docs/DEVELOPMENT.md#跨源-frame-独立实验)、closed Shadow Root 暂不支持。截图默认视口，`--element SELECTOR_OR_REF` 截取元素可见范围，`--full-page` 有界拼接整页并还原滚动；动态页面边界见开发说明。
 - JS alert/confirm/prompt 需要显式查询和回应，操作流程见[对话框说明](docs/DEVELOPMENT.md#js-对话框)。弹窗能打开不代表第三方 OAuth 已全自动兼容。
 - 普通关闭和重启保留持久化网站数据，登录是否延续仍由网站决定。`browser space delete work` 会删除该 Space 的网站数据。
 
