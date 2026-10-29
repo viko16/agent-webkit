@@ -18,6 +18,7 @@ from popup_cases import verify_popups
 from independent_proxy_cases import verify_proxy_arguments, verify_independent_proxies
 from vite_cases import verify_vite_workflow
 from real_site_cases import verify_real_spa, verify_real_login, prepare_site_gui
+from upload_cases import verify_proxy_uploads
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -45,11 +46,14 @@ def main():
     parser.add_argument('--direct-conflicts', action='store_true', help='Add process-local CFNetwork conflict/recovery cases without modifying OS proxies')
     parser.add_argument('--vite', action='store_true', help='Add real Vite + isolated Whistle WSS/HMR workflow (requires tests/forms dependencies)')
     parser.add_argument('--vite-only', action='store_true', help='Run only the real Vite + Whistle workflow')
+    parser.add_argument('--uploads-only', action='store_true', help='Run only real Whistle multipart upload and historical-session isolation')
     parser.add_argument('--real-sites', action='store_true', help='Add opt-in public-site regressions (requires Internet access)')
     parser.add_argument('--real-sites-only', action='store_true', help='Run only the public-site regressions')
     parser.add_argument('--real-sites-gui', action='store_true', help='With --real-sites-only, pause for native GUI observation/switch/close checkpoints')
     parser.add_argument('--real-site-case', choices=['spa', 'login', 'all'], default='all', help='Public-site cases to run (default: all)')
     args = parser.parse_args()
+    if args.uploads_only and (args.vite or args.vite_only or args.independent_proxies_only or args.direct_conflicts or args.real_sites or args.real_sites_only or args.real_sites_gui):
+        parser.error('--uploads-only cannot be combined with other regression modes')
     if args.independent_proxies_only and args.whistle_existing:
         parser.error('--independent-proxies-only requires test-owned Whistles')
     if args.vite_only and (args.independent_proxies_only or args.whistle_existing or args.direct_conflicts):
@@ -172,6 +176,10 @@ def main():
         report['whistleRules'] = whistle.rules
         start()
         report['tests']['proxyArguments'] = verify_proxy_arguments(cli)
+        if args.uploads_only:
+            report['tests']['uploads'] = verify_proxy_uploads(cli, 'https://example.com', out, site_events, site.fixture_nonce, whistle)
+            report['passed'] = True
+            return 0
         if args.real_sites:
             real_sites()
         if args.vite:
@@ -331,6 +339,7 @@ def main():
         cli('open', base, '--space', 'admin')
         assert evaluate('admin', read) == {'cookie': '', 'local': None}
         cli('space', 'delete', 'admin')
+        report['tests']['uploads'] = verify_proxy_uploads(cli, target, out, site_events, site.fixture_nonce, whistle)
         # Stop only our own Whistle process; never interrupt a pre-existing instance.
         if not args.whistle_existing:
             report['tests']['independentProxies'] = verify_independent_proxies(

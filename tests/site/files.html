@@ -2,5 +2,19 @@
 <a id="download" href="/download?mode=ok" download="same.txt">Download</a>
 <a id="slow" href="/download?mode=slow" download="same.txt">Slow download</a>
 <a id="drop" href="/download?mode=drop" download="same.txt">Broken download</a>
-<input type="file" id="single"><input type="file" id="multiple" multiple>
+<input type="file" id="single" aria-label="Single file"><input type="file" id="multiple" aria-label="Multiple files" multiple>
+<input type="file" id="disabled" disabled><input type="text" id="not-file">
+<button id="send" onclick="submitFiles()">Upload selected files</button>
 <p id="result">Ready</p>
+<script>
+window.uploadEvents=[];
+for(const field of document.querySelectorAll('input[type=file]')) for(const kind of ['input','change'])
+  field.addEventListener(kind,event=>uploadEvents.push({kind,id:field.id,trusted:event.isTrusted}));
+async function submitFiles(){
+  const form=new FormData();
+  for(const file of document.querySelector('#multiple').files) form.append('files',file);
+  const response=await fetch('/upload',{method:'POST',body:form});
+  window.uploadResponse=await response.json();
+  document.querySelector('#result').textContent=uploadResponse.nonce;
+}
+</script>

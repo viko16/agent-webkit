@@ -12,6 +12,8 @@ import threading
 import time
 import urllib.parse
 import uuid
+from email.parser import BytesParser
+from email.policy import default
 
 
 class Events:
@@ -40,6 +42,22 @@ def origin(port=0, events=None, tls_context=None):
     html = (Path(__file__).parent / 'site/index.html').read_text().replace('__FIXTURE_NONCE__', nonce)
 
     class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            if self.path != '/upload':
+                self.send_error(404); return
+            body = self.rfile.read(int(self.headers.get('Content-Length', '0')))
+            message = BytesParser(policy=default).parsebytes(
+                ('Content-Type: ' + self.headers['Content-Type'] + '\r\n\r\n').encode() + body)
+            files = [dict(name=part.get_filename(), data=base64.b64encode(part.get_payload(decode=True)).decode())
+                     for part in message.iter_parts() if part.get_filename() is not None]
+            events.add(kind='file-upload', files=files, nonce=nonce, path=self.path,
+                       peerPort=self.client_address[1], cookie=self.headers.get('Cookie'), host=self.headers.get('Host'))
+            result = json.dumps(dict(nonce=nonce, files=files)).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(result)))
+            self.end_headers(); self.wfile.write(result)
+
         def do_GET(self):
             query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             time.sleep(min(float(query.get('delay', ['0'])[0]), 3))

@@ -20,7 +20,7 @@ struct Request: Codable {
             "snapshot":0...0, "state":0...0, "evaluate":1...1, "click":1...1,
             "fill":2...2, "screenshot":0...0, "wait":0...1, "diagnostics":0...0,
             "dialog.list":0...0, "dialog.respond":2...2, "space.suspend":1...1, "space.resume":1...1,
-            "download.list":0...0, "download.wait":1...1, "download.cancel":1...1]
+            "download.list":0...0, "download.wait":1...1, "download.cancel":1...1, "upload":2...17]
 
     static func allowedOptions(for command: String) -> Set<String> {
         var allowed: Set<String> = ["socket", "data-dir"]
@@ -36,6 +36,7 @@ struct Request: Codable {
         if command == "screenshot" { allowed.insert("out") }
         if command == "shutdown" { allowed.insert("all") }
         if command == "download.wait" { allowed.insert("timeout") }
+        if command == "upload" { allowed.insert("timeout") }
         if command == "diagnostics" { allowed.formUnion(["clear", "detail", "inspectable"]) }
         if command == "dialog.respond" { allowed.insert("text") }
         return allowed
@@ -167,6 +168,7 @@ browser dialog list --space NAME_OR_ID [--tab ID]
 browser dialog respond ID accept|dismiss --space NAME_OR_ID [--tab ID] [--text PROMPT_VALUE]
 browser download list --space NAME_OR_ID [--tab ID]
 browser download wait|cancel ID --space NAME_OR_ID [--tab ID]
+browser upload SELECTOR_OR_REF FILE_PATH [FILE_PATH ...] --space NAME_OR_ID [--tab ID]
 browser click SELECTOR_OR_REF --space NAME_OR_ID [--tab ID] [--wait-for-navigation | --wait-for-popup] [--timeout 15000]
 browser fill SELECTOR_OR_REF VALUE --space NAME_OR_ID [--tab ID]
 browser evaluate JAVASCRIPT --space NAME_OR_ID [--tab ID] [--await] [--timeout 15000]

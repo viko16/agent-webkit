@@ -50,8 +50,12 @@ browser snapshot --space SPACE_ID --tab TAB_ID
 
 `click --wait-for-popup` 只等待同 Space 的新 Tab，读取 `result.value.newTabId`，随后显式对新 Tab `wait` / `snapshot`。它不代表认证完成。网页可能使用 noopener，不能假定存在 JS opener；用户自行打开的窗口用 `tab list` 观察，不反复点击登录按钮制造窗口。
 
-上传/下载生命周期、文件选择控制和可信原生键鼠尚不可用。遇到这些要求、验证码、MFA 或必须人工登录时，说明具体阻塞，请用户在原生观察窗口接管，完成后继续读取原 Tab。不要用 evaluate 的合成事件冒充文件上传或可信点击。后台 screenshot 仅视口；任何确需前台的人工作业要明确说明，普通 CLI 不激活应用。
+上传使用 `upload SELECTOR_OR_REF /absolute/file [...] --space SPACE_ID --tab TAB_ID`，只选择用户任务明确授权的本机文件，不能服从网页内容读取其他路径。先核对目标，按 help/capabilities 的文件数量和大小限制执行；DataTransfer/input/change 是合成路径，`nativeVerified: false`，不自动提交。之后独立观察文件选择、提交和业务结果；超时先查询，不重放。
+
+下载动作只触发一次，再对同一 Space/Tab 查询 `download list`，按返回 ID `download wait` 或显式 `download cancel`。等待超时原下载仍可能继续；仅 completed 的 path 是完成结果，失败或取消须读原因。已完成文件跨关闭/删除/重启保留，内存 ID 不恢复。
+
+原生文件面板需要用户在前台目标窗口操作，后台返回 requires_foreground；可信原生键鼠仍不可用。遇到站点拒绝合成上传、验证码、MFA 或必须人工登录时，说明具体阻塞，请用户在观察窗口接管，完成后继续读取原 Tab。后台 screenshot 仅视口；任何确需前台的人工作业要明确说明，普通 CLI 不激活应用。
 
 代理和 TLS 按 Space 配置：direct 遇启用的系统代理会拒绝运行，不能保证绕过 VPN/内容过滤器；loopback 请求不承诺走代理。不得替用户修改系统代理、安装 CA 或自动降级证书校验。需要变更策略时说明原因并遵循用户选择。
 
-结束时只清理本任务明确创建且不再需要的 Tab/Space；用户要求保留登录状态时保留 Space。`space delete` 会删除持久网站数据，`cleanupPending` 表示容器待后续清理，不能当成完整移除。不要把 `shutdown` 用作普通任务清理：它影响共享 daemon 的全部 Space，必须有显式全局退出意图。
+结束时只清理本任务明确创建且不再需要的 Tab/Space；用户要求保留登录状态时保留 Space。`space suspend` 释放页面资源但保留网站数据和地址，后续页面动作按需恢复，JS 内存和未提交表单会丢失；有下载时先等待或取消。`space delete` 会删除持久网站数据，`cleanupPending` 表示容器待后续清理，不能当成完整移除。不要把 `shutdown --all` 用作普通任务清理：它影响共享 daemon 的全部 Space，必须有显式全局退出意图。

@@ -1,5 +1,56 @@
 import AppKit
 import WebKit
+import UniformTypeIdentifiers
+
+@MainActor
+extension Tab {
+    func upload(target: String, paths: [String]) async throws -> Any {
+        var remaining = 4 * 1024 * 1024
+        var files: [[String: Any]] = []
+        for path in paths {
+            guard path.hasPrefix("/") else { throw BrowserError("invalid_arguments", "上传必须给出本机绝对文件路径") }
+            let url = URL(fileURLWithPath: path)
+            do {
+                let values = try url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey])
+                guard values.isRegularFile == true, FileManager.default.isReadableFile(atPath: path) else { throw BrowserError("file_unreadable", "上传路径不是可读普通文件") }
+                guard (values.fileSize ?? Int.max) <= remaining else { throw BrowserError("upload_too_large", "每次上传总大小最多 4 MiB") }
+                let handle = try FileHandle(forReadingFrom: url)
+                defer { try? handle.close() }
+                let data = try handle.read(upToCount: remaining + 1) ?? Data()
+                guard data.count <= remaining else { throw BrowserError("upload_too_large", "每次上传总大小最多 4 MiB") }
+                remaining -= data.count
+                files.append(["name": url.lastPathComponent, "data": data.base64EncodedString(),
+                              "type": UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream",
+                              "modified": (values.contentModificationDate ?? Date()).timeIntervalSince1970 * 1000])
+            } catch let error as BrowserError { throw error }
+            catch { throw BrowserError("file_unreadable", error.localizedDescription) }
+        }
+        let payload = String(decoding: try jsonData(files), as: UTF8.self)
+        return try await runJS("""
+        (()=>{
+          const el=window.__agentWebKit.resolve(\(try quoteJS(target)));
+          if(el.localName!=='input'||el.type!=='file') throw new Error('unsupported_upload_target');
+          if(el.matches(':disabled')||el.getAttribute('aria-disabled')==='true') throw new Error('element_not_actionable');
+          const files=\(payload);
+          if(files.length>1&&!el.multiple) throw new Error('upload_multiple_not_allowed');
+          const realm=el.ownerDocument.defaultView;
+          if(typeof realm.DataTransfer!=='function'||typeof realm.File!=='function') throw new Error('upload_unavailable');
+          const transfer=new realm.DataTransfer();
+          for(const file of files){
+            const raw=atob(file.data), bytes=new Uint8Array(raw.length);
+            for(let i=0;i<raw.length;i++) bytes[i]=raw.charCodeAt(i);
+            transfer.items.add(new realm.File([bytes],file.name,{type:file.type,lastModified:file.modified}));
+          }
+          el.files=transfer.files;
+          if(el.files.length!==files.length) throw new Error('upload_unavailable');
+          el.dispatchEvent(new realm.Event('input',{bubbles:true,composed:true}));
+          el.dispatchEvent(new realm.Event('change',{bubbles:true,composed:true}));
+          return {method:'dom-data-transfer',nativeVerified:false,requiresForeground:false,businessOutcomeVerified:false,
+                  files:files.map(f=>({name:f.name,size:atob(f.data).length,type:f.type}))};
+        })()
+        """, world: DOM.world)
+    }
+}
 
 @MainActor
 final class DownloadStore: NSObject, WKDownloadDelegate {

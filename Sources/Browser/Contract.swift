@@ -7,6 +7,7 @@ enum CLIContract {
         "space.info": ["NAME_OR_ID"], "space.delete": ["NAME_OR_ID"],
         "space.suspend": ["NAME_OR_ID"], "space.resume": ["NAME_OR_ID"],
         "download.wait": ["ID"], "download.cancel": ["ID"],
+        "upload": ["SELECTOR_OR_REF"] + (1...16).map { "FILE_PATH_\($0)" },
         "tab.new": ["URL"], "tab.close": ["ID"], "tab.default": ["ID"],
         "open": ["URL"], "evaluate": ["JAVASCRIPT"], "click": ["SELECTOR_OR_REF"],
         "fill": ["SELECTOR_OR_REF", "VALUE"], "wait": ["SELECTOR_OR_REF"], "dialog.respond": ["ID", "ACTION"]
@@ -166,13 +167,15 @@ enum CLIContract {
                 "dialogs": "explicit per-Space/Tab list/respond; no automatic confirm acceptance; queries and replies work while busy; deadlines dismiss safely; no foreground activation",
                 "downloads": "per-Tab native WKDownload; private per-ID output directory; list/wait/cancel; timeout does not replay or cancel; 8 active, 64 records, 300000 ms lifetime; completed files retained after close/delete/restart, runtime records reset",
                 "fileChooser": "native panel only for already active key window; background delegate cancels with state.page.fileChooser.requiresForeground=true; never activates a window",
-                "unsupported": "native keyboard/mouse; CLI file upload; complete DevTools network trace"
+                "upload": "1–16 explicit local absolute regular file paths; total at most 4194304 bytes; file input via isolated-world DataTransfer and synthetic input/change; method=dom-data-transfer, nativeVerified=false; no implicit submit; validate business result separately; accept attribute is a UI hint, not enforced",
+                "unsupported": "native keyboard/mouse; complete DevTools network trace"
             ]
         ]
     }
 
     private static let errorCodes = [
         "already_running", "certificate_rejected", "data_removal_failed", "data_removal_timeout", "download_not_found", "download_failed",
+        "file_unreadable", "upload_too_large", "unsupported_upload_target", "upload_multiple_not_allowed", "upload_unavailable",
         "direct_system_proxy_conflict", "diagnostics_unavailable", "dialog_not_found", "dialog_already_handled", "dialog_expired", "dialog_cancelled", "dialog_capacity", "element_not_actionable", "element_not_editable", "element_readonly",
         "invalid_arguments", "invalid_certificate", "invalid_json_result", "invalid_name", "invalid_option",
         "invalid_proxy", "invalid_response", "invalid_selector", "invalid_timeout", "invalid_url", "ipc_error",

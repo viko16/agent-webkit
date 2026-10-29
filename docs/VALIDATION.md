@@ -1,5 +1,21 @@
 # 实际验收记录
 
+## P1 / #6：后台 CLI 上传与最终可靠性（2026-10-29）
+
+`upload` 读取显式本机绝对普通文件，最多 16 个、总计 4 MiB，通过原隔离 world 和同一目标解析设置 DataTransfer/File；不修改原文件、不自动提交。输出明确 `method=dom-data-transfer`、`nativeVerified=false`、`requiresForeground=false`、`businessOutcomeVerified=false`。Skill 与帮助/契约同步；站点对合成事件或 accept 的接受仍需业务核对。
+
+[真实上传专项](../.artifacts/reliability-20261029-095155/report.json)通过：中文文本、二进制和空文件的实际 multipart 字节与服务端 nonce，提交恰好一次，等待超时后无重放；包含 4 MiB/16 文件成功边界、超限、不可读/目录/缺失/相对路径、disabled/错误目标、旧引用、同源 frame/open Shadow Root、非默认 Tab/另一 Space、reload 清空选择和休眠后按需上传。32 命令离线契约与 11 项守卫通过。
+
+最终 Debug [完整 `reliability.py --forms`](../.artifacts/reliability-20261029-095255/report.json)通过，包含本轮休眠/SIGTERM/下载/上传和全部原有 Store、对话框、DOM 隔离、wait、frame/shadow、诊断、React/Vue 六次提交及 16 项计时。以 `9d7f6cb` 为基准，两轴独立审查 Standards 0 项、Spec 0 项。
+
+代理测试接入的增量审查两轴均发现历史 POST 误计及不隐式提交计数基线过晚的问题；已按 session ID 排除旧请求，首次 upload 前采样、显式 click 前要求无新增 POST，提交后要求恰好 +1，并经两轴复核。完整和新增 `acceptance.py --uploads-only` 共用同一 helper。该[窄专项](../.artifacts/p1-upload-history-final-20261029/report.json)用真实旧 POST 验证历史隔离，通过当前唯一 POST、实际字节/nonce 和后台目标断言。
+
+初轮最终 Release `.artifacts/p1-final-full-20261029/` 的实际上传通过，但新增 POST 事件漏掉原 origin 字段，随后旧双代理证据读 path 失败；修复字段、保留旧断言后，[完整 Release](../.artifacts/p1-final-full-fixed-20261029/report.json)通过（含上传、双代理、TLS 下载、Vite HMR 等全部项目）。之后额外 `.artifacts/p1-final-history-20261029/` 在原有前台 PID 断言 1577→170 失败，来源未确定，没有将该轮记为通过，也未放宽断言。Python 字节码检查曾被沙箱缓存目录权限拒绝，改用只读 AST 检查通过。
+
+最终单独执行的 [Release 全套](../.artifacts/p1-final-serial-20261029/report.json)全部通过，包含原前台断言、历史 POST 隔离、当前唯一 Whistle POST、上传字节/nonce、全部原代理/TLS/双代理/Vite HMR 和本轮下载 TLS。最后 [Direct 上传窄复核](../.artifacts/reliability-20261029-095924/report.json)也保留首次 upload 前的基线和显式提交前无新增 POST 断言。所有发现已修复并经原两轴审查者复核；未将失败轮或窄专项替代完整报告。[最终清理核查](../.artifacts/p1-final-serial-20261029/cleanup-check.json)覆盖本批 8 个成功/失败/UI 运行，注册表为空且 Socket 无服务。公网真实站点/GUI 基准和真实 OS 代理开关未在本轮重跑；不修改系统代理或 Agent 配置。
+
+清理核查首次发现原生 UI fixture 的 ui-direct 留有 deleting tombstone；用同一测试 Bundle 正常重启后，既有公开 Store 清理完成、pendingStoreCleanup=0，再正常退出。保留 `.artifacts/ui-20261029-094127/cleanup-restart.log`，最终复核无残留注册表项；没有用删除文件或终止进程冒充网站数据清理。
+
 ## P1 / #6：原生下载与文件选择（2026-10-29）
 
 公开 WKDownload 生命周期提供按 Tab 的 list/wait/cancel、完成路径及失败原因；私有 UUID 目录不覆盖同名。完成文件在关闭/删除/重启后保留，内存记录不恢复；取消/关闭/退出清理残片。下载中拒绝 Space 休眠，等待超时不重放动作。原生选择仅在目标窗口已处于前台时显示 NSOpenPanel；后台委托返回 requires_foreground。

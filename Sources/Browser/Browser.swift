@@ -214,7 +214,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
                 if let error {
                     let nsError = error as NSError
                     if let message = nsError.userInfo["WKJavaScriptExceptionMessage"] as? String {
-                        let codes = ["stale_ref", "selector_count", "invalid_selector", "unsupported_context", "element_not_actionable", "element_readonly", "unsupported_fill_type", "element_not_editable", "invalid_option"]
+                        let codes = ["stale_ref", "selector_count", "invalid_selector", "unsupported_context", "element_not_actionable", "element_readonly", "unsupported_fill_type", "element_not_editable", "invalid_option", "unsupported_upload_target", "upload_multiple_not_allowed", "upload_unavailable"]
                         let code = codes.first { message.contains($0) } ?? "javascript_error"
                         complete(.failure(BrowserError(code, message)))
                     } else { complete(.failure(error)) }
@@ -1013,6 +1013,7 @@ final class BrowserModel {
         case "screenshot":
             guard let path = r.options["out"] else { throw BrowserError("invalid_arguments", "截图需要 --out PATH") }
             value = try await tab.screenshot(path: path)
+        case "upload": value = try await tab.upload(target: arg(0), paths: Array(r.args.dropFirst()))
         default: throw BrowserError("unknown_command", "未知命令")
         }
         return ["spaceId": id.uuidString, "space": space.record.name, "proxy": space.record.proxy, "network": space.networkState, "page": tab.state, "value": value]
