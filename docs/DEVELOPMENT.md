@@ -401,7 +401,7 @@ Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 
 
 跨源或尚不可访问的 frame 在 snapshot 的 `unsupported` 中返回上下文和原因，显式进入时返回 `unsupported_context`。公开 DOM 无法区分 closed root 和没有 root；显式进入两者均返回该错误，snapshot 不声称完整枚举 closed root。`textScope` 为 main-frame；元素 bounds 的 `coordinateSpace` 区分主视口和 frame 内视口，不伪装成整页截图坐标。
 
-遍历上限为 1000 个控件、10000 个扫描节点、16 层边界；文本读取最多扫描 20000 个文本节点，正文最多 20000 字符，控件字段最多 200 字符，select 最多 100 个选项。快照采用 1 MiB 总输出预算，达到任一限制返回部分结果并标记 `truncated`。`tests/context_cases.py` 随 reliability 执行，覆盖嵌套作用域、同名 ID 不串用、frame 的输入事件、隐藏祖先、display:contents 宿主、跨源/closed 错误、frame 导航及宿主替换后的旧引用拒绝。`--resources-only` 追加巨大 DOM、选项和输出预算回归。尚未覆盖全部 slot/富文本组件或跨源 frame 内容。
+遍历上限为 1000 个控件、16 层边界；元素、文本、正文、可见性祖先与未缓存文本样式祖先共用 10000 次访问预算，重复读取也计费，耗尽后停止正文扫描。正文最多 20000 字符，控件字段最多 200 字符，select 最多 100 个选项。可见 `<br>` 在正文中保留换行，在控件名称中归一为空格。快照采用 1 MiB 总输出预算，达到任一限制返回部分结果并标记 `truncated`。`tests/context_cases.py` 随 reliability 执行，覆盖嵌套作用域、同名 ID 不串用、frame 的输入事件、隐藏祖先、display:contents 宿主、跨源/closed 错误、frame 导航及宿主替换后的旧引用拒绝。`--resources-only` 追加巨大 DOM、选项、空元素、深层控件、换行和输出预算回归。尚未覆盖全部 slot/富文本组件或跨源 frame 内容。
 
 ## 跨源 frame 独立实验
 

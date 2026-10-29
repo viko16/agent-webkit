@@ -61,6 +61,26 @@ def verify_snapshot_budget(cli, base, out):
         assert any(element['name'] == 'Hidden accessible label' for element in text_names['elements']), text_names
 
         evaluate('''(()=>{
+          document.body.innerHTML='<button>Save<br>changes</button><p>Hello<br>  World</p><button>Hidden<br hidden>break</button><button>Invisible<br style="display:none">break</button>';
+          return true;
+        })()''')
+        line_breaks = snapshot('visible-line-breaks', False)
+        assert any(element['name'] == 'Save changes' for element in line_breaks['elements']), line_breaks
+        assert any(element['name'] == 'Hiddenbreak' for element in line_breaks['elements']), line_breaks
+        assert any(element['name'] == 'Invisiblebreak' for element in line_breaks['elements']), line_breaks
+        assert 'Hello\nWorld' in line_breaks['text'] and 'Save\nchanges' in line_breaks['text'], line_breaks
+        evaluate('''(()=>{
+          document.body.innerHTML='<span id="visible-break">Save<br>changes</span><input aria-labelledby="visible-break"><span id="hidden-break">Save<br hidden>changes</span><input aria-labelledby="hidden-break"><span id="hidden-reference" hidden>Hidden accessible label</span><input aria-labelledby="hidden-reference">';
+          return true;
+        })()''')
+        reference_breaks = snapshot('referenced-line-break-visibility', False)
+        assert [element['name'] for element in reference_breaks['elements'] if element['tag'] == 'input'] == [
+            'Save changes', 'Savechanges', 'Hidden accessible label'], reference_breaks
+
+        evaluate('document.body.innerHTML="<br><br hidden>";true')
+        assert snapshot('empty-line-breaks', False)['text'] == ''
+
+        evaluate('''(()=>{
           document.body.replaceChildren();
           const text=document.createElement('p');text.textContent='x'.repeat(19999)+'🙂tail';
           const input=document.createElement('input');input.value='v'.repeat(199)+'🙂tail';
@@ -116,6 +136,42 @@ def verify_snapshot_budget(cli, base, out):
         })()''')
         many_nodes = snapshot('many-nodes', True)
         assert any(element['name'] == 'Partial result preserved' for element in many_nodes['elements'])
+
+        evaluate('''(()=>{
+          document.body.innerHTML='<button>Bounded first result</button>';
+          const fragment=document.createDocumentFragment();
+          for(let i=0;i<100000;i++) fragment.append(document.createElement('span'));
+          const tail=document.createElement('p');tail.textContent='UNREACHABLE BODY TAIL';
+          document.body.append(fragment,tail);return true;
+        })()''')
+        empty_nodes = snapshot('empty-tree-shares-body-budget', True)
+        assert any(element['name'] == 'Bounded first result' for element in empty_nodes['elements'])
+        assert empty_nodes['text'] == '', empty_nodes
+
+        evaluate('''(()=>{
+          document.body.innerHTML='<input aria-labelledby="empty-label" placeholder="Bounded fallback"><label id="empty-label"></label>';
+          const label=document.querySelector('#empty-label'), fragment=document.createDocumentFragment();
+          for(let i=0;i<100000;i++) fragment.append(document.createElement('span'));
+          const tail=document.createElement('span');tail.textContent='UNREACHABLE LABEL TAIL';
+          label.append(fragment,tail);return true;
+        })()''')
+        empty_label = snapshot('empty-label-consumes-scan-budget', True)
+        assert next(element for element in empty_label['elements'] if element['tag'] == 'input')['name'] == 'Bounded fallback', empty_label
+
+        evaluate('''(()=>{
+          document.body.replaceChildren();
+          let parent=document.body;
+          for(let i=0;i<200;i++) {
+            const child=document.createElement('div');parent.append(child);parent=child;
+          }
+          for(let i=0;i<500;i++) {
+            const input=document.createElement('input');input.setAttribute('aria-label','Deep control '+i);
+            parent.append(input);
+          }
+          return true;
+        })()''')
+        deep_controls = snapshot('visibility-ancestors-consume-scan-budget', True)
+        assert 0 < len(deep_controls['elements']) < 500, deep_controls
 
         evaluate('''(()=>{
           document.body.replaceChildren();

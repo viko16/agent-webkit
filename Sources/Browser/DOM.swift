@@ -75,10 +75,11 @@ enum DOM {
         if(state==='enabled') return !disabled;
         return true;
       }
-      function visible(el) {
+      function visible(el, charge=null) {
         const r=el.getBoundingClientRect(), s=el.ownerDocument.defaultView.getComputedStyle(el);
         if (r.width<=0 || r.height<=0 || s.display==='none' || s.visibility!=='visible') return false;
         for (let node=el; node; node=node.parentElement || node.getRootNode().host || node.ownerDocument.defaultView?.frameElement) {
+          if(charge&&!charge()) return false;
           const style=node.ownerDocument.defaultView.getComputedStyle(node);
           if (Number(style.opacity)===0 || style.display==='none' || style.visibility!=='visible' || node.hidden || node.inert) return false;
         }
@@ -90,7 +91,16 @@ enum DOM {
         const unsupported=[];
         const outputBudgetBytes=1024*1024, encoder=new TextEncoder();
         const textStyles=new WeakMap(), blockDisplays=new Set(['block','flex','grid','list-item','table','table-row','table-cell']);
-        let scanned=0, textScanned=0, truncated=false, outputBytes=4096, exhausted=false;
+        let scanned=0, truncated=false, outputBytes=4096, exhausted=false;
+        function chargeScan() {
+          if(exhausted) return false;
+          if(scanned>=10000) { truncated=true; exhausted=true; return false; }
+          scanned++;
+          return true;
+        }
+        function scanNode(walker) {
+          return chargeScan()?walker.nextNode():null;
+        }
         function safePrefix(text, limit) {
           let end=Math.min(text.length,Math.max(0,limit));
           const last=text.charCodeAt(end-1);
@@ -106,33 +116,51 @@ enum DOM {
         function textStyle(parent) {
           const pending=[];
           let node=parent;
-          while(node&&!textStyles.has(node)) { pending.push(node); node=node.parentElement; }
-          let info=node?textStyles.get(node):{shown:true,block:null};
+          while(node&&!textStyles.has(node)) {
+            if(!chargeScan()) return null;
+            pending.push(node); node=node.parentElement;
+          }
+          let info=node?textStyles.get(node):{shown:true,block:null,excluded:false};
           for(const element of pending.reverse()) {
             const style=element.ownerDocument.defaultView.getComputedStyle(element);
             info={shown:info.shown&&style.display!=='none'&&style.visibility==='visible'&&Number(style.opacity)!==0&&!element.hidden&&!element.inert,
-                  block:blockDisplays.has(style.display)?element:info.block};
+                  block:blockDisplays.has(style.display)?element:info.block,
+                  excluded:info.excluded||['script','style','noscript','template'].includes(element.localName)};
             textStyles.set(element,info);
           }
           return textStyles.get(parent);
         }
-        function readText(root, limit, checkVisibility=true) {
-          if(!root) return '';
-          const doc=root.ownerDocument||root, walker=doc.createTreeWalker(root,4);
-          let result='', node, previousBlock;
-          while((node=walker.nextNode())) {
-            if(++textScanned>20000) { truncated=true; break; }
-            const parent=node.parentElement;
-            if(!parent || parent.closest('script,style,noscript,template')) continue;
+        function readText(root, limit, checkVisibility=true, preserveLines=false) {
+          if(!root || limit<=0 || exhausted) return '';
+          // SHOW_ALL makes every nextNode step chargeable, including empty
+          // elements that SHOW_TEXT can otherwise skip without a bound.
+          const doc=root.ownerDocument||root, walker=doc.createTreeWalker(root,0xffffffff);
+          let result='', node, previousBlock, lineBreaks=0;
+          while((node=scanNode(walker))) {
+            const isBreak=node.nodeType===1&&node.localName==='br';
+            if(node.nodeType!==3&&!isBreak) continue;
+            const parent=isBreak?node:node.parentElement;
+            if(!parent) continue;
             const info=textStyle(parent);
-            if(checkVisibility&&!info.shown) continue;
-            if(result&&previousBlock!==info.block&&result.length<limit) result+='\n';
+            if(!info) break;
+            if(info.excluded) continue;
+            if((checkVisibility||isBreak)&&!info.shown) continue;
+            if(isBreak) { lineBreaks++; continue; }
+            let chunk=bounded(node.data,limit-result.length).replace(/\s+/g,' ');
+            if(!chunk) { if(node.data.length) break; continue; }
+            if(result&&previousBlock!==info.block) lineBreaks=Math.max(1,lineBreaks);
+            if(result&&lineBreaks&&chunk.trim()) {
+              result=result.replace(/ +$/,'');
+              result+=safePrefix('\n'.repeat(Math.min(lineBreaks,limit)),limit-result.length);
+              chunk=chunk.trimStart();
+            }
+            if(chunk.trim()) lineBreaks=0;
             previousBlock=info.block;
             const remaining=limit-result.length;
-            result+=safePrefix(node.data,remaining);
+            result+=safePrefix(chunk,remaining);
             if(node.data.length>remaining || result.length>=limit) { truncated=true; break; }
           }
-          return safePrefix(result,limit).replace(/\s+/g,' ').trim();
+          return safePrefix(result,limit).replace(preserveLines?/[^\S\n]+/g:/\s+/g,' ').trim();
         }
         function append(list,item) {
           const size=encoder.encode(JSON.stringify(item)).length+1;
@@ -141,13 +169,13 @@ enum DOM {
         }
         function visit(root, context) {
           if(context.length>16) { truncated=true; return; }
-          const walker=(root.ownerDocument||root).createTreeWalker(root,1);
+          const walker=(root.ownerDocument||root).createTreeWalker(root,0xffffffff);
           let el;
-          while((el=walker.nextNode())) {
-            if(exhausted) return;
-            if(++scanned>10000 || elements.length>=1000) { truncated=true; exhausted=true; return; }
+          while((el=scanNode(walker))) {
+            if(el.nodeType!==1) continue;
+            if(elements.length>=1000) { truncated=true; exhausted=true; return; }
             const boundary=el.shadowRoot || el.localName==='iframe' || el.localName==='frame';
-            if(visible(el) && (el.matches('a,button,input,select,textarea,summary,[role],[onclick],[tabindex],[contenteditable]') || boundary)) describe(el,context);
+            if((el.matches('a,button,input,select,textarea,summary,[role],[onclick],[tabindex],[contenteditable]') || boundary) && visible(el,chargeScan)) describe(el,context);
             if(exhausted) return;
             if(boundary) {
               const child={kind:el.shadowRoot?'shadow':'frame',ref:refFor(el)};
@@ -201,7 +229,7 @@ enum DOM {
             bounds:{x:r.x,y:r.y,width:r.width,height:r.height,coordinateSpace:el.ownerDocument===document?'main-viewport':'frame-viewport'}});
         }
         visit(document,[]);
-        const bodyText=readText(document.body,20000);
+        const bodyText=readText(document.body,20000,true,true);
         const text=outputBytes+encoder.encode(JSON.stringify(bodyText)).length<=outputBudgetBytes?bodyText:'';
         if(text!==bodyText) truncated=true;
         return {elements,text,textScope:'main-frame',scope:'same-origin-frames-and-open-shadow-roots',limit:1000,outputBudgetBytes,
