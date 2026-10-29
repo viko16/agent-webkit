@@ -4,7 +4,7 @@ import Network
 import CFNetwork
 import Security
 
-struct TabRecord: Codable { var id: UUID; var url: String }
+struct TabRecord: Codable { var id: UUID; var url: String; var openerTabID: UUID? = nil }
 struct SpaceRecord: Codable {
     var id: UUID
     var name: String
@@ -14,6 +14,22 @@ struct SpaceRecord: Codable {
     var deleting: Bool = false
     var tls: TLSConfiguration?
     var suspended: Bool?
+}
+
+struct BrowserLimits {
+    private static func value(_ key: String, default fallback: Int) -> Int {
+        guard let raw = ProcessInfo.processInfo.environment[key], let value = Int(raw), value > 0 else { return fallback }
+        return value
+    }
+    let spaces = value("BROWSER_MAX_SPACES", default: 64)
+    let tabsPerSpace = value("BROWSER_MAX_TABS_PER_SPACE", default: 64)
+    let totalTabs = value("BROWSER_MAX_TOTAL_TABS", default: 1024)
+    let liveWebViews = value("BROWSER_MAX_LIVE_WEBVIEWS", default: 128)
+    let popupsPerSpace = value("BROWSER_MAX_POPUPS_PER_SPACE", default: 8)
+    var summary: [String: Int] {
+        ["spaces": spaces, "tabsPerSpace": tabsPerSpace, "totalTabs": totalTabs,
+         "liveWebViews": liveWebViews, "popupsPerSpace": popupsPerSpace]
+    }
 }
 
 func systemProxyState() -> [String: Any] {
@@ -91,6 +107,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     init(record: TabRecord, store: WKWebsiteDataStore, tls: TLSConfiguration?, configuration supplied: WKWebViewConfiguration? = nil, diagnostics: DiagnosticLog? = nil) {
         id = record.id
         persistedURL = record.url
+        openerTabID = record.openerTabID
         self.tls = tls
         self.diagnostics = diagnostics ?? DiagnosticLog()
         let configuration = supplied ?? WKWebViewConfiguration()
@@ -648,6 +665,7 @@ final class Space {
     private(set) var store: WKWebsiteDataStore?
     var tabs: [Tab] = []
     var busy = false
+    var resourceBlockedReason: String?
     private(set) var configurationError: BrowserError?
     init(_ record: SpaceRecord, restoring: Bool = false) throws {
         self.record = record
@@ -707,6 +725,7 @@ final class Space {
          "tabs": tabStates, "busy": busy, "network": networkState,
          "lifecycle": configurationError != nil ? "configuration-error" : suspended ? "suspended" : "active", "liveWebViews": tabs.count,
          "configurationError": configurationError.map { failure($0)["error"]! } ?? NSNull(),
+         "resourceBlockedReason": resourceBlockedReason as Any? ?? NSNull(),
          "tls": record.tls?.summary ?? TLSConfiguration.systemSummary]
     }
     var networkState: [String: Any] {
@@ -739,6 +758,7 @@ final class BrowserModel {
     var shuttingDown = false
     private(set) var restoring = true
     private var storeCleanupErrors: [UUID: [String: Any]] = [:]
+    private let limits = BrowserLimits()
 
     init(directory: URL) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -747,7 +767,14 @@ final class BrowserModel {
         lockFD = Darwin.open(directory.appendingPathComponent("daemon.lock").path, O_CREAT | O_RDWR | O_NOFOLLOW, S_IRUSR | S_IWUSR)
         guard lockFD >= 0, flock(lockFD, LOCK_EX | LOCK_NB) == 0 else { throw BrowserError("already_running", "此数据目录已有运行中的应用") }
         if FileManager.default.fileExists(atPath: file.path) { records = try JSONDecoder().decode([SpaceRecord].self, from: Data(contentsOf: file)) }
-        for record in records where !record.deleting { spaces.append(try Space(record, restoring: true)) }
+        for var record in records where !record.deleting {
+            let exceedsCapacity = record.suspended != true &&
+                (record.tabs.count > limits.tabsPerSpace || spaces.reduce(0) { $0 + $1.tabs.count } + record.tabs.count > limits.liveWebViews)
+            if exceedsCapacity { record.suspended = true }
+            let space = try Space(record, restoring: true)
+            if exceedsCapacity { space.resourceBlockedReason = "恢复所需 WebView 超出容量；已保留为休眠 Space，可关闭多余 Tab 或释放容量后 resume" }
+            spaces.append(space)
+        }
         for space in spaces { bind(space) }
     }
 
@@ -799,6 +826,7 @@ final class BrowserModel {
                 guard configuration.websiteDataStore === space.store else {
                     throw BrowserError("popup_store_mismatch", "拒绝使用其他 Space 的网站数据创建弹窗")
                 }
+                try self.checkCapacity(space: space, addingTabs: 1, addingViews: 1, popup: true)
                 let popup = Tab(record: TabRecord(id: UUID(), url: url.absoluteString), store: configuration.websiteDataStore,
                                 tls: space.record.tls, configuration: configuration)
                 popup.openerTabID = tab.id
@@ -815,7 +843,7 @@ final class BrowserModel {
                 let replacement = remaining.isEmpty ? Tab(record: TabRecord(id: UUID(), url: "about:blank"), store: tab.webView.configuration.websiteDataStore, tls: space.record.tls) : nil
                 if let replacement { remaining.append(replacement) }
                 var record = space.record
-                record.tabs = remaining.map { TabRecord(id: $0.id, url: $0.persistedURL) }
+                record.tabs = remaining.map { TabRecord(id: $0.id, url: $0.persistedURL, openerTabID: $0.openerTabID) }
                 if record.defaultTab == tab.id { record.defaultTab = remaining[0].id }
                 do { try self.commitSpaceRecord(record, for: space) }
                 catch { replacement?.close(); fputs("Persistence error: \(error)\n", stderr); return }
@@ -836,7 +864,7 @@ final class BrowserModel {
 
     func save(_ space: Space) throws {
         var record = space.record
-        if !space.suspended && space.configurationError == nil { record.tabs = space.tabs.map { TabRecord(id: $0.id, url: $0.persistedURL) } }
+        if !space.suspended && space.configurationError == nil { record.tabs = space.tabs.map { TabRecord(id: $0.id, url: $0.persistedURL, openerTabID: $0.openerTabID) } }
         try commitSpaceRecord(record, for: space)
     }
 
@@ -858,6 +886,7 @@ final class BrowserModel {
 
     private func resume(_ space: Space) throws {
         guard space.suspended else { return }
+        try checkCapacity(space: space, addingTabs: 0, addingViews: space.record.tabs.count)
         let previous = space.record
         try space.activate()
         space.record.suspended = false
@@ -869,11 +898,23 @@ final class BrowserModel {
             throw error
         }
         bind(space)
+        space.resourceBlockedReason = nil
         for tab in space.tabs {
             if let error = space.networkError { tab.navigationError = error; continue }
             if tab.persistedURL != "about:blank", let url = URL(string: tab.persistedURL) { tab.load(url) }
         }
         changed?()
+    }
+
+    private func checkCapacity(space: Space? = nil, addingTabs: Int, addingViews: Int, popup: Bool = false) throws {
+        let reason: String?
+        if space == nil && spaces.count >= limits.spaces { reason = "Space 数量上限 \(limits.spaces)" }
+        else if let space, space.record.tabs.count + addingTabs > limits.tabsPerSpace { reason = "每个 Space 的 Tab 上限 \(limits.tabsPerSpace)" }
+        else if records.filter({ !$0.deleting }).reduce(0, { $0 + $1.tabs.count }) + addingTabs > limits.totalTabs { reason = "总 Tab 上限 \(limits.totalTabs)" }
+        else if spaces.reduce(0, { $0 + $1.tabs.count }) + addingViews > limits.liveWebViews { reason = "活跃 WebView 上限 \(limits.liveWebViews)" }
+        else if popup, let space, space.tabs.filter({ $0.openerTabID != nil }).count >= limits.popupsPerSpace { reason = "网页弹窗上限 \(limits.popupsPerSpace)" }
+        else { reason = nil }
+        if let reason { throw BrowserError("resource_limit", "已达到\(reason)；请显式关闭或休眠不再使用的页面") }
     }
 
     private func removeStore(_ id: UUID) async throws -> Bool {
@@ -973,6 +1014,7 @@ final class BrowserModel {
                     "ready": !restoring,
                     "shutdownImpact": shutdownImpact,
                     "liveWebViews": spaces.reduce(0) { $0 + $1.tabs.count },
+                    "resourceLimits": limits.summary,
                     "observer": observerState?() ?? [:],
                     "pendingStoreCleanup": records.filter(\.deleting).count,
                     "storeCleanupErrors": storeCleanupErrors.map { ["spaceId": $0.key.uuidString, "error": $0.value] as [String: Any] },
@@ -1002,6 +1044,7 @@ final class BrowserModel {
             }
             let tab = TabRecord(id: UUID(), url: "about:blank")
             let tls = r.options["ignore-certificate-errors"] == "true" ? TLSConfiguration.insecure : try r.options["ca-cert"].map { try TLSConfiguration(path: $0) }
+            try checkCapacity(addingTabs: 1, addingViews: 1)
             let record = SpaceRecord(id: UUID(), name: name, proxy: proxy, defaultTab: tab.id, tabs: [tab], tls: tls)
             let space = try Space(record)
             records.append(record)
@@ -1072,7 +1115,7 @@ final class BrowserModel {
             if command.hasPrefix("download.") {
                 if command == "download.list" { return ["spaceId": id.uuidString, "tabId": tab.id.uuidString, "value": tab.downloads.snapshot()] }
                 let downloadID = try arg(0)
-                if command == "download.cancel" { try tab.downloads.cancel(downloadID) }
+                if command == "download.cancel" { try await tab.downloads.cancelAndWait(downloadID) }
                 if command == "download.wait" {
                     let timeout = Int(r.options["timeout"] ?? "15000") ?? 0
                     guard (1...60000).contains(timeout) else { throw BrowserError("invalid_timeout", "timeout 必须为 1–60000 ms") }
@@ -1137,10 +1180,13 @@ final class BrowserModel {
         }
         if command == "open" { _ = try validateURL(arg(0)) }
         if command == "tab.new" { _ = try validateURL(r.args.first ?? "about:blank") }
+        if command == "tab.new" {
+            try checkCapacity(space: space, addingTabs: 1, addingViews: space.suspended ? space.record.tabs.count + 1 : 1)
+        }
         if command == "tab.default" || command == "tab.close" {
             let tabID = try arg(0)
             var record = space.record
-            if !space.suspended { record.tabs = space.tabs.map { TabRecord(id: $0.id, url: $0.persistedURL) } }
+            if !space.suspended { record.tabs = space.tabs.map { TabRecord(id: $0.id, url: $0.persistedURL, openerTabID: $0.openerTabID) } }
             let index = record.tabs.firstIndex { $0.id.uuidString.lowercased() == tabID.lowercased() }!
             let id = record.tabs[index].id
             if command == "tab.default" {
@@ -1181,7 +1227,7 @@ final class BrowserModel {
         guard var tab = space.tabs.first(where: { $0.id.uuidString.lowercased() == tabID.lowercased() }) else { throw BrowserError("tab_not_found", "Space 中不存在该标签页") }
         // Replace a stalled view only on explicit navigation. Never replay an Agent action.
         if ["open", "reload"].contains(command), tab.terminated || tab.unresponsive {
-            let replacement = Tab(record: TabRecord(id: tab.id, url: tab.persistedURL), store: store, tls: space.record.tls, diagnostics: tab.diagnostics)
+            let replacement = Tab(record: TabRecord(id: tab.id, url: tab.persistedURL, openerTabID: tab.openerTabID), store: store, tls: space.record.tls, diagnostics: tab.diagnostics)
             let index = space.tabs.firstIndex(where: { $0 === tab })!
             tab.close(); space.tabs[index] = replacement; tab = replacement
             bind(space); changed?()

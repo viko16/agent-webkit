@@ -74,6 +74,8 @@ def verify_downloads(cli, base, out, restart, state):
         cli('space', 'suspend', name, error='space_busy')
         cancelled = command('download', 'cancel', slow)['value']
         assert cancelled['status'] == 'cancelled' and cancelled['path'] is None
+        assert cancelled['cleanupError'] is None
+        assert not (path.parent.parent / slow).exists()
         assert command('download', 'cancel', slow)['value']['status'] == 'cancelled'
         failed = command('download', 'wait', begin('#drop'))['value']
         assert failed['status'] == 'failed' and failed['error'] and failed['path'] is None, failed
@@ -83,6 +85,7 @@ def verify_downloads(cli, base, out, restart, state):
                 break
             time.sleep(.02)
         assert not leftovers, leftovers
+        assert not (path.parent.parent / failed['id']).exists()
         active_ids = [begin('#slow') for _ in range(9)]
         capacity = command('download', 'wait', active_ids[-1])['value']
         assert capacity['status'] == 'failed' and capacity['error'] == 'download_capacity', capacity
@@ -97,6 +100,11 @@ def verify_downloads(cli, base, out, restart, state):
         cli('tab', 'close', target, '--space', name)
         cli('download', 'wait', active, *flags, error='tab_not_found')
         assert path.exists()
+        for _ in range(100):
+            if not (state / 'downloads' / work['id'] / target / active).exists():
+                break
+            time.sleep(.02)
+        assert not (state / 'downloads' / work['id'] / target / active).exists()
         target = cli('tab', 'new', urljoin(base, '/files'), '--space', name)['tabId']
         flags = ('--space', name, '--tab', target)
         interrupted = begin('#slow')

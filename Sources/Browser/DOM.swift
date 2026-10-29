@@ -88,42 +88,125 @@ enum DOM {
         for (const [ref, el] of nodes) if (!connected(el)) nodes.delete(ref);
         const elements=[];
         const unsupported=[];
-        let scanned=0, truncated=false;
+        const outputBudgetBytes=1024*1024, encoder=new TextEncoder();
+        const textStyles=new WeakMap(), blockDisplays=new Set(['block','flex','grid','list-item','table','table-row','table-cell']);
+        let scanned=0, textScanned=0, truncated=false, outputBytes=4096, exhausted=false;
+        function safePrefix(text, limit) {
+          let end=Math.min(text.length,Math.max(0,limit));
+          const last=text.charCodeAt(end-1);
+          if(last>=0xd800&&last<=0xdbff) end--;
+          return text.slice(0,end);
+        }
+        function bounded(value, limit=200) {
+          const text=String(value||'');
+          const prefix=safePrefix(text,limit);
+          if(prefix.length<text.length) truncated=true;
+          return prefix;
+        }
+        function textStyle(parent) {
+          const pending=[];
+          let node=parent;
+          while(node&&!textStyles.has(node)) { pending.push(node); node=node.parentElement; }
+          let info=node?textStyles.get(node):{shown:true,block:null};
+          for(const element of pending.reverse()) {
+            const style=element.ownerDocument.defaultView.getComputedStyle(element);
+            info={shown:info.shown&&style.display!=='none'&&style.visibility==='visible'&&Number(style.opacity)!==0&&!element.hidden&&!element.inert,
+                  block:blockDisplays.has(style.display)?element:info.block};
+            textStyles.set(element,info);
+          }
+          return textStyles.get(parent);
+        }
+        function readText(root, limit, checkVisibility=true) {
+          if(!root) return '';
+          const doc=root.ownerDocument||root, walker=doc.createTreeWalker(root,4);
+          let result='', node, previousBlock;
+          while((node=walker.nextNode())) {
+            if(++textScanned>20000) { truncated=true; break; }
+            const parent=node.parentElement;
+            if(!parent || parent.closest('script,style,noscript,template')) continue;
+            const info=textStyle(parent);
+            if(checkVisibility&&!info.shown) continue;
+            if(result&&previousBlock!==info.block&&result.length<limit) result+='\n';
+            previousBlock=info.block;
+            const remaining=limit-result.length;
+            result+=safePrefix(node.data,remaining);
+            if(node.data.length>remaining || result.length>=limit) { truncated=true; break; }
+          }
+          return safePrefix(result,limit).replace(/\s+/g,' ').trim();
+        }
+        function append(list,item) {
+          const size=encoder.encode(JSON.stringify(item)).length+1;
+          if(outputBytes+size>outputBudgetBytes) { truncated=true; exhausted=true; return; }
+          list.push(item); outputBytes+=size;
+        }
         function visit(root, context) {
           if(context.length>16) { truncated=true; return; }
-          for(const el of root.querySelectorAll('*')) {
-            if(++scanned>10000 || elements.length>=1000) { truncated=true; return; }
+          const walker=(root.ownerDocument||root).createTreeWalker(root,1);
+          let el;
+          while((el=walker.nextNode())) {
+            if(exhausted) return;
+            if(++scanned>10000 || elements.length>=1000) { truncated=true; exhausted=true; return; }
             const boundary=el.shadowRoot || el.localName==='iframe' || el.localName==='frame';
             if(visible(el) && (el.matches('a,button,input,select,textarea,summary,[role],[onclick],[tabindex],[contenteditable]') || boundary)) describe(el,context);
+            if(exhausted) return;
             if(boundary) {
               const child={kind:el.shadowRoot?'shadow':'frame',ref:refFor(el)};
               let nextRoot;
               try { nextRoot=childRoot(el); }
-              catch(error) { unsupported.push({context:[...context,child],code:'unsupported_context',reason:String(error.message)}); continue; }
+              catch(error) { append(unsupported,{context:[...context,child],code:'unsupported_context',reason:bounded(error.message)}); continue; }
               visit(nextRoot, [...context,child]);
             }
           }
         }
         function describe(el,context) {
-          const tag=el.tagName.toLowerCase(), type=el.type||'';
-          const labelled=(el.getAttribute('aria-labelledby')||'').split(/\s+/).map(id=>el.getRootNode().getElementById(id)?.textContent||'').join(' ').trim();
-          const name=labelled || el.getAttribute('aria-label') || Array.from(el.labels||[]).map(l=>l.innerText).join(' ') || el.getAttribute('placeholder') || el.innerText || el.getAttribute('name') || '';
+          const tag=bounded(el.tagName.toLowerCase()), type=el.type||'';
+          const ids=bounded(el.getAttribute('aria-labelledby'),2048).split(/\s+/);
+          let labelled='', labels='';
+          if(ids.length>16) truncated=true;
+          for(const id of ids.slice(0,16)) {
+            if(labelled.length>=200) { truncated=true; break; }
+            const text=readText(el.getRootNode().getElementById(id),200-labelled.length,false);
+            if(text) labelled+=(labelled?' ':'')+text;
+          }
+          if(el.labels?.length>16) truncated=true;
+          for(let i=0;i<Math.min(el.labels?.length||0,16);i++) {
+            if(labels.length>=200) { truncated=true; break; }
+            labels+=(labels?' ':'')+readText(el.labels[i],200-labels.length);
+          }
+          const name=labelled || bounded(el.getAttribute('aria-label')) || labels || bounded(el.getAttribute('placeholder')) || readText(el,200) || bounded(el.getAttribute('name'));
           const inputRole=({checkbox:'checkbox',radio:'radio',range:'slider',number:'spinbutton',button:'button',submit:'button',reset:'button'})[type]||'textbox';
-          const role=el.getAttribute('role') || ({a:'link',button:'button',textarea:'textbox',select:'combobox',input:inputRole})[tag] || tag;
+          const role=bounded(el.getAttribute('role')) || ({a:'link',button:'button',textarea:'textbox',select:'combobox',input:inputRole})[tag] || tag;
+          const options=[];
+          let value=type==='password'?'[redacted]':tag==='select'?'':bounded(el.value);
+          if(tag==='select') {
+            if(el.options.length>100) truncated=true;
+            for(let i=0;i<Math.min(el.options.length,100);i++) {
+              const option=el.options[i];
+              const text=readText(option,200,false), rawValue=option.getAttribute('value'), rawLabel=option.getAttribute('label');
+              options.push({value:rawValue===null?text:bounded(rawValue),label:rawLabel===null?text:bounded(rawLabel),selected:option.selected,disabled:option.disabled});
+            }
+            const selected=el.options[el.selectedIndex];
+            if(selected) {
+              const rawValue=selected.getAttribute('value');
+              value=rawValue===null?readText(selected,200,false):bounded(rawValue);
+            }
+          }
           const r=el.getBoundingClientRect();
-          elements.push({ref:refFor(el), context, tag, role, name:name.replace(/\s+/g,' ').trim().slice(0,200),
-            value:type==='password'?'[redacted]':String(el.value||'').slice(0,200),
+          append(elements,{ref:refFor(el), context, tag, role, name:bounded(name).replace(/\s+/g,' ').trim(),
+            value,
             disabled:Boolean(el.matches(':disabled')||el.getAttribute('aria-disabled')==='true'),
             readOnly:Boolean(el.readOnly||el.getAttribute('aria-readonly')==='true'),
             ...(type==='checkbox'||type==='radio'?{checked:el.checked}:{}),
-            ...(tag==='select'?{options:Array.from(el.options).map(o=>({value:o.value,label:o.label,selected:o.selected,disabled:o.disabled}))}:{}),
+            ...(tag==='select'?{options}:{}),
             bounds:{x:r.x,y:r.y,width:r.width,height:r.height,coordinateSpace:el.ownerDocument===document?'main-viewport':'frame-viewport'}});
         }
         visit(document,[]);
-        const text=document.body?.innerText||'';
-        return {elements,text:text.slice(0,20000),textScope:'main-frame',scope:'same-origin-frames-and-open-shadow-roots',limit:1000,
+        const bodyText=readText(document.body,20000);
+        const text=outputBytes+encoder.encode(JSON.stringify(bodyText)).length<=outputBudgetBytes?bodyText:'';
+        if(text!==bodyText) truncated=true;
+        return {elements,text,textScope:'main-frame',scope:'same-origin-frames-and-open-shadow-roots',limit:1000,outputBudgetBytes,
           unsupported,limitations:['Closed shadow roots cannot be enumerated; explicit >>> traversal returns unsupported_context.'],
-          truncated:truncated||text.length>20000};
+          truncated};
       }
       function act(kind,target,value) {
         const el=resolve(target);

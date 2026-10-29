@@ -66,7 +66,11 @@ python3 tests/skill_workflow.py
 
 网页下载由公开 WKDownload 委托处理。先触发一次动作，再用 `download list --space NAME --tab ID` 获取 ID，`download wait ID --space NAME --tab ID --timeout 15000` 等待，或 `download cancel ID ...` 显式取消。等待超时不取消、不重复触发下载；失败/取消结果有状态和原因，只有 completed 返回可用 path。状态和 ID 属于目标 Tab，可在页面 busy 时查询/等待/取消。
 
-文件保存在 daemon 数据目录的 `downloads/SPACE_ID/TAB_ID/DOWNLOAD_ID/文件名`，各目录 0700，每次新 ID，不覆盖同名文件。最多 8 个并行、64 条内存记录，每个下载最多 5 分钟。关闭/删除/退出取消未完成下载并尝试清理残片；Space 有下载时拒绝休眠。已完成文件保留，网站数据删除不删除下载文件；记录在关闭、休眠和重启后不恢复，文件路径仍可由此前结果使用。下载进度是 WebKit 宿主观测，不代表服务端业务成功。
+文件保存在 daemon 数据目录的 `downloads/SPACE_ID/TAB_ID/DOWNLOAD_ID/文件名`，各目录 0700，每次新 ID，不覆盖同名文件。每个 Tab 最多 8 个并行、64 条内存记录，每个下载最多 5 分钟。默认单文件 512 MiB、每 Space 累计 2 GiB、应用累计 8 GiB，并保留至少 512 MiB 磁盘余量；daemon 环境变量 `BROWSER_DOWNLOAD_MAX_FILE_BYTES`、`BROWSER_DOWNLOAD_MAX_SPACE_BYTES`、`BROWSER_DOWNLOAD_MAX_TOTAL_BYTES`、`BROWSER_DOWNLOAD_MIN_FREE_BYTES` 可调整，`download list` 返回生效限额。累计占用包含重启前文件；声明长度在分配目的地前检查，未知长度通过进度和磁盘占用周期检查，限制触发到确认取消之间仍可能接收数据。已完成文件保留，网站数据删除不删除下载文件；记录在关闭、休眠和重启后不恢复，文件路径仍可由此前结果使用。下载进度是 WebKit 宿主观测，不代表服务端业务成功。
+
+取消等待 WebKit 确认停止后清理本项目未完成下载的 UUID 目录；清理失败通过条目的 `cleanupError` 返回。关闭/删除/退出也请求取消；Space 有下载时拒绝休眠。完成文件不会被限额或清理策略自动删除。
+
+默认最多 64 个 Space、每 Space 64 个 Tab、合计 1024 个 Tab、128 个活跃 WebView，每个 Space 最多 8 个活跃网页弹窗。daemon 环境变量 `BROWSER_MAX_SPACES`、`BROWSER_MAX_TABS_PER_SPACE`、`BROWSER_MAX_TOTAL_TABS`、`BROWSER_MAX_LIVE_WEBVIEWS`、`BROWSER_MAX_POPUPS_PER_SPACE` 可调整，`status.resourceLimits` 返回生效值。创建和恢复运行时超额返回 `resource_limit`；启动时容量不足的 Space 保持休眠并显示 `resourceBlockedReason`，标签页记录保留。
 
 手动 file input 使用 NSOpenPanel，仅在应用已激活且对应页面位于 key window 时打开；后台调用安全取消，`state.page.fileChooser` 返回 `requires_foreground` / `requiresForeground: true`，不主动激活。用户在原生窗口选取文件后可继续页面操作。目录选择不支持，关闭/导航/退出会结束待决面板。`python3 tests/reliability.py --downloads-only` 验证真实委托、同名、失败/取消/等待期限、Space/Tab 隔离、关闭/重启和后台选择限制。
 
@@ -355,7 +359,7 @@ Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 
 
 `WKUIDelegate.createWebViewWith` 使用 WebKit 提供的原始 configuration 创建同 Space Tab；检查其 DataStore 与 Space 相同，继承 TLS delegate 策略和独立 DOM world，不手动二次 load，以保留 opener、命名窗口复用和请求语义。原生窗口几何/工具栏请求不生效，`page.popupPolicy` 明示此限制。弹窗不改 CLI default 或 GUI 选择。
 
-`webViewDidClose` 仅移除本 Space 的对应 Tab；最后一个脚本窗口关闭时保留一个普通空白 Tab。关闭或删除 Space 会解绑全部 delegate、回调并释放窗口。`openerTabId` 为本次运行时的来源信息，不在重启后伪造 opener；重启仍恢复 Tab ID、URL 和网站数据。
+`webViewDidClose` 仅移除本 Space 的对应 Tab；最后一个脚本窗口关闭时保留一个普通空白 Tab。关闭或删除 Space 会解绑全部 delegate、回调并释放窗口。`openerTabId` 持久化创建来源，用于跨休眠和重启的弹窗配额；它不代表网页仍有可用的 `window.opener`，恢复不会重建 JavaScript opener 关系。重启恢复 Tab ID、URL 和网站数据。
 
 `click --wait-for-popup` 与 `--wait-for-navigation` 互斥，返回观察到的 `newTabId`；调用方再用该 ID 等待页面加载。若网站要求可信激活或 WebKit 阻止弹窗而未调用 delegate，期限内返回 `popup_not_opened`，不修改 page world 的 `window.open` 来伪装结果。`unsupported_navigation` 表示 URL scheme 被拒绝；GUI 和 state 的 `lastNavigationRejection` 也可查询。普通 click/fill 返回 `businessOutcomeVerified: false`，成功不等于业务完成。
 
@@ -395,7 +399,7 @@ Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 
 
 跨源或尚不可访问的 frame 在 snapshot 的 `unsupported` 中返回上下文和原因，显式进入时返回 `unsupported_context`。公开 DOM 无法区分 closed root 和没有 root；显式进入两者均返回该错误，snapshot 不声称完整枚举 closed root。`textScope` 为 main-frame；元素 bounds 的 `coordinateSpace` 区分主视口和 frame 内视口，不伪装成整页截图坐标。
 
-遍历上限为 1000 个控件、10000 个扫描节点、16 层边界；达到上限标记 `truncated`。`tests/context_cases.py` 随 reliability 执行，覆盖嵌套作用域、同名 ID 不串用、frame 的输入事件、隐藏祖先、display:contents 宿主、跨源/closed 错误、frame 导航及宿主替换后的旧引用拒绝。尚未覆盖全部 slot/富文本组件或跨源 frame 内容。
+遍历上限为 1000 个控件、10000 个扫描节点、16 层边界；文本读取最多扫描 20000 个文本节点，正文最多 20000 字符，控件字段最多 200 字符，select 最多 100 个选项。快照采用 1 MiB 总输出预算，达到任一限制返回部分结果并标记 `truncated`。`tests/context_cases.py` 随 reliability 执行，覆盖嵌套作用域、同名 ID 不串用、frame 的输入事件、隐藏祖先、display:contents 宿主、跨源/closed 错误、frame 导航及宿主替换后的旧引用拒绝。`--resources-only` 追加巨大 DOM、选项和输出预算回归。尚未覆盖全部 slot/富文本组件或跨源 frame 内容。
 
 ## 跨源 frame 独立实验
 
