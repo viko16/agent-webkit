@@ -22,8 +22,10 @@ struct Request: Codable {
             "dialog.list":0...0, "dialog.respond":2...2, "space.suspend":1...1, "space.resume":1...1,
             "download.list":0...0, "download.wait":1...1, "download.cancel":1...1, "upload":2...17]
 
-    static func allowedOptions(for command: String) -> Set<String> {
-        var allowed: Set<String> = ["socket", "data-dir"]
+    static let clientOptions: Set<String> = ["socket", "data-dir"]
+
+    static func allowedOptions(for command: String, includingClientOptions: Bool = false) -> Set<String> {
+        var allowed: Set<String> = includingClientOptions ? clientOptions : []
         if !["help", "capabilities", "version", "daemon", "status", "shutdown"].contains(command), !command.hasPrefix("space.") {
             allowed.insert("space")
             if !command.hasPrefix("tab.") { allowed.insert("tab") }
@@ -143,6 +145,7 @@ struct Options {
         dataDirectory = URL(fileURLWithPath: options["data-dir"] ?? ProcessInfo.processInfo.environment["BROWSER_DATA_DIR"] ??
             FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/AgentWebKit").path)
         socketPath = options["socket"] ?? ProcessInfo.processInfo.environment["BROWSER_SOCKET"] ?? dataDirectory.appendingPathComponent("browser.sock").path
+        for key in Request.clientOptions { options[key] = nil }
         request = Request(command: command, args: positionals, options: options)
         try request.validate()
     }

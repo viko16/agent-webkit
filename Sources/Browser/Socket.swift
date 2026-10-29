@@ -78,6 +78,7 @@ final class SocketServer {
     private var fd: Int32 = -1
     private var socketLock: Int32 = -1
     private let path: String
+    private let connections = DispatchSemaphore(value: 32)
     init(path: String) { self.path = path }
 
     func start(handler: @escaping @MainActor (Request) async -> [String: Any]) throws {
@@ -100,20 +101,27 @@ final class SocketServer {
         chmod(path, S_IRUSR | S_IWUSR)
         guard listen(fd, 32) == 0 else { throw socketError("listen") }
         let listener = fd
+        let connections = self.connections
         DispatchQueue.global().async {
             while true {
                 let client = accept(listener, nil, nil)
                 if client < 0 { if errno == EINTR { continue }; break }
                 configure(client)
+                // Reserve before dispatching: incomplete clients count toward the bound.
+                guard connections.wait(timeout: .now()) == .success else {
+                    _ = fcntl(client, F_SETFL, O_NONBLOCK)
+                    try? writeMessage(client, jsonData(failure(BrowserError("server_busy", "在途连接已达 32；请稍后重试"))))
+                    close(client); continue
+                }
                 DispatchQueue.global().async {
                     var uid: uid_t = 0; var gid: gid_t = 0
-                    guard getpeereid(client, &uid, &gid) == 0, uid == getuid() else { close(client); return }
+                    guard getpeereid(client, &uid, &gid) == 0, uid == getuid() else { close(client); connections.signal(); return }
                     do {
                         let request = try JSONDecoder().decode(Request.self, from: readMessage(client))
                         Task { @MainActor in
                             let response = await handler(request)
                             DispatchQueue.global().async {
-                                defer { close(client) }
+                                defer { close(client); connections.signal() }
                                 do { try writeMessage(client, jsonData(response)) }
                                 catch {
                                     var failed = failure(error)
@@ -123,7 +131,7 @@ final class SocketServer {
                             }
                         }
                     } catch {
-                        try? writeMessage(client, jsonData(failure(error))); close(client)
+                        try? writeMessage(client, jsonData(failure(error))); close(client); connections.signal()
                     }
                 }
             }

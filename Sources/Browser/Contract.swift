@@ -62,13 +62,16 @@ enum CLIContract {
     private static func command(_ name: String) -> [String: Any] {
         let arity = Request.arities[name]!
         let required = requiredOptions(name)
-        let options = Request.allowedOptions(for: name).sorted().map { key -> [String: Any] in
+        let options = Request.allowedOptions(for: name, includingClientOptions: true).sorted().map { key -> [String: Any] in
             var detail = optionDetails[key]!
             detail["name"] = key
             detail["required"] = required.contains(key)
-            // IPC always uses strings, including "true" for valueless CLI flags.
-            detail["ipcType"] = "string"
-            if detail["type"] as? String == "flag" { detail["ipcValue"] = "true" }
+            detail["availability"] = Request.clientOptions.contains(key) ? ["cli"] : ["cli", "ipc"]
+            // Client routing options never cross the socket boundary.
+            if !Request.clientOptions.contains(key) {
+                detail["ipcType"] = "string"
+                if detail["type"] as? String == "flag" { detail["ipcValue"] = "true" }
+            }
             return detail
         }
         let result: String
@@ -183,7 +186,7 @@ enum CLIContract {
         "direct_system_proxy_conflict", "diagnostics_unavailable", "dialog_not_found", "dialog_already_handled", "dialog_expired", "dialog_cancelled", "dialog_capacity", "element_not_actionable", "element_not_editable", "element_readonly",
         "invalid_arguments", "invalid_certificate", "invalid_json_result", "invalid_name", "invalid_option",
         "invalid_proxy", "invalid_response", "invalid_selector", "invalid_timeout", "invalid_url", "ipc_error",
-        "javascript_error", "last_tab", "message_too_large", "not_ready", "operation_failed", "persistence_failed", "png_failed", "resource_limit",
+        "javascript_error", "last_tab", "message_too_large", "not_ready", "operation_failed", "persistence_failed", "png_failed", "resource_limit", "server_busy",
         "popup_failed", "popup_not_opened", "popup_store_mismatch", "proxy_required", "selector_count",
         "shutting_down", "snapshot_failed", "socket_path_too_long", "space_busy", "space_exists", "space_not_found", "space_suspended",
         "space_required", "stale_ref", "tab_closed", "tab_not_found", "timeout", "unknown_command",

@@ -27,7 +27,12 @@ def verify_offline(cli):
             name for name in commands if name.startswith(group + '.')}
     timeout = next(option for option in commands['open']['options'] if option['name'] == 'timeout')
     assert (timeout['minimum'], timeout['maximum'], timeout['default'], timeout['unit']) == (1, 60000, 15000, 'ms')
-    assert all(option['ipcType'] == 'string' for command in commands.values() for option in command['options'])
+    for command in commands.values():
+        for option in command['options']:
+            if option['name'] in ('socket', 'data-dir'):
+                assert option['availability'] == ['cli'] and 'ipcType' not in option
+            else:
+                assert option['ipcType'] == 'string' and 'ipc' in option['availability']
     detail = next(option for option in commands['diagnostics']['options'] if option['name'] == 'detail')
     assert detail['enum'] == ['on', 'off'] and not detail['required']
     inspectable = next(option for option in commands['diagnostics']['options'] if option['name'] == 'inspectable')
@@ -64,6 +69,11 @@ def verify_live_contract(cli, socket_path):
     assert raw('help', ['space', 'create'])['result'] == cli('help', 'space', 'create')
     assert raw('help', ['missing'])['error']['code'] == 'invalid_arguments'
     assert raw('capabilities', options={'tab': 'wrong'})['error']['code'] == 'invalid_arguments'
+    for key in ('data-dir', 'socket'):
+        assert raw('status', options={key: '/tmp/other-daemon'})['error']['code'] == 'invalid_arguments'
+        assert raw('space.delete', ['work'], {key: '/tmp/other-daemon'})['error']['code'] == 'invalid_arguments'
+    assert cli('status', '--data-dir', str(socket_path.parent), '--socket', str(socket_path))['pid'] == before['pid']
+    assert cli('space', 'list') == spaces
     assert raw('wait', options={'space': 'work', 'url': 'x', 'text': 'y'})['error']['code'] == 'invalid_arguments'
     assert raw('diagnostics', options={'space': 'work', 'inspectable': 'yes'})['error']['code'] == 'invalid_arguments'
     assert raw('diagnostics', options={'space': 'work', 'detail': 'on', 'inspectable': 'on'})['error']['code'] == 'invalid_arguments'
