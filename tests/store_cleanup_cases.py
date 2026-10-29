@@ -17,9 +17,19 @@ def cleanup_failure_app(out):
     clearing = '            store.removeData(ofTypes: types, modifiedSince: .distantPast) {\n'
     assert source.count(removal) == source.count(clearing) == 1
     source = source.replace(removal, removal + '''        if ProcessInfo.processInfo.environment["BROWSER_TEST_CLEANUP_ID"] == id.uuidString {
-            throw BrowserError("injected_store_in_use", "Force the clearStoreContents fallback")
+            if ProcessInfo.processInfo.environment["BROWSER_TEST_CLEANUP_ERROR"] != "data_store_removal_timeout" {
+                throw BrowserError("injected_store_in_use", "Force the clearStoreContents fallback")
+            }
         }
 ''')
+    callback = '            WKWebsiteDataStore.remove(forIdentifier: id) { error in\n'
+    assert source.count(callback) == 1
+    source = source.replace(callback, '''            if ProcessInfo.processInfo.environment["BROWSER_TEST_CLEANUP_ID"] == id.uuidString,
+               ProcessInfo.processInfo.environment["BROWSER_TEST_CLEANUP_ERROR"] == "data_store_removal_timeout" {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 6) { operation.finish(.success(())) }
+                return
+            }
+''' + callback)
     source = source.replace(clearing, '''            if ProcessInfo.processInfo.environment["BROWSER_TEST_CLEANUP_ID"] == id.uuidString {
                 let code = ProcessInfo.processInfo.environment["BROWSER_TEST_CLEANUP_ERROR"]!
                 fputs("Injected cleanup failure: \\(code) \\(id)\\n", stderr)
@@ -57,7 +67,7 @@ def verify_store_cleanup_failures(cli, start, stop, state, base, out):
     executable = cleanup_failure_app(out)
     registry = state / 'spaces.json'
     results = []
-    for code in ('data_removal_failed', 'data_removal_timeout'):
+    for code in ('data_removal_failed', 'data_removal_timeout', 'data_store_removal_timeout'):
         failed = cli('space', 'create', 'cleanup-failed', '--proxy', 'direct')
         later = cli('space', 'create', 'cleanup-later', '--proxy', 'direct')
         healthy = cli('space', 'create', 'cleanup-healthy', '--proxy', 'direct')
@@ -76,10 +86,11 @@ def verify_store_cleanup_failures(cli, start, stop, state, base, out):
         start(executable=executable, extra_env={
             'BROWSER_TEST_CLEANUP_ID': failed['id'], 'BROWSER_TEST_CLEANUP_ERROR': code})
         startup_seconds = time.monotonic() - started
-        if code == 'data_removal_timeout':
+        if code.endswith('_timeout'):
             assert startup_seconds >= 5, startup_seconds
         status = cli('status')
         assert status['ready'] and status['pendingStoreCleanup'] == 1, status
+        assert status['storeCleanupErrors'][0]['error']['code'] == code, status
         spaces = cli('space', 'list')
         assert [space['id'] for space in spaces] == [healthy['id']], spaces
         assert spaces[0]['defaultTabId'] == healthy['defaultTabId'], spaces
@@ -110,6 +121,30 @@ def verify_store_cleanup_failures(cli, start, stop, state, base, out):
                             explicitDeleteStillFails=True, retryAfterRestart=True,
                             startupSeconds=startup_seconds))
     return dict(passed=True, method='generated daemon with injected Store fallback failures', cases=results)
+
+
+def verify_delete_persistence_failure(cli, start, stop, state, base):
+    created = cli('space', 'create', 'delete-transaction', '--proxy', 'direct')
+    cli('space', 'create', 'delete-peer', '--proxy', 'direct')
+    cli('open', base, '--space', 'delete-transaction')
+    cli('evaluate', 'document.cookie="deleteProbe=kept; Max-Age=3600; Path=/";localStorage.deleteProbe="kept";true', '--space', 'delete-transaction')
+    permissions = state.stat().st_mode & 0o777
+    try:
+        state.chmod(0o500)
+        cli('space', 'delete', 'delete-transaction', error='operation_failed')
+    finally:
+        state.chmod(permissions)
+    cli('tab', 'new', '--space', 'delete-peer')
+    records = json.loads((state / 'spaces.json').read_text())
+    assert not next(record for record in records if record['id'] == created['id'])['deleting']
+    stop(); start()
+    cli('wait', '#message', '--space', 'delete-transaction')
+    value = cli('evaluate', '[document.cookie,localStorage.deleteProbe]', '--space', 'delete-transaction')['value']
+    assert value == ['deleteProbe=kept', 'kept'], value
+    for name in ('delete-transaction', 'delete-peer'):
+        cli('space', 'delete', name)
+    stop(); start()
+    return dict(passed=True, failedDeleteRolledBack=True, cookieAndLocalStoragePreserved=True)
 
 
 def verify_pending_store_only(cli, start, stop, state, base):

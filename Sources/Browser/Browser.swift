@@ -693,6 +693,7 @@ final class BrowserModel {
     private var lockFD: Int32 = -1
     var shuttingDown = false
     private(set) var restoring = true
+    private var storeCleanupErrors: [UUID: [String: Any]] = [:]
 
     init(directory: URL) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -712,14 +713,14 @@ final class BrowserModel {
         let cleanupBootstrap = records.contains(where: \.deleting) ? WKWebsiteDataStore.nonPersistent() : nil
         defer { withExtendedLifetime(cleanupBootstrap) {} }
         for record in records.filter(\.deleting) {
-            let removed: Bool
-            do { removed = try await removeStore(record.id) }
-            catch {
-                fputs("Pending store cleanup failed (\(record.id)): \(error)\n", stderr)
-                continue
+            do {
+                if try await removeStore(record.id) {
+                    try commitRecords(records.filter { $0.id != record.id })
+                }
             }
-            if removed {
-                records.removeAll { $0.id == record.id }; try persist()
+            catch {
+                storeCleanupErrors[record.id] = failure(error)["error"] as? [String: Any]
+                fputs("Pending store cleanup failed (\(record.id)): \(error)\n", stderr)
             }
         }
         for space in spaces {
@@ -733,7 +734,12 @@ final class BrowserModel {
     }
 
     func persist() throws {
-        try JSONEncoder().encode(records).write(to: file, options: .atomic)
+        try commitRecords(records)
+    }
+
+    private func commitRecords(_ candidate: [SpaceRecord]) throws {
+        try JSONEncoder().encode(candidate).write(to: file, options: .atomic)
+        records = candidate
     }
 
     private func bind(_ space: Space) {
@@ -810,6 +816,7 @@ final class BrowserModel {
     private func removeStore(_ id: UUID) async throws -> Bool {
         do { try await removeStoreOnce(id); return true }
         catch {
+            if (error as? BrowserError)?.code == "data_store_removal_timeout" { throw error }
             // WebKit may retain an idle network session after a stalled view is replaced.
             // Clear and verify the website data through the public API; keep the tombstone
             // if the empty store container cannot yet be removed in this process.
@@ -839,8 +846,10 @@ final class BrowserModel {
 
     private func removeStoreOnce(_ id: UUID) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let operation = PendingOperation(continuation)
+            operation.arm(milliseconds: 5000, error: BrowserError("data_store_removal_timeout", "Store 删除超时；已保留删除标记，下次启动会重试"), onTimeout: {})
             WKWebsiteDataStore.remove(forIdentifier: id) { error in
-                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+                if let error { operation.finish(.failure(error)) } else { operation.finish(.success(())) }
             }
         }
     }
@@ -903,6 +912,7 @@ final class BrowserModel {
                     "liveWebViews": spaces.reduce(0) { $0 + $1.tabs.count },
                     "observer": observerState?() ?? [:],
                     "pendingStoreCleanup": records.filter(\.deleting).count,
+                    "storeCleanupErrors": storeCleanupErrors.map { ["spaceId": $0.key.uuidString, "error": $0.value] as [String: Any] },
                     "blockedSpaces": spaces.filter { $0.networkError != nil }.map { $0.record.id.uuidString },
                     "systemProxy": systemProxyState(), "frontmostPid": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1,
                     "capabilities": ["input":"dom-synthetic", "snapshot":"same-origin-frames-and-open-shadow-roots", "screenshot":"viewport", "screenshotModes":["viewport", "element", "full-page"], "foregroundRequired":false],
@@ -945,12 +955,13 @@ final class BrowserModel {
         if command == "space.delete" {
             // Avoid retaining the Space/DataStore across the asynchronous removal API.
             guard spaces.first(where: { $0.record.id == id })?.busy != true else { throw BrowserError("space_busy", "Space 正在操作中") }
-            if let index = records.firstIndex(where: { $0.id == id }) { records[index].deleting = true }
-            try persist(); detach(id); changed?()
+            var candidate = records
+            if let index = candidate.firstIndex(where: { $0.id == id }) { candidate[index].deleting = true }
+            try commitRecords(candidate); detach(id); changed?()
             // Let AppKit's autorelease pool release the detached WKWebViews before removing their store.
             try await Task.sleep(nanoseconds: 100_000_000)
             let removed = try await removeStore(id)
-            if removed { records.removeAll { $0.id == id }; try persist() }
+            if removed { try commitRecords(records.filter { $0.id != id }); storeCleanupErrors[id] = nil }
             return ["deleted": true, "spaceId": id.uuidString, "websiteDataRemoved": true,
                     "dataStoreRemoved": removed, "cleanupPending": !removed]
         }
