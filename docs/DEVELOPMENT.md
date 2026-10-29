@@ -405,6 +405,16 @@ Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 
 
 可行性结论和正式功能边界见 [RESEARCH](RESEARCH.md)。当前 CLI 的 >>> 仍限同源 frame，跨源操作仍报 unsupported_context；实验没有把 WKFrameInfo 的临时对象或 URL 当成稳定 frame ID。
 
+## 后台 Hover/键盘独立实验
+
+`python3 tests/input_probe.py` 编译、签名并运行独立 AppKit/WebKit 测试应用，使用本地 HTTP fixture、两个 nonPersistent Store 和三个 Tab。需要 Swift/WebKit 与已登录桌面会话；没有新依赖，不连接产品 Socket、不创建持久 Space、不修改系统代理。窗口全程隐藏、非 key，应用禁止激活；不使用 Quartz、全局事件投递或私有选择器。
+
+实验比较页面计时器发起的 DOM 合成与公开 `NSEvent` / `NSWindow.sendEvent` / `NSResponder` 路径，检查 CSS :hover、菜单、焦点、Enter/Tab/Escape、Shift/Option/Control/Command，以及真实表单提交。原生输入轮次的准备、动作和观测不执行 JS，避免公开 JS 执行入口的手势语义污染结论；空闲 peer Tab 的隔离读取和现有产品 DOM bridge 另行标记，不作为原生激活证据。
+
+输出 `.artifacts/input-probe-*/` 下的构建/运行日志、原生状态与事件、POST 记录和综合报告；只有进程退出、fixture 端口关闭、结果断言通过后才写成功报告。测试会改变独立页面的焦点和表单，前台 PID/应用激活通知同时监测。失败保留已有报告和日志；宿主超时不等于取消 JS，也不自动重放输入。
+
+结果和未测范围见 [RESEARCH](RESEARCH.md) 与 [VALIDATION](VALIDATION.md)。实验确认部分后台键盘默认行为，未确认隐藏 Panel 的 CSS hover 或 Command-A 全选；报告对 hover 标记 `requiresForeground=true`，表示需人工前台接管，未实测自动前台注入。正式 CLI 没有新增 hover/key/focus 命令。
+
 ## 逐步计时
 
 重新构建并重启应用，然后运行：

@@ -45,6 +45,24 @@ Apple 的 [WWDC23 Network Relay 介绍](https://developer.apple.com/videos/play/
 
 结论：公开 API 足以支持受控的跨源定向 DOM bridge，可进入后续独立正式实现；本项完成可行性验证，当前 CLI 仍返回 unsupported_context。正式范围需先确定可寻址 frame/document 目标、父子路由与有界生命周期，不自动按 URL/深度拼接现有 >>>，不扩展到 closed Shadow Root。跨源可见性/坐标、截图/上传/对话框归属、sandbox/opaque origin、进程切换、CSP/跨站跟踪策略和任意网站均未由本 spike 验证，不宣称已支持。
 
+## 后台 Hover/键盘可行性（2026-10-29，#10）
+
+独立实验延续隐藏 nonactivating Panel 的产品视图结构，两个 nonPersistent Store、三个 WKWebView。只创建定向 `NSEvent` 并调用公开 [NSResponder](https://developer.apple.com/documentation/appkit/nsresponder)、[NSWindow](https://developer.apple.com/documentation/appkit/nswindow) 事件/焦点入口；没有激活、Quartz 全局输入或私有 WebKit 调用。以下限本机 macOS 27.2（26B123）、固定 US 键码及受控主文档。
+
+| 路径 | 真实观察 | 能力边界 |
+| --- | --- | --- |
+| 页面计时器 dispatchEvent 鼠标移动 | 四种 pointer/mouse 监听收到 isTrusted=false；CSS :hover、背景色与 CSS 菜单不变 | 不能用监听触发冒充 CSS hover |
+| NSWindow.sendEvent、WKWebView.mouseMoved、公开 hitTest 返回的 responder.mouseMoved | 隐藏 Panel 中没有网页移动事件，CSS hover/菜单不变 | 未找到已验证的公开后台 hover 路径，保留 requiresForeground/人工接管 |
+| 页面计时器合成按键 | keydown/up 为非可信、无用户激活；Enter/Tab/方向/文本默认行为未生效 | Escape 是本机例外：非可信 keydown 仍导致 dialog cancel/close，不能由下游事件的可信标记推断起因可信 |
+| makeFirstResponder + window/view/firstResponder 定向 keyDown/up | 三路均有网页可信按键；Enter 实际 POST、Tab 到下一 input、Escape 关闭 dialog；Shift-Left 选择一字、Option-Left 到词首、Control-B 后退、Shift-X 插入 X | 前台、key window 和应用激活均未改变；document.hasFocus 仍 false，DOM activeElement 与原生 first responder 分开核对；preventDefault 可阻止 Tab 移焦 |
+| Command-A 与 performKeyEquivalent | metaKey 到达且后者返回已处理，选择区仍未全选 | 修饰键送达与快捷键默认效果必须分开，不宣称支持通用快捷键 |
+
+脚本执行本身是混杂因素：[WebKit 的 WKWebView 实现](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/API/Cocoa/WKWebView.mm)中公开 evaluate/callAsync 入口使用强制手势参数。实验最初的 JS 准备就令 sticky activation 为真，后改为每轮新文档、页面自身初始化与计时器消息，原生动作前确认 active/sticky 均为 false。实际原生键盘轮次中，Escape 不产生激活，其他已测按键的事件内出现激活；这符合 [WebKit User Activation 说明](https://webkit.org/blog/13862/the-user-activation-api/)中对 Escape 的区分。现有产品 fill/click 则分别观察到非可信 input/click 与 JS 执行期间的激活，且 click 后 submit 可为可信；这些标记均不能证明物理用户输入。
+
+结论：公开 AppKit 路线足以继续独立实现一部分后台键盘行为，正式 CLI 暂不扩展。未来必须显式绑定 Space/Tab，区分 DOM 焦点、宿主 responder、事件送达和业务成功；逐键检查默认结果，有界等待后观察，不能重放副作用。当前 hover 报告的 requiresForeground 是回退策略，不是证明所有公开 API 都不可能，也不是已实现自动前台输入。真实用户激活只记录 WebKit 对本机人工构造事件的识别，不扩展为物理输入或所有受限 API 可用。
+
+未验证：可见但非激活窗口、前台原生输入、任意站点/OS/键盘布局、IME/组合文本、跨源 frame、富文本编辑器、系统/浏览器快捷键、剪贴板、授权面板及用户激活门控 API。拖拽留作可选后续范围，不请求辅助功能或输入监控权限。
+
 ## 代理实验结论
 
 在 macOS 27.0.1 上测试过无域限制、空字符串匹配、显式 `localhost` / `127.0.0.1` 匹配，以及命名持久化 / 临时 Store。结果：loopback 请求均没有到达记录代理。最终配置使用空的 `matchDomains`，表示不限制域；不保留会缩小域范围的实验配置。

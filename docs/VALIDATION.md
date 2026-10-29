@@ -1,5 +1,19 @@
 # 实际验收记录
 
+## P2 / #10：后台 Hover/键盘可行性（2026-10-29）
+
+`python3 tests/input_probe.py` 的[最终专项报告](../.artifacts/input-probe-20261029-131145/report.json)通过 457 条运行断言。两个临时 Store、三个 Tab，隐藏非 key Panel、应用禁止激活，记录前台 PID 与激活通知；原生按键轮次从页面初始化到结果读取均不调用 JS。CSS hover/菜单、事件及激活、焦点、Enter/Tab/Escape、四类修饰键、默认行为取消和文档重载均有独立记录；关闭目标后原生入口拒绝，另一 Space 可继续输入，其他 Tab 未被修改。150ms 挂起 Promise 宿主等待有界，没有重放输入。
+
+三条公开原生键盘路径各自完成一次 Enter POST；另有一次现有产品 DOM click 提交。四次网页回执与服务端 value/nonce/epoch/label/Tab 逐项一致。DOM 合成键盘不能触发已测文本/移焦/提交默认行为，但本机合成 Escape 实际关闭 dialog；AppKit 键盘事件被 WebKit 标记为可信，仍是宿主构造的 NSEvent。Command-A 只验证 metaKey 到达，performKeyEquivalent 返回 true 仍未全选；三条公开 mouseMoved 路径均未触发隐藏页 CSS hover。报告对 hover 明示 requiresForeground=true，正式 CLI 没有新增输入能力。
+
+探索历史保留：`.artifacts/input-probe-20261029-130219/report.json` 是初始观察，102 条仅核对宿主状态等，尚未断言完整网页行为；JS 准备污染 sticky activation，不能用作原生激活结论。`130439/native.json` 在主体矩阵完成后，空闲隐藏 peer Tab 的 heartbeat 被节流，隔离检查等待超时；改为 JS 独立读取 peer 状态且排除其激活数据，原生轮次仍完全无 JS。`130608/report.json` 通过 164 条宿主/生命周期断言，最终版本再补齐 CSS/事件/修饰键/默认行为/真实 POST 精确断言及有界等待。失败没有当作通过。
+
+实现只新增独立实验与说明，产品 Sources/配置/CLI 契约未改；原有跨源 unsupported_context 和 DOM 合成语义保留。可复现步骤、研究结论和未测项见 [DEVELOPMENT](DEVELOPMENT.md#后台-hover键盘独立实验)、[RESEARCH](RESEARCH.md)。此前 Release 代理/TLS/HMR 证据保留原提交归属，本轮不扩大为公网、GUI、真实 OS 代理或长稳验收。
+
+既有[完整可靠性/表单回归](../.artifacts/reliability-20261029-130924/report.json)通过，保留休眠/恢复、文件、元素/整页截图、DOM 隔离/引用、frame/shadow、wait、弹窗、对话框、诊断、六次 React/Vue 提交及 16 项计时；32 命令离线契约与 11 项守卫通过。本轮系统为专项报告记录的 macOS 27.2（26B123），不沿用旧报告的 OS 版本。
+
+以 `da1fbcc` 为基准独立 code-review：Standards 2 项 P2（误用旧 OS 版本、最后一次跨 Space 输入缺少前台断言），已按当前报告修正文档，并将 B1 输入纳入窗口/前台记录、末尾补激活通知与 PID 核查，经原审查者复核关闭；Spec 0 项，增量复核无新发现。修复后的最终专项保留原 454 条检查并新增 3 条前台断言。初次普通沙箱 Socket 检查返回 EPERM，未当作无服务证据；[最终清理核查](../.artifacts/input-probe-20261029-131145/cleanup-check.json)在可访问本机 Socket 的权限下完成，确认原生实验进程退出、fixture 端口关闭、完整回归注册表为空且 Socket 无服务。
+
 ## P2 / #9：跨源 frame 可行性（2026-10-29）
 
 独立 `tests/cross_origin_probe.py` 复用产品 DOM.bootstrap、结构化错误和有界回调，分别运行不同端口、127.0.0.1/localhost 两种受控跨源拓扑。真实WebKit的两个nonPersistent Store代表Space，其中一组共享两个WebView，共三Tab；每Tab有主文档、相同URL的两个兄弟frame和各自的跨源嵌套frame。实验不连接产品daemon，不修改正式Sources或当前CLI跨源限制。

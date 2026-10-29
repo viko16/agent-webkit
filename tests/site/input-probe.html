@@ -1,0 +1,72 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Background input probe</title>
+<style>
+  body { margin: 0; font: 16px system-ui; }
+  #hover { position: absolute; left: 40px; top: 40px; width: 180px; height: 80px; background: rgb(200, 20, 20); }
+  #hover:hover { background: rgb(20, 180, 20); }
+  #menu { display: none; }
+  #hover:hover #menu { display: block; }
+  form { position: absolute; top: 160px; left: 40px; }
+</style>
+<div id="hover">Hover target<span id="menu">CSS menu</span></div>
+<form><input id="first" name="value" aria-label="First"><input id="second" aria-label="Second"><button id="save">Save</button></form>
+<dialog id="modal"><input id="inside"><button>Dialog button</button></dialog>
+<script>
+(() => {
+  const parameters = new URL(location.href).searchParams;
+  const slot = parameters.get('slot');
+  const epoch = crypto.randomUUID();
+  let events = [], label = parameters.get('trial') || 'idle', saved = null;
+  const first = document.querySelector('#first'), modal = document.querySelector('#modal');
+  const activation = () => ({active: navigator.userActivation.isActive, sticky: navigator.userActivation.hasBeenActive});
+  function state() {
+    return {slot, epoch, label, events: events.slice(), value: first.value,
+      selected: [first.selectionStart, first.selectionEnd], activeElement: document.activeElement?.id || '',
+      documentFocused: document.hasFocus(), hover: document.querySelector('#hover').matches(':hover'),
+      color: getComputedStyle(document.querySelector('#hover')).backgroundColor,
+      menu: getComputedStyle(document.querySelector('#menu')).display, modal: modal.open, saved, activation: activation()};
+  }
+  function report(kind) { webkit.messageHandlers.inputProbe.postMessage({kind, ...state()}); }
+  window.probeRead = state; // Isolation-only reads may wake an otherwise throttled peer Tab.
+  for (const type of ['pointerover','pointermove','mouseover','mousemove','click','keydown','keyup','beforeinput','input','focusin','focusout','cancel','close','submit']) {
+    document.addEventListener(type, event => {
+      events.push({type, trusted: event.isTrusted, target: event.target.id || '', key: event.key || '',
+        shift: !!event.shiftKey, meta: !!event.metaKey, alt: !!event.altKey, ctrl: !!event.ctrlKey,
+        activation: activation()});
+      if (events.length > 100) events.shift();
+      if (label === 'window-cancel-tab' && type === 'keydown') event.preventDefault();
+    }, true);
+  }
+  document.querySelector('form').onsubmit = async event => {
+    event.preventDefault();
+    const response = await fetch('/save', {method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({slot, epoch, label, value:first.value})});
+    saved = await response.json(); report('business-result');
+  };
+  // All observations and synthetic controls originate at load: no JS evaluation
+  // occurs in native trials, including preparation, focus and state reads.
+  if (label !== 'idle') {
+    first.value = 'alpha beta'; first.focus(); first.setSelectionRange(10,10);
+    if (label.endsWith('-escape')) modal.showModal();
+    events = [];
+  }
+  setInterval(() => report('heartbeat'), 100);
+  report('loaded');
+  setTimeout(() => {
+    if (label === 'synthetic-hover') {
+      for (const type of ['pointerover','pointermove','mouseover','mousemove']) {
+        const Constructor = type.startsWith('pointer') ? PointerEvent : MouseEvent;
+        document.querySelector('#hover').dispatchEvent(new Constructor(type, {bubbles:true,clientX:80,clientY:70,pointerType:'mouse'}));
+      }
+    } else if (label.startsWith('synthetic-')) {
+      const name = label.slice('synthetic-'.length);
+      const key = {enter:'Enter',tab:'Tab',escape:'Escape','shift-left':'ArrowLeft',
+        'option-left':'ArrowLeft','command-a':'a','control-b':'b','shift-x':'X'}[name];
+      for (const type of ['keydown','keyup']) document.activeElement.dispatchEvent(new KeyboardEvent(type,
+        {bubbles:true, cancelable:true, key, code:({X:'KeyX',a:'KeyA',b:'KeyB'})[key] || key,
+          shiftKey:name.startsWith('shift-'),altKey:name.startsWith('option-'),metaKey:name.startsWith('command-'),ctrlKey:name.startsWith('control-')}));
+    }
+  }, 50);
+})();
+</script>
