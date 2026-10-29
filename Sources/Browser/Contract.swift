@@ -19,6 +19,7 @@ enum CLIContract {
         "ca-cert": ["type": "string", "description": "Single PEM/DER CA path; preserves system trust checks"],
         "ignore-certificate-errors": ["type": "flag", "description": "Explicit development-only TLS bypass for this Space"],
         "out": ["type": "string", "description": "PNG output path on daemon host"],
+        "all": ["type": "flag", "description": "Required explicit intent to stop the shared daemon and every Space; preview status.shutdownImpact first"],
         "await": ["type": "flag", "description": "Await the evaluated Promise within timeout"],
         "wait-for-navigation": ["type": "flag", "description": "Wait for navigation after one DOM click; not business verification"],
         "wait-for-popup": ["type": "flag", "description": "Wait for same-Space popup; value.newTabId identifies it, not login success"],
@@ -42,13 +43,14 @@ enum CLIContract {
         var keys = Request.allowedOptions(for: name).contains("space") ? ["space"] : []
         if name == "space.create" { keys.append("proxy") }
         if name == "screenshot" { keys.append("out") }
+        if name == "shutdown" { keys.append("all") }
         return keys
     }
 
     private static func synopsis(_ name: String) -> String {
         let arity = Request.arities[name]!
         let args = (arguments[name] ?? []).enumerated().map { i, arg in i < arity.lowerBound ? arg : "[\(arg)]" }
-        let flags = requiredOptions(name).map { "--\($0) VALUE" }
+        let flags = requiredOptions(name).map { optionDetails[$0]?["type"] as? String == "flag" ? "--\($0)" : "--\($0) VALUE" }
         return (["browser", name.replacingOccurrences(of: ".", with: " ")] + args + flags).joined(separator: " ")
     }
 
@@ -101,6 +103,10 @@ enum CLIContract {
         let page = object(["spaceId", "space", "proxy", "network", "page", "value"], ["value": [:]])
         let tab = object(["tabId", "url", "title", "loading", "webContentTerminated", "unresponsive"])
         let space = object(["id", "name", "proxy", "defaultTabId", "tabs", "busy"])
+        let shutdownImpact = object(["spaces", "websiteDataPreserved", "pageMemoryPreserved"], [
+            "spaces": ["type": "array", "items": object(["spaceId", "name", "tabIds"], [
+                "spaceId": string, "name": string, "tabIds": ["type": "array", "items": string]])],
+            "websiteDataPreserved": ["const": true], "pageMemoryPreserved": ["const": false]])
         return [
             "schemaVersion": 1, "version": productVersion,
             "commands": Request.arities.keys.sorted().map(command),
@@ -125,8 +131,8 @@ enum CLIContract {
                         object(["ok", "error"], ["ok": ["const": false], "error": object(["code", "message"], ["code": string, "message": string])])]],
                     "help": object(["usage"]), "capabilities": object(["schemaVersion", "version", "commands", "schemas"]),
                     "version": object(["version"]), "daemon": ["description": "Long-running CLI process; no command result; IPC daemon is unsupported"],
-                    "status": object(["version", "pid", "ready", "spaces", "observer", "capabilities"]),
-                    "shutdown": object(["shutdown"]), "space": space,
+                    "status": object(["version", "pid", "ready", "spaces", "observer", "capabilities", "shutdownImpact"], ["shutdownImpact": shutdownImpact]),
+                    "shutdown": object(["shutdown", "shutdownImpact"], ["shutdown": ["const": true], "shutdownImpact": shutdownImpact]), "space": space,
                     "spaces": ["type": "array", "items": space], "tab": tab,
                     "tabs": ["type": "array", "items": tab], "page": page,
                     "deletion": object(["deleted", "spaceId", "websiteDataRemoved", "dataStoreRemoved", "cleanupPending"]),
@@ -146,6 +152,7 @@ enum CLIContract {
                 "transport": "same-user local Unix socket; newline-delimited JSON; maximum message 8 MiB",
                 "target": "explicit Space; fixed CLI default Tab or explicit Tab; independent of GUI selection",
                 "concurrency": "one mutating/WebKit operation per Space; different Spaces independent",
+                "shutdown": "requires explicit --all; status.shutdownImpact previews all affected Spaces/Tab IDs; successful reply reports the affected scope; busy rejects exit; website data retained, page memory lost",
                 "input": "DOM synthetic; nativeVerified=false; businessOutcomeVerified=false",
                 "snapshot": "same-origin frames and open shadow roots; cross-origin frames and closed roots unsupported",
                 "screenshot": "viewport PNG; background operation; no foreground activation",

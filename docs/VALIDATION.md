@@ -1,6 +1,18 @@
 # 实际验收记录
 
-## 当前状态与记录口径（2026-10-28）
+## P1 / #5：安全全局退出（2026-10-29）
+
+本批仅完成 #5 的独立退出保护；Space suspend/resume、懒恢复与启动性能验证仍未实现，#5 / #2 整项保持未勾选。
+
+`shutdown --all` 显式声明全局退出意图，CLI 与原始 IPC 均拒绝裸命令、错误标记及 Space/Tab 限定。`status.shutdownImpact` 预览全部 Space ID、名称及 Tab ID，退出回复附带执行时的范围；网站数据保留、页面内存丢失。保留 busy 拒绝、保存失败继续服务及自主对话框安全结束；现有测试退出调用全部迁移，未删除原断言。
+
+Debug 构建签名、26 命令离线契约、11 项 workflow/cleanup 守卫通过。[完整 `reliability.py --forms`](../.artifacts/reliability-20261029-091432/report.json)通过：新增裸 CLI/IPC 退出拒绝、双 Space 影响范围、busy 拒绝及每次成功退出回复核对；原有对话框保存失败/重启、Store 清理、隔离 world、frame/shadow、wait、诊断、六次框架提交和 16 项计时均保留。
+
+两轴独立审查以本项开始前 `8108763` 为基准；按用户“审查后提交”的顺序检查工作树差异，当时无新增提交。Standards 0 项、Spec 0 项，无需修复。未把其他 #5 生命周期能力计入本次结论；Pi 未找到，#7 实测仍待完成。公网/GUI、真实 OS 代理开关和长期资源不在本轮重跑范围。
+
+Release 的 [`acceptance.py --vite --direct-conflicts`](../.artifacts/issue5-shutdown-full-20261029/report.json) 完整通过：代理参数、Direct 冲突注入恢复、弹窗、A/B/C/D、fetch/WSS、TLS、双 Whistle 隔离/重启/故障及 Vite/Whistle HMR。Debug/Release 构建签名均通过，仍有既有 CLT 搜索目录警告；首次沙箱构建被模块缓存权限阻止，沙箱外构建成功。两套测试的[清理复核](../.artifacts/issue5-shutdown-full-20261029/cleanup-check.json)确认注册表为空、Socket 无服务。不改系统代理、CA 或已有 Whistle。
+
+## 既有能力基线与记录口径（2026-10-28）
 
 本节依据 `af35732` 及下列已有报告整理，没有重新运行验收。后文各批次的“未实现”“待验证”和命令数量只描述当时提交；当前用法见 [README](../README.md) 和 [DEVELOPMENT](DEVELOPMENT.md)。
 

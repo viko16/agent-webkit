@@ -42,6 +42,8 @@ browser screenshot --space work --out /tmp/work.png
 
 常用快捷键：⌘T 新建标签页，⌘L 输入网址，⌘W 隐藏观察窗口，⌘Q 退出应用。
 
+CLI 全局退出使用 `browser shutdown --all`，会停止全部 Space；先用 `browser status` 查看 `shutdownImpact` 中的影响范围。退出保留网站数据，页面内存和未提交表单不保留。
+
 ## Whistle 与 direct
 
 已启动本机 Whistle 后，可为开发任务创建代理 Space：

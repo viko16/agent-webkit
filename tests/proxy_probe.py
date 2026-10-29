@@ -32,6 +32,6 @@ try:
         print(json.dumps({'url':url,'response':result,'proxyEvents':events.items[before:]}, ensure_ascii=False), flush=True)
 finally:
     print(cli('space','delete','probe'), flush=True)
-    cli('shutdown')
+    cli('shutdown', '--all')
     daemon.wait(timeout=15)
     server.shutdown(); relay.shutdown()

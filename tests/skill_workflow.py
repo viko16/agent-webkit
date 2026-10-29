@@ -64,7 +64,7 @@ def cleanup_test_services(cli, daemon, site):
                 except Exception as error:
                     errors.append(error)
             try:
-                cli('shutdown')
+                cli('shutdown', '--all')
                 daemon.wait(timeout=15)
             except Exception as error:
                 errors.append(error)

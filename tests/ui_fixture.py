@@ -66,7 +66,7 @@ def main():
         cli('open', url, '--space', 'ui-direct')
         cli('space', 'create', 'ui-proxy', '--proxy', 'http://127.0.0.1:8899')
         if args.conflict:
-            cli('shutdown'); daemon.wait(timeout=15)
+            cli('shutdown', '--all'); daemon.wait(timeout=15)
             settings.write_text(json.dumps({'HTTPEnable': 1}))
             start()
         metadata = dict(app=str(app), socket=env['BROWSER_SOCKET'], settings=str(settings), url=url)
@@ -78,7 +78,7 @@ def main():
         if daemon and daemon.poll() is None:
             for space in cli('space', 'list'):
                 cli('space', 'delete', space['id'])
-            cli('shutdown'); daemon.wait(timeout=15)
+            cli('shutdown', '--all'); daemon.wait(timeout=15)
         site.shutdown(); site.server_close(); log.close()
 
 

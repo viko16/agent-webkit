@@ -74,7 +74,10 @@ def main():
         raise AssertionError('Startup timed out')
 
     def stop():
-        cli('shutdown'); daemon.wait(timeout=15)
+        before = cli('status')['shutdownImpact']
+        result = cli('shutdown', '--all')
+        assert result == dict(shutdown=True, shutdownImpact=before), result
+        daemon.wait(timeout=15)
 
     def js(source, **kwargs):
         return cli('evaluate', source, '--space', 'work', **kwargs)
@@ -193,6 +196,8 @@ def main():
             assert cli('state', '--space', 'work')['busy']
             cli('tab', 'list', '--space', 'work')
             cli('fill', '#message', 'no', '--space', 'work', error='space_busy')
+            cli('shutdown', '--all', error='space_busy')
+            assert len(cli('status')['shutdownImpact']['spaces']) == 2
             assert cli('evaluate', 'document.title', '--space', 'other')['value'] == 'Agent WebKit Fixture'
             assert future.result()['value'] == 1
         checks.append('Promise resolution/rejection; read-only state during a command; Space concurrency')

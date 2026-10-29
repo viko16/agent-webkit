@@ -689,6 +689,13 @@ final class BrowserModel {
         }
     }
 
+    private var shutdownImpact: [String: Any] {
+        ["spaces": spaces.map { space in
+            ["spaceId": space.record.id.uuidString, "name": space.record.name,
+             "tabIds": space.tabs.map { $0.id.uuidString }] as [String: Any]
+        }, "websiteDataPreserved": true, "pageMemoryPreserved": false]
+    }
+
     private func execute(_ r: Request, timing: RequestTiming) async throws -> Any {
         guard !shuttingDown else { throw BrowserError("shutting_down", "应用正在退出") }
         try r.validate()
@@ -712,6 +719,7 @@ final class BrowserModel {
         if command == "status" {
             return ["version": productVersion, "pid": ProcessInfo.processInfo.processIdentifier, "spaces": spaces.count,
                     "ready": !restoring,
+                    "shutdownImpact": shutdownImpact,
                     "observer": observerState?() ?? [:],
                     "pendingStoreCleanup": records.filter(\.deleting).count,
                     "blockedSpaces": spaces.filter { $0.networkError != nil }.map { $0.record.id.uuidString },
@@ -722,11 +730,12 @@ final class BrowserModel {
         if command == "shutdown" {
             guard !spaces.contains(where: \.busy) else { throw BrowserError("space_busy", "仍有操作执行中") }
             for space in spaces { try save(space) }
+            let impact = shutdownImpact
             shuttingDown = true
             finishDialogsForExit()
             // Give the reply time to reach the client; terminate through AppKit to release WebKit cleanly.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { NSApp.terminate(nil) }
-            return ["shutdown": true]
+            return ["shutdown": true, "shutdownImpact": impact]
         }
         if command == "space.list" { return spaces.map(\.summary) }
         if command == "space.create" {

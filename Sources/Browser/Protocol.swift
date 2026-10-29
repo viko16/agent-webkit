@@ -33,6 +33,7 @@ struct Request: Codable {
         if command == "evaluate" { allowed.insert("await") }
         if command == "wait" { allowed.formUnion(["url", "text", "state"]) }
         if command == "screenshot" { allowed.insert("out") }
+        if command == "shutdown" { allowed.insert("all") }
         if command == "diagnostics" { allowed.formUnion(["clear", "detail", "inspectable"]) }
         if command == "dialog.respond" { allowed.insert("text") }
         return allowed
@@ -43,6 +44,9 @@ struct Request: Codable {
             throw BrowserError("invalid_arguments", "未知命令或参数数量不正确：\(command)；browser help 查看用法")
         }
         let allowed = Self.allowedOptions(for: command)
+        if command == "shutdown", options["all"] != "true" {
+            throw BrowserError("invalid_arguments", "shutdown 会退出全部 Space；先用 status 查看 shutdownImpact，确认全局退出意图后使用 shutdown --all")
+        }
         if command == "dialog.respond", !["accept", "dismiss"].contains(args[1]) {
             throw BrowserError("invalid_arguments", "dialog respond 的响应必须为 accept 或 dismiss")
         }
@@ -73,7 +77,7 @@ struct Request: Codable {
         if let key = options.keys.sorted().first(where: { !allowed.contains($0) }) {
             throw BrowserError("invalid_arguments", "\(command) 不支持 --\(key)")
         }
-        for key in ["await", "wait-for-navigation", "wait-for-popup", "ignore-certificate-errors", "clear"] {
+        for key in ["await", "wait-for-navigation", "wait-for-popup", "ignore-certificate-errors", "clear", "all"] {
             if let value = options[key], value != "true" { throw BrowserError("invalid_arguments", "--\(key) 是无值开关") }
         }
     }
@@ -117,7 +121,7 @@ struct Options {
             }
             if arg.hasPrefix("--"), !literal {
                 let key = String(arg.dropFirst(2))
-                if ["ignore-certificate-errors", "wait-for-navigation", "wait-for-popup", "await", "clear"].contains(key), options[key] == nil {
+                if ["ignore-certificate-errors", "wait-for-navigation", "wait-for-popup", "await", "clear", "all"].contains(key), options[key] == nil {
                     options[key] = "true"; i += 1; continue
                 }
                 guard allowed.contains(key), i + 1 < arguments.count, options[key] == nil else {
@@ -143,7 +147,7 @@ struct Options {
 let usage = """
 browser help [COMMAND [SUBCOMMAND]] | capabilities
 browser daemon [--data-dir PATH] [--socket PATH]
-browser status | shutdown
+browser status | shutdown --all
 browser space create NAME --proxy direct|http://127.0.0.1:<PORT> [--ca-cert PATH | --ignore-certificate-errors]
   PORT: 1–65535; each Space retains its own proxy across restarts (e.g. 8899).
 browser space list

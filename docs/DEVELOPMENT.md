@@ -32,6 +32,8 @@ python3 tests/reliability.py --forms  # 含真实 CLI / IPC 对照和原有可�
 
 既有 `ok/result`、`ok/error.code/error.message`、退出码 0/1 与可选 timing 保持兼容。离线成功响应不伪造 IPC 或 WebKit 耗时。`scope` 明确固定目标、同 Space 串行、DOM 合成、快照/截图、超时恢复及代理限制；声明可用不等于真实站点兼容、代理路径或业务结果已验证。
 
+`shutdown --all` 要求调用方有显式全局退出意图；旧的裸 `shutdown` 在 CLI 和 IPC 均返回 `invalid_arguments`，不会退出。先读 `status.shutdownImpact`，其中 `spaces` 列出 Space ID、名称与全部 `tabIds`；成功退出回复保留 `shutdown: true` 并附带同结构的实际影响范围。`--all` 是无值开关，IPC 为 `"all":"true"`；不能用 `--space` / `--tab` 缩小全局退出范围。有任何 Space busy 时仍拒绝，保存失败也保持服务可用。退出保留网站数据和 URL，不保留 JS 内存或未提交表单；不代替 `space delete`。预览不锁定范围，真正退出按执行时的全部 Space 生效。
+
 页面命令必须指定 `--space NAME_OR_ID`，可用 `--tab UUID` 选择目标；省略时使用该 Space 的固定默认 Tab，`tab default ID --space NAME` 可修改并持久化默认值。相同 Space 的重叠页面操作返回 `space_busy`，由调用方顺序执行；`state`、`tab list`、`space info`、`dialog list` 可在忙碌时查询，`dialog respond` 可在原动作等待对话框时回应。
 
 每条 CLI 命令返回一行 JSON：成功为 `{"ok":true,"result":...}`，失败为 `{"ok":false,"error":{"code":...,"message":...}}`，退出码分别为 0/1。页面结果包含 Space/Tab ID、URL、加载状态和代理限制；click/fill 标明 `method: "dom"`、`nativeVerified: false`，动作成功仍需核对业务结果。

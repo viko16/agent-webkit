@@ -30,14 +30,14 @@ class SkillCleanupTests(unittest.TestCase):
                         return [dict(id='first'), dict(id='second')]
                     if args == ('space', 'delete', 'first') and failure == 'delete':
                         raise RuntimeError('space_busy')
-                    if args == ('shutdown',):
+                    if args == ('shutdown', '--all'):
                         if failure == 'shutdown':
                             raise RuntimeError('shutdown failed')
                         daemon.poll.return_value = 0
 
                 errors = cleanup_test_services(cli, daemon, site)
                 self.assertEqual(len(errors), 1)
-                self.assertIn(('shutdown',), calls)
+                self.assertIn(('shutdown', '--all'), calls)
                 if failure == 'delete':
                     self.assertIn(('space', 'delete', 'second'), calls)
                 if failure == 'shutdown':

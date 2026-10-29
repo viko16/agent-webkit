@@ -122,7 +122,7 @@ def main():
         raise AssertionError('Daemon startup timeout')
 
     def stop():
-        cli('shutdown')
+        cli('shutdown', '--all')
         daemon.wait(timeout=15)
         assert daemon.returncode == 0
 

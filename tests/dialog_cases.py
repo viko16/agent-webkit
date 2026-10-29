@@ -138,7 +138,7 @@ def verify_dialogs(cli, base, out, restart, state):
         permissions = state.stat().st_mode & 0o777
         try:
             state.chmod(0o500)
-            cli('shutdown', error='operation_failed')
+            cli('shutdown', '--all', error='operation_failed')
         finally:
             state.chmod(permissions)
         assert cli('status')['ready']
