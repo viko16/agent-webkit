@@ -782,11 +782,6 @@ final class BrowserModel {
     }
 
     func restore() async throws {
-        // Static removal can crash in WebKit's WebsiteDataStoreIO run loop when
-        // no store has initialized WebKit yet (e.g. only tombstones remain).
-        // Use an ephemeral store; never open the user's default website store.
-        let cleanupBootstrap = records.contains(where: \.deleting) ? WKWebsiteDataStore.nonPersistent() : nil
-        defer { withExtendedLifetime(cleanupBootstrap) {} }
         for record in records.filter(\.deleting) {
             do {
                 if try await removeStore(record.id) {
@@ -921,6 +916,10 @@ final class BrowserModel {
     }
 
     private func removeStore(_ id: UUID) async throws -> Bool {
+        // All callers may run in a fresh process with no active Space stores.
+        // Keep WebKit initialized throughout removal and fallback cleanup.
+        let cleanupBootstrap = WKWebsiteDataStore.nonPersistent()
+        defer { withExtendedLifetime(cleanupBootstrap) {} }
         do { try await removeStoreOnce(id); return true }
         catch {
             if (error as? BrowserError)?.code == "data_store_removal_timeout" { throw error }

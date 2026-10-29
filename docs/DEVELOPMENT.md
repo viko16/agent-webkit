@@ -351,7 +351,7 @@ Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 
 
 故障恢复后立即删除 Space，实测 WebKit 可能仍持有没有活动页面的网络会话，`remove(forIdentifier:)` 返回 `Data store is in use (by network process)`。流程先调用 `removeData` 清理全部公开网站数据类型，再用 `fetchDataRecords` 验证为空，并有限重试容器删除。容器未释放时返回 `websiteDataRemoved: true`、`dataStoreRemoved: false`、`cleanupPending: true`，保留 tombstone；不会把容器删除当成成功。重启后会再次清理，可通过 `status.pendingStoreCleanup` 查询。同名重建使用新 UUID，测试验证它读不到旧 LocalStorage，并验证重启后旧容器和 tombstone 清除。
 
-若注册表只剩 tombstone、没有存活 Space，恢复时先初始化一个临时 `WKWebsiteDataStore.nonPersistent()` 并持有到恢复完成，避免在尚未初始化 Store 的进程中首次静态删除触发本机 WebKit 的 WebsiteDataStoreIO 崩溃。没有打开用户默认 Store、创建额外 WebView 或发起导航。`python3 tests/reliability.py --cleanup-only` 用真实 Store 和测试自产注册表模拟“删除标记已写入、清理前进程退出”的状态；完整可靠性套件也包含它。这里只模拟中断位置，不宣称执行过真实断电或强杀删除过程。
+所有 Store 删除入口先初始化一个临时 `WKWebsiteDataStore.nonPersistent()`，并持有到删除及回退清理完成，避免在尚未初始化 Store 的进程中首次静态删除触发本机 WebKit 的 WebsiteDataStoreIO 崩溃。该保护同时覆盖启动 tombstone 清理，以及全部 Space 休眠或配置异常时的普通删除。没有打开用户默认 Store、创建额外 WebView 或发起导航。`python3 tests/reliability.py --cleanup-only` 用真实 Store 和测试自产注册表验证这些路径，包括“删除标记已写入、清理前进程退出”；完整可靠性套件也包含它。这里只模拟中断位置，不宣称执行过真实断电或强杀删除过程。
 
 导航等待超时不会停止网络加载，可继续 `wait` 或打开其他 URL。被新导航取消的旧请求不会把迟到的错误写入当前页面。URL 在请求开始时保留，避免重启恢复过程中把尚未加载的标签页覆盖成 about:blank；SPA URL 变化也会保存。恢复仅保证持久化状态和 URL，页面 JS 内存、未提交表单和完整后退历史不在恢复范围内。后台页面定时器仍受 WebKit 节流。
 

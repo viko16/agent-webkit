@@ -174,3 +174,44 @@ def verify_pending_store_only(cli, start, stop, state, base):
     return {'passed': True, 'pendingId': created['id'], 'replacementId': replacement['id'],
             'method': 'real store + interrupted-deletion registry; new process with no live Spaces',
             'pendingStoreCleanup': 0, 'registryEmptyAfterRestore': True}
+
+
+def verify_delete_without_active_stores(cli, start, stop, state, base):
+    cases = []
+    registry = state / 'spaces.json'
+    for mode in ('all-suspended', 'all-invalid'):
+        created = []
+        for index in range(2):
+            name = f'no-runtime-{index}'
+            space = cli('space', 'create', name, '--proxy', 'direct')
+            created.append(space)
+            cli('open', base, '--space', name)
+            cli('evaluate', 'localStorage.deleteProbe="old-data";true', '--space', name)
+            cli('space', 'suspend', name)
+        stop()
+        if mode == 'all-invalid':
+            records = json.loads(registry.read_text())
+            for record in records:
+                record['suspended'] = False
+                record['proxy'] = 'http://invalid.example:8899'
+            temporary = state / 'invalid-delete.tmp'
+            temporary.write_text(json.dumps(records)); os.replace(temporary, registry)
+        start()
+        assert cli('status')['liveWebViews'] == 0
+        for space in created:
+            info = cli('space', 'info', space['id'])
+            assert info['lifecycle'] == ('suspended' if mode == 'all-suspended' else 'configuration-error'), info
+            result = cli('space', 'delete', space['id'])
+            assert result['websiteDataRemoved'], result
+            assert cli('status')['ready'] and cli('status')['liveWebViews'] == 0
+        stop(); start()
+        assert cli('status')['pendingStoreCleanup'] == 0 and json.loads(registry.read_text()) == []
+        replacement = cli('space', 'create', created[0]['name'], '--proxy', 'direct')
+        assert replacement['id'] != created[0]['id']
+        cli('open', base, '--space', replacement['id'])
+        assert cli('evaluate', 'localStorage.deleteProbe??null', '--space', replacement['id'])['value'] is None
+        cli('space', 'delete', replacement['id'])
+        stop(); start()
+        cases.append(dict(case=mode, zeroWebViewsBeforeAndAfterDeletion=True,
+                          daemonSurvivesPublicDeletion=True, replacementStoreIsolated=True))
+    return dict(passed=True, cases=cases)
