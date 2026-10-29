@@ -93,6 +93,9 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     var certificateError: BrowserError?
     var operationTiming: RequestTiming?
     private struct NavigationSpan {
+        // ObjectIdentifier is unique only while its object is alive. WebKit can
+        // release a cancelled token without a terminal delegate callback.
+        let navigation: WKNavigation
         let start: UInt64
         let timing: RequestTiming?
         let token: Int?
@@ -306,7 +309,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         let key = ObjectIdentifier(navigation)
         guard navigationSpans[key] == nil else { return }
         navigationSequence += 1
-        navigationSpans[key] = NavigationSpan(start: start, timing: operationTiming,
+        navigationSpans[key] = NavigationSpan(navigation: navigation, start: start, timing: operationTiming,
             token: operationTiming?.begin("navigation", from: start), sequence: navigationSequence)
     }
 

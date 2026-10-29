@@ -47,6 +47,17 @@ def verify_state_integrity(cli, base, out, start, stop, state):
         assert cli('state', *flags)['page']['url'] == original_url
         assert cli('evaluate', 'location.href', *flags)['value'] == original_url
 
+        # Cancel a restoration load with an explicit load of the same URL. WebKit
+        # may release the first token without a terminal callback; a later token
+        # must not be mistaken for it when the native allocator reuses an address.
+        overlap_url = base + '?delay=1&identity=overlap'
+        cli('open', overlap_url, *flags)
+        stop(); running = False
+        start(); running = True
+        cli('open', overlap_url, *flags)
+        cli('open', original_url, *flags)
+        assert cli('state', *flags)['page']['url'] == original_url
+
         stop(); running = False
         records = json.loads(registry.read_text())
         next(record for record in records if record['id'] == created[0]['id'])['tabs'][0]['url'] = failed_url
@@ -103,6 +114,7 @@ def verify_state_integrity(cli, base, out, start, stop, state):
             assert cli('space', 'delete', name)['websiteDataRemoved']
         report = dict(passed=True, failedNavigationKeepsDocumentIdentity=True,
                       spaURLUpdatesAfterFailedNavigation=True, failedRestoreReportsActualBlankDocument=True,
+                      cancelledRestoreTokenCannotAliasNewNavigation=True,
                       restoreURLSurvivesFailureAndRestart=True, pageErrorsRemainJavascriptErrors=True,
                       genuineStaleReferenceRejected=True, invalidActiveAndSuspendedConfigurationIsolated=True,
                       invalidConfigurationPreservesTabs=True, noProxyFallback=True)
