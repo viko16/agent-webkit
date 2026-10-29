@@ -1,5 +1,17 @@
 # 实际验收记录
 
+## P1 / #5：Space 休眠与按需恢复（2026-10-29）
+
+`space suspend/resume` 保留 ID、默认 Tab、URL、Cookie/LocalStorage、代理/TLS；释放全部 Tab/WebView。同进程保留轻量 DataStore 协调对象，休眠状态跨重启保留，启动不创建休眠 Space 的 DataStore/WebView。活跃 Space 的既有恢复路径保留。`state/list/info` 不唤醒，页面动作按需恢复；显式 resume 只开始加载，须 wait 就绪。
+
+Debug 的[完整可靠性/表单](../.artifacts/reliability-20261029-093144/report.json)通过；审查修复后的[真实生命周期专项](../.artifacts/reliability-20261029-093343/report.json)通过：双 Space、多 Tab、前台不变、busy/保存失败、对话框、卡死、Cookie/LocalStorage/旧引用、普通和真实 SIGTERM 中断重启、删除重建。全休眠重启实际持有 0 个 WebView；报告的 restart 耗时包含停启与 CLI 查询，只作样本，不是性能提升基准或 OS 进程/RSS 回收证明。28 命令离线契约及 11 项守卫通过。
+
+保留开发失败：早期释放 DataStore 协调对象后 Cookie 丢失（如 `.artifacts/reliability-20261029-092720/`），改为只释放页面后重启验证通过；显式 resume 后立即读 about:blank 的测试也改为等待目标页面。首次完整套件将专项放在已创建 work 后，零 WebView 断言失败；现将其移到原用例创建之前，保留所有断言。
+
+以 `53cff0f` 为基准独立审查：Standards 0 项；Spec 1 项 P2（无效 Tab/URL 先唤醒再报错），已将校验前移，新增不唤醒断言并经原审查者复核关闭。未宣称保留 JS 内存、未提交表单、opener 或完整后退历史；实际 GUI 点击入口未单独人工操作，后台前台不变由真实 CLI 回归验证。
+
+最终 Release 的[完整代理/TLS/HMR](../.artifacts/issue5-lifecycle-full-20261029/report.json)通过，新增双 Whistle `suspendResumeVerified`：休眠/恢复前后 Cookie/LocalStorage、代理/TLS 配置保持，并重新验证两条真实路由；原代理参数、冲突注入、弹窗、A/B/C/D、fetch/WSS、TLS、Vite HMR 和删除验收全部保留。未重跑公网/GUI、真实 OS 代理开关或长稳基准。
+
 ## P1 / #7：Pi 实测豁免（2026-10-29）
 
 用户明确决定“#7 由于没有 pi，允许直接通过”。因此 #7 按现有契约、仓库 Skill、真实 Codex 显式路径调用的证据完成验收；Pi 调用与失败恢复按用户决定豁免，并非实测通过。没有安装 Pi、修改 Agent 配置或重跑模型调用；安装后自动发现仍无实测结论。此前记录中的 Pi 待办描述对应当时状态。

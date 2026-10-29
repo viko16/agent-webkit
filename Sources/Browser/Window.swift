@@ -323,7 +323,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         icon.symbolConfiguration = .init(pointSize: 15, weight: .regular)
         let title = NSTextField(labelWithString: space.record.name); title.font = .systemFont(ofSize: 13, weight: .medium)
         let route = space.record.proxy == "direct" ? (space.networkError == nil ? "直连" : "直连已暂停") : "Whistle"
-        let subtitle = NSTextField(labelWithString: "\(route) · \(space.tabs.count) 个标签页\(space.busy ? " · 运行中" : "")")
+        let subtitle = NSTextField(labelWithString: "\(route) · \(space.tabStates.count) 个标签页\(space.suspended ? " · 已休眠" : space.busy ? " · 运行中" : "")")
         subtitle.font = .systemFont(ofSize: 11); subtitle.textColor = .secondaryLabelColor
         for label in [title, subtitle] { label.lineBreakMode = .byTruncatingTail }
         let labels = NSStackView(views: [title, subtitle]); labels.orientation = .vertical; labels.alignment = .leading; labels.spacing = 3
@@ -395,10 +395,13 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         }
         let selected = selectedTabs[space.record.id] ?? space.record.defaultTab
         let tab = space.tabs.first { $0.id == selected } ?? space.tabs.first { $0.id == space.record.defaultTab }
-        selectedTabs[space.record.id] = tab?.id
-        let blank = tab?.persistedURL == "about:blank"
+        if !space.suspended { selectedTabs[space.record.id] = tab?.id }
+        let blank = space.suspended || tab?.persistedURL == "about:blank"
         empty.isHidden = !blank
-        if blank {
+        if space.suspended {
+            emptyTitle.stringValue = "Space 已休眠"
+            emptyText.stringValue = "网站数据和标签页地址已保留。\n点击打开网页恢复；页面内存和未提交表单不会恢复。"
+        } else if blank {
             emptyTitle.stringValue = "新标签页"
             emptyText.stringValue = "在地址栏输入网址，按回车打开。\n准备好后，点工具栏的分享按钮复制 Agent 接管命令。"
         }
@@ -492,6 +495,14 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         beginAddressEditing()
     }
     @objc private func startBrowsing(_ sender: Any?) {
+        if let space = currentSpace, space.suspended {
+            Task { @MainActor in
+                let result = await model.handle(Request(command: "space.resume", args: [space.record.id.uuidString], options: [:]))
+                if result["ok"] as? Bool != true { presentFailure(result) }
+                refresh()
+            }
+            return
+        }
         if displayed == nil { newTab(sender) } else { focusAddress(sender) }
     }
     @objc func newTab(_ sender: Any?) {

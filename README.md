@@ -44,6 +44,8 @@ browser screenshot --space work --out /tmp/work.png
 
 CLI 全局退出使用 `browser shutdown --all`，会停止全部 Space；先用 `browser status` 查看 `shutdownImpact` 中的影响范围。退出保留网站数据，页面内存和未提交表单不保留。
 
+暂时不用的 Space 可用 `browser space suspend work` 休眠，释放页面运行资源。`browser space resume work` 开始恢复加载，后续页面操作也会按需恢复。网站数据、标签页 ID 和地址保留，页面内存及未提交表单不保留。
+
 ## Whistle 与 direct
 
 已启动本机 Whistle 后，可为开发任务创建代理 Space：

@@ -19,7 +19,7 @@ struct Request: Codable {
             "tab.close":1...1, "tab.default":1...1, "open":1...1, "reload":0...0,
             "snapshot":0...0, "state":0...0, "evaluate":1...1, "click":1...1,
             "fill":2...2, "screenshot":0...0, "wait":0...1, "diagnostics":0...0,
-            "dialog.list":0...0, "dialog.respond":2...2]
+            "dialog.list":0...0, "dialog.respond":2...2, "space.suspend":1...1, "space.resume":1...1]
 
     static func allowedOptions(for command: String) -> Set<String> {
         var allowed: Set<String> = ["socket", "data-dir"]
@@ -152,6 +152,7 @@ browser space create NAME --proxy direct|http://127.0.0.1:<PORT> [--ca-cert PATH
   PORT: 1–65535; each Space retains its own proxy across restarts (e.g. 8899).
 browser space list
 browser space info|delete NAME_OR_ID
+browser space suspend|resume NAME_OR_ID
 browser open URL --space NAME_OR_ID [--tab ID]
 browser tab new [URL] --space NAME_OR_ID
 browser tab list --space NAME_OR_ID

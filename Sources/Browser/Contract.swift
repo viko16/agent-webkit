@@ -5,6 +5,7 @@ enum CLIContract {
     private static let arguments: [String: [String]] = [
         "help": ["COMMAND", "SUBCOMMAND"], "space.create": ["NAME"],
         "space.info": ["NAME_OR_ID"], "space.delete": ["NAME_OR_ID"],
+        "space.suspend": ["NAME_OR_ID"], "space.resume": ["NAME_OR_ID"],
         "tab.new": ["URL"], "tab.close": ["ID"], "tab.default": ["ID"],
         "open": ["URL"], "evaluate": ["JAVASCRIPT"], "click": ["SELECTOR_OR_REF"],
         "fill": ["SELECTOR_OR_REF", "VALUE"], "wait": ["SELECTOR_OR_REF"], "dialog.respond": ["ID", "ACTION"]
@@ -75,7 +76,7 @@ enum CLIContract {
         case "status": result = "status"
         case "shutdown": result = "shutdown"
         case "space.list": result = "spaces"
-        case "space.create", "space.info": result = "space"
+        case "space.create", "space.info", "space.suspend", "space.resume": result = "space"
         case "space.delete": result = "deletion"
         case "tab.list": result = "tabs"
         case "tab.new": result = "tab"
@@ -153,6 +154,7 @@ enum CLIContract {
                 "target": "explicit Space; fixed CLI default Tab or explicit Tab; independent of GUI selection",
                 "concurrency": "one mutating/WebKit operation per Space; different Spaces independent",
                 "shutdown": "requires explicit --all; status.shutdownImpact previews all affected Spaces/Tab IDs; successful reply reports the affected scope; busy rejects exit; website data retained, page memory lost",
+                "lifecycle": "space suspend releases WebViews, retaining its data-store coordinator and IDs/URLs/website data/proxy/TLS; suspended Spaces restart without WebViews; resume starts loading; page actions resume on demand; state/list/info never wake; JS memory is lost",
                 "input": "DOM synthetic; nativeVerified=false; businessOutcomeVerified=false",
                 "snapshot": "same-origin frames and open shadow roots; cross-origin frames and closed roots unsupported",
                 "screenshot": "viewport PNG; background operation; no foreground activation",
@@ -171,7 +173,7 @@ enum CLIContract {
         "invalid_proxy", "invalid_response", "invalid_selector", "invalid_timeout", "invalid_url", "ipc_error",
         "javascript_error", "last_tab", "message_too_large", "not_ready", "operation_failed", "png_failed",
         "popup_failed", "popup_not_opened", "popup_store_mismatch", "proxy_required", "selector_count",
-        "shutting_down", "snapshot_failed", "socket_path_too_long", "space_busy", "space_exists", "space_not_found",
+        "shutting_down", "snapshot_failed", "socket_path_too_long", "space_busy", "space_exists", "space_not_found", "space_suspended",
         "space_required", "stale_ref", "tab_closed", "tab_not_found", "timeout", "unknown_command",
         "unsafe_socket_path", "unsupported_context", "unsupported_fill_type", "unsupported_navigation",
         "web_content_terminated", "web_content_unresponsive"

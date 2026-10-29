@@ -19,6 +19,7 @@ from detailed_diagnostic_cases import verify_detailed_diagnostics
 from store_cleanup_cases import verify_pending_store_only
 from contract_cases import verify_offline, verify_live_contract
 from dialog_cases import verify_dialogs
+from lifecycle_cases import verify_lifecycle
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -29,8 +30,9 @@ def main():
     parser.add_argument('--diagnostics-only', action='store_true', help='Run only the diagnostic regression cases')
     parser.add_argument('--cleanup-only', action='store_true', help='Run only pending-store restoration with no live Spaces')
     parser.add_argument('--dialogs-only', action='store_true', help='Run only real JavaScript dialog cases')
+    parser.add_argument('--lifecycle-only', action='store_true', help='Run only Space suspend/resume cases')
     args = parser.parse_args()
-    if sum([args.cleanup_only, args.diagnostics_only, args.dialogs_only]) > 1 or (args.forms and (args.cleanup_only or args.dialogs_only)):
+    if sum([args.cleanup_only, args.diagnostics_only, args.dialogs_only, args.lifecycle_only]) > 1 or (args.forms and (args.cleanup_only or args.dialogs_only or args.lifecycle_only)):
         parser.error('专项选项不能互相混用；--dialogs-only / --cleanup-only 不与 --forms 混用')
     out = ROOT / '.artifacts' / time.strftime('reliability-%Y%m%d-%H%M%S')
     out.mkdir(parents=True)
@@ -82,10 +84,20 @@ def main():
     def js(source, **kwargs):
         return cli('evaluate', source, '--space', 'work', **kwargs)
 
+    def interrupt_restart():
+        daemon.terminate(); daemon.wait(timeout=15)
+        start()
+
     try:
         verify_offline(cli)
         cli('open', 'https://example.com', '--space', 'work', '--proxy', 'direct', error='invalid_arguments')
         start()
+        if args.lifecycle_only:
+            checks.append(verify_lifecycle(cli, base, out, lambda: (stop(), start()), state, interrupt_restart))
+            report = dict(ok=True, checks=checks, artifacts=str(out))
+            (out / 'report.json').write_text(json.dumps(report, indent=2))
+            print(json.dumps(report))
+            return
         if args.dialogs_only:
             checks.append(verify_dialogs(cli, base, out, lambda: (stop(), start()), state))
             report = dict(ok=True, checks=checks, artifacts=str(out))
@@ -105,6 +117,7 @@ def main():
             (out / 'report.json').write_text(json.dumps(report, indent=2))
             print(json.dumps(report))
             return
+        checks.append(verify_lifecycle(cli, base, out, lambda: (stop(), start()), state, interrupt_restart))
         work = cli('space', 'create', 'work', '--proxy', 'direct')
         cli('space', 'create', 'other', '--proxy', 'direct')
         cli('open', base, '--space', 'work')

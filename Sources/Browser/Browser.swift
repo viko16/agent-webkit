@@ -13,6 +13,7 @@ struct SpaceRecord: Codable {
     var tabs: [TabRecord]
     var deleting: Bool = false
     var tls: TLSConfiguration?
+    var suspended: Bool?
 }
 
 func systemProxyState() -> [String: Any] {
@@ -157,7 +158,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     var state: [String: Any] {
         ["tabId": id.uuidString, "url": persistedURL, "title": webView.title ?? "",
          "loading": webView.isLoading, "webContentTerminated": terminated, "suppressedDialogs": suppressedDialogs,
-         "pendingDialogs": dialogs.pendingCount,
+         "pendingDialogs": dialogs.pendingCount, "suspended": false,
          "unresponsive": unresponsive, "lastError": navigationError.map { failure($0)["error"]! } ?? NSNull(),
          "requiresForeground": false, "tls": tls?.summary ?? TLSConfiguration.systemSummary,
          "lastTLSChallenge": tlsChallenge, "openerTabId": openerTabID?.uuidString as Any? ?? NSNull(),
@@ -484,11 +485,16 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
 @MainActor
 final class Space {
     var record: SpaceRecord
-    let store: WKWebsiteDataStore
+    private(set) var store: WKWebsiteDataStore?
     var tabs: [Tab] = []
     var busy = false
     init(_ record: SpaceRecord) throws {
         self.record = record
+        if record.suspended != true { try activate() }
+    }
+    var suspended: Bool { record.suspended == true }
+    func activate() throws {
+        guard tabs.isEmpty else { return }
         let configurations: [ProxyConfiguration]
         if record.proxy == "direct" {
             configurations = []
@@ -504,14 +510,30 @@ final class Space {
             proxy.excludedDomains = []
             configurations = [proxy]
         }
-        store = WKWebsiteDataStore(forIdentifier: record.id)
+        let store = self.store ?? WKWebsiteDataStore(forIdentifier: record.id)
         store.proxyConfigurations = configurations
+        self.store = store
         tabs = record.tabs.map { Tab(record: $0, store: store, tls: record.tls) }
     }
+    func releaseRuntime() {
+        for tab in tabs { tab.close() }
+        // Keep the data-store coordinator alive: dropping it before WebKit flushes
+        // newly written cookies loses them even during same-process restoration.
+        tabs = []
+    }
+    var tabStates: [[String: Any]] {
+        if !suspended { return tabs.map(\.state) }
+        return record.tabs.map { tab in
+            ["tabId": tab.id.uuidString, "url": tab.url, "title": "", "loading": false,
+             "webContentTerminated": false, "unresponsive": false, "suspended": true,
+             "pendingDialogs": 0, "requiresForeground": false, "tls": record.tls?.summary ?? TLSConfiguration.systemSummary]
+        }
+    }
     var summary: [String: Any] {
-        ["id": record.id.uuidString, "name": record.name, "proxy": record.proxy, "persistent": store.isPersistent,
-         "dataStoreId": store.identifier?.uuidString ?? "", "defaultTabId": record.defaultTab.uuidString,
-         "tabs": tabs.map(\.state), "busy": busy, "network": networkState,
+        ["id": record.id.uuidString, "name": record.name, "proxy": record.proxy, "persistent": true,
+         "dataStoreId": record.id.uuidString, "defaultTabId": record.defaultTab.uuidString,
+         "tabs": tabStates, "busy": busy, "network": networkState,
+         "lifecycle": suspended ? "suspended" : "active", "liveWebViews": tabs.count,
          "tls": record.tls?.summary ?? TLSConfiguration.systemSummary]
     }
     var networkState: [String: Any] {
@@ -589,7 +611,7 @@ final class BrowserModel {
                 guard configuration.websiteDataStore === space.store else {
                     throw BrowserError("popup_store_mismatch", "拒绝使用其他 Space 的网站数据创建弹窗")
                 }
-                let popup = Tab(record: TabRecord(id: UUID(), url: url.absoluteString), store: space.store,
+                let popup = Tab(record: TabRecord(id: UUID(), url: url.absoluteString), store: configuration.websiteDataStore,
                                 tls: space.record.tls, configuration: configuration)
                 popup.openerTabID = tab.id
                 space.tabs.append(popup); self.bind(space)
@@ -603,7 +625,7 @@ final class BrowserModel {
                       self.spaces.contains(where: { $0 === space }) else { return }
                 space.tabs.removeAll { $0 === tab }; tab.close()
                 if space.tabs.isEmpty {
-                    space.tabs.append(Tab(record: TabRecord(id: UUID(), url: "about:blank"), store: space.store, tls: space.record.tls))
+                    space.tabs.append(Tab(record: TabRecord(id: UUID(), url: "about:blank"), store: tab.webView.configuration.websiteDataStore, tls: space.record.tls))
                     self.bind(space)
                 }
                 if space.record.defaultTab == tab.id { space.record.defaultTab = space.tabs[0].id }
@@ -623,9 +645,29 @@ final class BrowserModel {
     }
 
     func save(_ space: Space) throws {
-        space.record.tabs = space.tabs.map { TabRecord(id: $0.id, url: $0.persistedURL) }
+        if !space.suspended { space.record.tabs = space.tabs.map { TabRecord(id: $0.id, url: $0.persistedURL) } }
         if let index = records.firstIndex(where: { $0.id == space.record.id }) { records[index] = space.record }
         try persist()
+    }
+
+    private func resume(_ space: Space) throws {
+        guard space.suspended else { return }
+        let previous = space.record
+        try space.activate()
+        space.record.suspended = false
+        do { try save(space) }
+        catch {
+            space.record = previous
+            if let index = records.firstIndex(where: { $0.id == previous.id }) { records[index] = previous }
+            space.releaseRuntime()
+            throw error
+        }
+        bind(space)
+        for tab in space.tabs {
+            if let error = space.networkError { tab.navigationError = error; continue }
+            if tab.persistedURL != "about:blank", let url = URL(string: tab.persistedURL) { tab.load(url) }
+        }
+        changed?()
     }
 
     private func removeStore(_ id: UUID) async throws -> Bool {
@@ -692,7 +734,7 @@ final class BrowserModel {
     private var shutdownImpact: [String: Any] {
         ["spaces": spaces.map { space in
             ["spaceId": space.record.id.uuidString, "name": space.record.name,
-             "tabIds": space.tabs.map { $0.id.uuidString }] as [String: Any]
+             "tabIds": space.suspended ? space.record.tabs.map { $0.id.uuidString } : space.tabs.map { $0.id.uuidString }] as [String: Any]
         }, "websiteDataPreserved": true, "pageMemoryPreserved": false]
     }
 
@@ -720,6 +762,7 @@ final class BrowserModel {
             return ["version": productVersion, "pid": ProcessInfo.processInfo.processIdentifier, "spaces": spaces.count,
                     "ready": !restoring,
                     "shutdownImpact": shutdownImpact,
+                    "liveWebViews": spaces.reduce(0) { $0 + $1.tabs.count },
                     "observer": observerState?() ?? [:],
                     "pendingStoreCleanup": records.filter(\.deleting).count,
                     "blockedSpaces": spaces.filter { $0.networkError != nil }.map { $0.record.id.uuidString },
@@ -775,7 +818,38 @@ final class BrowserModel {
         }
         guard let space = spaces.first(where: { $0.record.id == id }) else { throw BrowserError("space_not_found", "Space 已删除") }
         if command == "space.info" { return space.summary }
-        if command == "tab.list" { return space.tabs.map(\.state) }
+        if command == "tab.list" { return space.tabStates }
+        if command == "space.suspend" {
+            guard !space.busy else { throw BrowserError("space_busy", "Space 正在操作中") }
+            if !space.suspended {
+                try save(space)
+                let previous = space.record
+                space.record.suspended = true
+                do { try save(space) }
+                catch {
+                    space.record = previous
+                    if let index = records.firstIndex(where: { $0.id == id }) { records[index] = previous }
+                    throw error
+                }
+                willRemove?(space)
+                space.releaseRuntime(); changed?()
+            }
+            return space.summary
+        }
+        if command == "space.resume" {
+            guard !space.busy else { throw BrowserError("space_busy", "Space 正在操作中") }
+            try resume(space)
+            return space.summary
+        }
+        if space.suspended, ["state", "diagnostics", "dialog.list", "dialog.respond"].contains(command) {
+            let tabID = r.options["tab"] ?? space.record.defaultTab.uuidString
+            guard let state = space.tabStates.first(where: { ($0["tabId"] as? String)?.lowercased() == tabID.lowercased() }) else {
+                throw BrowserError("tab_not_found", "Space 中不存在该标签页")
+            }
+            guard command == "state" else { throw BrowserError("space_suspended", "Space 已休眠；使用 space resume 显式恢复") }
+            return ["spaceId": id.uuidString, "space": space.record.name, "proxy": space.record.proxy,
+                    "network": space.networkState, "page": state, "busy": false, "value": NSNull()] as [String: Any]
+        }
         if command == "state" || command == "diagnostics" || command.hasPrefix("dialog.") {
             let tabID = r.options["tab"] ?? space.record.defaultTab.uuidString
             guard let tab = space.tabs.first(where: { $0.id.uuidString.lowercased() == tabID.lowercased() }) else {
@@ -822,9 +896,23 @@ final class BrowserModel {
         if let raw = r.options["timeout"] {
             guard let value = Int(raw), (1...60000).contains(value) else { throw BrowserError("invalid_timeout", "timeout 必须为 1–60000 ms") }; timeout = value
         } else { timeout = 15000 }
+        if let tabID = r.options["tab"], !space.record.tabs.contains(where: { $0.id.uuidString.lowercased() == tabID.lowercased() }) {
+            throw BrowserError("tab_not_found", "Space 中不存在该标签页")
+        }
+        if ["tab.close", "tab.default"].contains(command) {
+            guard space.record.tabs.contains(where: { $0.id.uuidString.lowercased() == r.args[0].lowercased() }) else {
+                throw BrowserError("tab_not_found", "标签页不存在")
+            }
+            if command == "tab.close", space.record.tabs.count == 1 { throw BrowserError("last_tab", "不能关闭最后一个标签页；可删除 Space") }
+        }
+        if command == "open" { _ = try validateURL(arg(0)) }
+        if command == "tab.new" { _ = try validateURL(r.args.first ?? "about:blank") }
+        let wasSuspended = space.suspended
+        try resume(space)
+        guard let store = space.store else { throw BrowserError("space_suspended", "Space 尚未恢复") }
         if command == "tab.new" {
             let url = try validateURL(r.args.first ?? "about:blank")
-            let tab = Tab(record: TabRecord(id: UUID(), url: "about:blank"), store: space.store, tls: space.record.tls)
+            let tab = Tab(record: TabRecord(id: UUID(), url: "about:blank"), store: store, tls: space.record.tls)
             tab.operationTiming = timing; tab.deadline = monotonicNow() + UInt64(timeout) * 1_000_000
             defer { tab.operationTiming = nil; tab.deadline = nil }
             space.tabs.append(tab); bind(space); try save(space); changed?()
@@ -850,7 +938,7 @@ final class BrowserModel {
         guard var tab = space.tabs.first(where: { $0.id.uuidString.lowercased() == tabID.lowercased() }) else { throw BrowserError("tab_not_found", "Space 中不存在该标签页") }
         // Replace a stalled view only on explicit navigation. Never replay an Agent action.
         if ["open", "reload"].contains(command), tab.terminated || tab.unresponsive {
-            let replacement = Tab(record: TabRecord(id: tab.id, url: tab.persistedURL), store: space.store, tls: space.record.tls, diagnostics: tab.diagnostics)
+            let replacement = Tab(record: TabRecord(id: tab.id, url: tab.persistedURL), store: store, tls: space.record.tls, diagnostics: tab.diagnostics)
             let index = space.tabs.firstIndex(where: { $0 === tab })!
             tab.close(); space.tabs[index] = replacement; tab = replacement
             bind(space); changed?()
@@ -858,6 +946,7 @@ final class BrowserModel {
         tab.operationTiming = timing; tab.deadline = monotonicNow() + UInt64(timeout) * 1_000_000
         defer { tab.operationTiming = nil; tab.deadline = nil }
         var value: Any = NSNull()
+        if wasSuspended, !["open", "reload"].contains(command) { try await tab.wait(selector: nil, timeout: timeout) }
         switch command {
         case "open":
             let url = try validateURL(arg(0)); tab.load(url)

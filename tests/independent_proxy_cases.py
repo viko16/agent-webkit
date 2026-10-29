@@ -121,6 +121,15 @@ def verify_independent_proxies(out, cli, restart, whistle_a, site_a, events_a):
             assert storage == {'cookie': f'route={name}', 'local': name}, storage
             report['restored'][name] = {'info': info, 'storage': storage}
         round_trip('after-restart')
+        for name, whistle, _, _ in routes:
+            sleeping = cli('space', 'suspend', name)
+            assert sleeping['lifecycle'] == 'suspended' and sleeping['liveWebViews'] == 0
+            assert sleeping['proxy'] == whistle.url and sleeping['tls'] == created[name]['tls']
+            cli('space', 'resume', name)
+            cli('wait', '--space', name)
+            assert evaluate(name, read_storage) == {'cookie': f'route={name}', 'local': name}
+        round_trip('after-resume')
+        report['suspendResumeVerified'] = True
 
         # A direct control loads the same public URL successfully, making an offline
         # proxy error meaningful rather than a consequence of an unreachable origin.

@@ -58,6 +58,16 @@ python3 tests/skill_workflow.py
 
 显式路径调用不等于安装后的自动发现验证。2026-10-29 用户因本机没有 Pi，明确豁免 #7 的 Pi 调用与失败恢复实测；该项按豁免验收完成，不宣称 Pi 实测通过。普通可靠性、代理与公网回归不依赖 Codex 或 Pi。
 
+## Space 休眠与恢复
+
+`space suspend NAME_OR_ID` 先保存元数据，再关闭并释放该 Space 全部 Tab/WebView；不删除网站数据。同进程保留轻量 DataStore 协调对象以维持 Cookie 会话；没有 WebView 不代表 WebKit 的共享网络进程立即退出。`space info/list` 返回 `lifecycle: active|suspended` 和 `liveWebViews`，`status.liveWebViews` 为宿主当前持有的总数，不是 OS 进程或内存统计。`tab list` / `state` 可读休眠元数据，不唤醒；休眠时 diagnostics/dialog 返回 `space_suspended`。
+
+`space resume NAME_OR_ID` 幂等地创建原 ID、URL、代理/TLS 的页面并开始加载，须再 `wait` 确认就绪。页面动作按需恢复并在原期限内等待目标页面载入；CLI 默认 Tab 不变。休眠状态持久化，重启不创建这些 Space 的 DataStore/WebView；活跃 Space 仍沿用既有启动恢复行为。优化限于显式休眠的 Space，不宣称所有启动都更快或恢复完整页面内存。
+
+busy 时拒绝休眠/恢复；自主对话框随页面关闭安全结束，原 ID 不可重用。保存失败保持原生命周期，恢复保存失败释放新页面。JS 卡死后也可显式休眠再恢复，不重放动作。`tab close` 关闭单个标签页，`space delete` 删除网站数据，`shutdown --all` 停止整个服务，含义不同。
+
+`python3 tests/reliability.py --lifecycle-only` 验证真实双 Space、多 Tab、Cookie/LocalStorage、期限、保存失败、对话框、卡死、普通及 SIGTERM 中断重启、删除重建与前台不变；完整 reliability 也运行它。
+
 ## 操作结果等待
 
 `wait` 的 `--url`、`--text`、`--state` 互斥，CLI 和原始 IPC 均校验。URL 精确匹配 `location.href`，包括 SPA history/hash；它不保证文档已加载，也不代表服务器完成业务。文本为可见目标的 `innerText` 子串，不带选择器时只查主 frame 的 body。元素状态沿用唯一选择器、`>>>` 和引用作用域：hidden 包含节点不存在，attached/detached 只判断是否存在；enabled/disabled 要求元素可见，并检查原生禁用及 `aria-disabled`，readOnly 不算 disabled。过期引用始终报 `stale_ref`，要等节点被删除应使用选择器。
