@@ -1,5 +1,17 @@
 # 实际验收记录
 
+## P1 / #6：原生下载与文件选择（2026-10-29）
+
+公开 WKDownload 生命周期提供按 Tab 的 list/wait/cancel、完成路径及失败原因；私有 UUID 目录不覆盖同名。完成文件在关闭/删除/重启后保留，内存记录不恢复；取消/关闭/退出清理残片。下载中拒绝 Space 休眠，等待超时不重放动作。原生选择仅在目标窗口已处于前台时显示 NSOpenPanel；后台委托返回 requires_foreground。
+
+初轮 `.artifacts/reliability-20261029-093843/` 因专项分支误放进 SIGTERM helper，实际额外运行了完整可靠性；该入口错误已修复，不作为正确的专项入口证据。[独立下载专项](../.artifacts/reliability-20261029-094115/report.json)通过，含实际内容、同名、失败、超时、取消与残片检查、Tab/Space 隔离、关闭和重启。后续[容量/退出专项](../.artifacts/reliability-20261029-094728/report.json)另验证 8 并行限制和退出取消残片。CLI 当前 31 命令；离线契约及 11 项原有守卫通过。
+
+[最终窄复核](../.artifacts/reliability-20261029-094805/report.json)在上述全部断言上新增输出目录不可写的真实失败，仍通过；恢复目录权限后继续其他下载和清理。
+
+[独立原生面板实查](../.artifacts/ui-20261029-094127/native-file-report.json)通过，明确 requiresForeground=true：CUA 在测试应用中选择单个 files.html、多个 files.html/index.html，AX 分别显示文件名和 2 files；宿主 CLI 独立读取 input.files，取消面板后选择保持。保留 native-selected.json / native-cancelled.json；测试应用和自有 Space 已正常退出清理。没有上传用户文件或修改系统配置。
+
+以 `14832e8` 为基准独立审查：Standards 1 项 P2（下载 TLS 失败写入导航错误，污染原页面 wait），已分离信任判定与导航状态写入并复核；Spec 1 项 P2 验收缺口（前台原生选择未测），已由上述实查关闭。最终 [Release 完整代理/TLS/HMR](../.artifacts/issue6-download-full-20261029/report.json)通过，新增正确 CA、错误主机名、过期证书、insecure 及下载重定向的真实下载结果，并证明失败后原页面 wait/TLS 状态不受污染。自然 5 分钟下载期限未等待实测；下载不是完整网络追踪，未测系统级权限撤销、磁盘耗尽和任意真实站点兼容。CLI 上传由下一独立提交完成，#6 此时仍 open。
+
 ## P1 / #5：Space 休眠与按需恢复（2026-10-29）
 
 `space suspend/resume` 保留 ID、默认 Tab、URL、Cookie/LocalStorage、代理/TLS；释放全部 Tab/WebView。同进程保留轻量 DataStore 协调对象，休眠状态跨重启保留，启动不创建休眠 Space 的 DataStore/WebView。活跃 Space 的既有恢复路径保留。`state/list/info` 不唤醒，页面动作按需恢复；显式 resume 只开始加载，须 wait 就绪。

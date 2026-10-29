@@ -44,6 +44,29 @@ def origin(port=0, events=None, tls_context=None):
             query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             time.sleep(min(float(query.get('delay', ['0'])[0]), 3))
             events.add(kind='origin', path=self.path, peerPort=self.client_address[1], cookie=self.headers.get('Cookie'), host=self.headers.get('Host'), nonce=nonce)
+            if self.path.startswith('/download-redirect?'):
+                self.send_response(302)
+                self.send_header('Location', query['to'][0])
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+                return
+            if self.path.startswith('/download?'):
+                mode = query.get('mode', ['ok'])[0]
+                body = ('download-' + nonce).encode()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/octet-stream')
+                self.send_header('Content-Disposition', 'attachment; filename="same.txt"')
+                self.send_header('Content-Length', str(len(body) if mode == 'ok' else len(body) + 100))
+                self.end_headers()
+                try:
+                    self.wfile.write(body); self.wfile.flush()
+                    if mode == 'slow':
+                        time.sleep(2)
+                        self.wfile.write(b'x' * 100)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                self.close_connection = True
+                return
             if self.path.startswith('/diagnostic-drop'):
                 self.close_connection = True
                 self.connection.shutdown(socket.SHUT_RDWR)
@@ -62,7 +85,7 @@ def origin(port=0, events=None, tls_context=None):
                 self.send_header('Content-Length', '0')
                 self.end_headers()
                 return
-            fixture = {'/popups': 'popups.html', '/contexts': 'contexts.html', '/context-frame': 'context-frame.html', '/diagnostics': 'diagnostics.html', '/dialogs': 'dialogs.html'}.get(urllib.parse.urlsplit(self.path).path)
+            fixture = {'/popups': 'popups.html', '/contexts': 'contexts.html', '/context-frame': 'context-frame.html', '/diagnostics': 'diagnostics.html', '/dialogs': 'dialogs.html', '/files': 'files.html'}.get(urllib.parse.urlsplit(self.path).path)
             if fixture:
                 body = (Path(__file__).parent / 'site' / fixture).read_bytes()
                 self.send_response(200)

@@ -43,6 +43,8 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     let backingWindow: NSPanel
     let diagnostics: DiagnosticLog
     let dialogs = DialogStore()
+    let downloads = DownloadStore()
+    let fileChooser = FileChooser()
     var navigationError: Error?
     var changed: (() -> Void)?
     var statusChanged: (() -> Void)?
@@ -135,6 +137,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     func close() {
         closed = true
         dialogs.stop(code: "tab_closed")
+        downloads.stop(); fileChooser.stop()
         webView.isInspectable = false
         diagnostics.setDetail(false)
         DiagnosticRouter.shared.logs.removeObject(forKey: webView)
@@ -159,6 +162,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         ["tabId": id.uuidString, "url": persistedURL, "title": webView.title ?? "",
          "loading": webView.isLoading, "webContentTerminated": terminated, "suppressedDialogs": suppressedDialogs,
          "pendingDialogs": dialogs.pendingCount, "suspended": false,
+         "activeDownloads": downloads.hasActive, "fileChooser": fileChooser.state,
          "unresponsive": unresponsive, "lastError": navigationError.map { failure($0)["error"]! } ?? NSNull(),
          "requiresForeground": false, "tls": tls?.summary ?? TLSConfiguration.systemSummary,
          "lastTLSChallenge": tlsChallenge, "openerTabId": openerTabID?.uuidString as Any? ?? NSNull(),
@@ -237,6 +241,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
 
     func load(_ url: URL) {
         dialogs.cancelAll(code: "dialog_cancelled")
+        fileChooser.stop()
         persistedURL = url.absoluteString
         navigationError = nil; lastNavigationRejection = nil; certificateError = nil; tlsChallenge = [:]; terminated = false
         // A repeated failed load can return nil and still deliver a terminal delegate callback.
@@ -339,6 +344,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         dialogs.cancelAll(code: "dialog_cancelled")
+        fileChooser.stop()
         diagnostics.beginNavigation()
         navigationError = nil
         certificateError = nil
@@ -386,23 +392,36 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         if navigationResponse.isForMainFrame, let response = navigationResponse.response as? HTTPURLResponse {
             diagnostics.native("navigation-response", url: response.url, status: response.statusCode)
         }
-        decisionHandler(.allow)
+        if !navigationResponse.canShowMIMEType || (navigationResponse.response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Disposition")?.lowercased().contains("attachment") == true {
+            decisionHandler(.download)
+        } else { decisionHandler(.allow) }
+    }
+    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) { downloads.begin(download) }
+    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) { downloads.begin(download) }
+    func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters, initiatedByFrame frame: WKFrameInfo,
+                 completionHandler: @escaping ([URL]?) -> Void) {
+        guard !closed else { completionHandler(nil); return }
+        fileChooser.present(webView: webView, parameters: parameters, completion: completionHandler)
     }
     func webView(_ webView: WKWebView, didReceive challenge: URLAuthenticationChallenge,
                  completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        authenticate(challenge, affectsPage: true, completionHandler: completionHandler)
+    }
+    func authenticate(_ challenge: URLAuthenticationChallenge, affectsPage: Bool,
+                      completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
         guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
               let trust = challenge.protectionSpace.serverTrust, let tls else {
             completionHandler(.performDefaultHandling, nil); return
         }
         let host = challenge.protectionSpace.host
         if tls.ignoreCertificateErrors == true {
-            tlsChallenge = ["host": host, "policy": "insecure", "accepted": true, "certificateErrorsIgnored": true]
+            if affectsPage { tlsChallenge = ["host": host, "policy": "insecure", "accepted": true, "certificateErrorsIgnored": true] }
             completionHandler(.useCredential, URLCredential(trust: trust)); return
         }
         guard let certificate = tls.certificate,
               SecTrustSetAnchorCertificates(trust, [certificate] as CFArray) == errSecSuccess,
               SecTrustSetAnchorCertificatesOnly(trust, false) == errSecSuccess else {
-            certificateError = BrowserError("certificate_rejected", "无法为 \(host) 配置 Space CA")
+            if affectsPage { certificateError = BrowserError("certificate_rejected", "无法为 \(host) 配置 Space CA") }
             completionHandler(.cancelAuthenticationChallenge, nil); return
         }
         // Keep WebKit's SSL/hostname policies. Only add this Space's anchor to this trust object.
@@ -411,22 +430,23 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
             let message = error.map { CFErrorCopyDescription($0) as String } ?? ""
             let details = accepted ? "" : String(describing: SecTrustCopyResult(trust))
             Task { @MainActor in
-                self?.tlsChallenge = ["host": host, "policy": "custom-ca", "accepted": accepted, "error": message, "details": details]
+                if affectsPage { self?.tlsChallenge = ["host": host, "policy": "custom-ca", "accepted": accepted, "error": message, "details": details] }
                 if accepted { completionHandler(.useCredential, URLCredential(trust: trust)) }
                 else {
-                    self?.certificateError = BrowserError("certificate_rejected", "\(host): \(message)")
+                    if affectsPage { self?.certificateError = BrowserError("certificate_rejected", "\(host): \(message)") }
                     completionHandler(.cancelAuthenticationChallenge, nil)
                 }
             }
         }
         if status != errSecSuccess {
-            certificateError = BrowserError("certificate_rejected", "\(host): SecTrust evaluation failed (\(status))")
+            if affectsPage { certificateError = BrowserError("certificate_rejected", "\(host): SecTrust evaluation failed (\(status))") }
             completionHandler(.cancelAuthenticationChallenge, nil)
         }
     }
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         terminated = true
         dialogs.stop(code: "web_content_terminated")
+        downloads.stop(); fileChooser.stop()
         let error = BrowserError("web_content_terminated", "WebContent 进程已退出；reload 可恢复页面，未提交的表单不会保留")
         navigationError = error
         diagnostics.native("web-content-terminated", url: webView.url, error: error)
@@ -444,7 +464,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
             rejectNavigation(BrowserError("unsupported_navigation", "仅支持 http(s) 与 about:blank；已拒绝外部应用或不支持的 URL scheme"))
             decisionHandler(.cancel); return
         }
-        decisionHandler(.allow)
+        decisionHandler(navigationAction.shouldPerformDownload ? .download : .allow)
     }
     private static func supports(_ url: URL) -> Bool {
         (["http", "https"].contains(url.scheme?.lowercased() ?? "") && url.host != nil) || url.absoluteString == "about:blank"
@@ -603,6 +623,8 @@ final class BrowserModel {
 
     private func bind(_ space: Space) {
         for tab in space.tabs {
+            tab.downloads.directory = URL(fileURLWithPath: storagePath).appendingPathComponent("downloads", isDirectory: true)
+                .appendingPathComponent(space.record.id.uuidString, isDirectory: true).appendingPathComponent(tab.id.uuidString, isDirectory: true)
             tab.createPopup = { [weak self, weak space, weak tab] configuration, url in
                 guard let self, let space, let tab, !self.shuttingDown,
                       self.spaces.contains(where: { $0 === space }), !tab.closed else {
@@ -728,6 +750,7 @@ final class BrowserModel {
     func finishDialogsForExit() {
         for space in spaces {
             for tab in space.tabs { tab.dialogs.stop(code: "dialog_cancelled") }
+            for tab in space.tabs { tab.downloads.stop(); tab.fileChooser.stop() }
         }
     }
 
@@ -821,6 +844,7 @@ final class BrowserModel {
         if command == "tab.list" { return space.tabStates }
         if command == "space.suspend" {
             guard !space.busy else { throw BrowserError("space_busy", "Space 正在操作中") }
+            guard !space.tabs.contains(where: { $0.downloads.hasActive }) else { throw BrowserError("space_busy", "Space 有下载进行中；先等待或显式取消") }
             if !space.suspended {
                 try save(space)
                 let previous = space.record
@@ -841,7 +865,7 @@ final class BrowserModel {
             try resume(space)
             return space.summary
         }
-        if space.suspended, ["state", "diagnostics", "dialog.list", "dialog.respond"].contains(command) {
+        if space.suspended, ["state", "diagnostics", "dialog.list", "dialog.respond", "download.list", "download.wait", "download.cancel"].contains(command) {
             let tabID = r.options["tab"] ?? space.record.defaultTab.uuidString
             guard let state = space.tabStates.first(where: { ($0["tabId"] as? String)?.lowercased() == tabID.lowercased() }) else {
                 throw BrowserError("tab_not_found", "Space 中不存在该标签页")
@@ -850,10 +874,26 @@ final class BrowserModel {
             return ["spaceId": id.uuidString, "space": space.record.name, "proxy": space.record.proxy,
                     "network": space.networkState, "page": state, "busy": false, "value": NSNull()] as [String: Any]
         }
-        if command == "state" || command == "diagnostics" || command.hasPrefix("dialog.") {
+        if command == "state" || command == "diagnostics" || command.hasPrefix("dialog.") || command.hasPrefix("download.") {
             let tabID = r.options["tab"] ?? space.record.defaultTab.uuidString
             guard let tab = space.tabs.first(where: { $0.id.uuidString.lowercased() == tabID.lowercased() }) else {
                 throw BrowserError("tab_not_found", "Space 中不存在该标签页")
+            }
+            if command.hasPrefix("download.") {
+                if command == "download.list" { return ["spaceId": id.uuidString, "tabId": tab.id.uuidString, "value": tab.downloads.snapshot()] }
+                let downloadID = try arg(0)
+                if command == "download.cancel" { try tab.downloads.cancel(downloadID) }
+                if command == "download.wait" {
+                    let timeout = Int(r.options["timeout"] ?? "15000") ?? 0
+                    guard (1...60000).contains(timeout) else { throw BrowserError("invalid_timeout", "timeout 必须为 1–60000 ms") }
+                    let start = monotonicNow()
+                    while (try tab.downloads.item(downloadID)["status"] as? String) == "running" {
+                        guard !tab.closed else { throw BrowserError("tab_closed", "目标标签页已关闭") }
+                        guard milliseconds(from: start) < Double(timeout) else { throw BrowserError("timeout", "等待下载超时；原下载继续，不要重复触发动作") }
+                        try await Task.sleep(nanoseconds: 25_000_000)
+                    }
+                }
+                return ["spaceId": id.uuidString, "tabId": tab.id.uuidString, "value": try tab.downloads.item(downloadID)]
             }
             if command.hasPrefix("dialog.") {
                 let value = command == "dialog.list" ? tab.dialogs.snapshot() : try tab.dialogs.respond(id: arg(0), action: arg(1), text: r.options["text"])

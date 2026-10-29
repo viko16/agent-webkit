@@ -2,6 +2,8 @@
 import ssl
 import json
 import subprocess
+from urllib.parse import urlencode
+from download_cases import verify_download_tls
 from fixtures import Events, origin
 
 
@@ -19,6 +21,9 @@ def verify_tls_cases(out, cli, restart):
     servers = []
     results = {}
     try:
+        plain, _ = origin()
+        servers.append(plain)
+        file_url = f'http://127.0.0.1:{plain.server_address[1]}/files'
         cli('space', 'create', 'tls-local', '--proxy', 'direct', '--ca-cert', str(directory / 'ca.pem'))
         cli('space', 'create', 'tls-other-ca', '--proxy', 'direct', '--ca-cert', str(out / 'whistle-ca.pem'))
         cli('space', 'create', 'tls-insecure', '--proxy', 'direct', '--ignore-certificate-errors')
@@ -81,6 +86,9 @@ def verify_tls_cases(out, cli, restart):
             assert cli('space', 'info', 'tls-local')['defaultTabId'] == parent
             cli('tab', 'close', popup, '--space', 'tls-local')
             results[name + 'PopupInheritsTLS'] = True
+            redirect = f'http://127.0.0.1:{plain.server_address[1]}/download-redirect?' + urlencode({'to': url + 'download?mode=ok'})
+            results[name + 'DownloadTLS'] = verify_download_tls(cli, file_url, redirect, 'tls-local', name == 'valid')
+            results[name + 'InsecureDownloadTLS'] = verify_download_tls(cli, file_url, redirect, 'tls-insecure', True)
         results['passed'] = True
         return results
     finally:

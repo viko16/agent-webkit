@@ -58,6 +58,14 @@ python3 tests/skill_workflow.py
 
 显式路径调用不等于安装后的自动发现验证。2026-10-29 用户因本机没有 Pi，明确豁免 #7 的 Pi 调用与失败恢复实测；该项按豁免验收完成，不宣称 Pi 实测通过。普通可靠性、代理与公网回归不依赖 Codex 或 Pi。
 
+## 下载与原生文件选择
+
+网页下载由公开 WKDownload 委托处理。先触发一次动作，再用 `download list --space NAME --tab ID` 获取 ID，`download wait ID --space NAME --tab ID --timeout 15000` 等待，或 `download cancel ID ...` 显式取消。等待超时不取消、不重复触发下载；失败/取消结果有状态和原因，只有 completed 返回可用 path。状态和 ID 属于目标 Tab，可在页面 busy 时查询/等待/取消。
+
+文件保存在 daemon 数据目录的 `downloads/SPACE_ID/TAB_ID/DOWNLOAD_ID/文件名`，各目录 0700，每次新 ID，不覆盖同名文件。最多 8 个并行、64 条内存记录，每个下载最多 5 分钟。关闭/删除/退出取消未完成下载并尝试清理残片；Space 有下载时拒绝休眠。已完成文件保留，网站数据删除不删除下载文件；记录在关闭、休眠和重启后不恢复，文件路径仍可由此前结果使用。下载进度是 WebKit 宿主观测，不代表服务端业务成功。
+
+手动 file input 使用 NSOpenPanel，仅在应用已激活且对应页面位于 key window 时打开；后台调用安全取消，`state.page.fileChooser` 返回 `requires_foreground` / `requiresForeground: true`，不主动激活。用户在原生窗口选取文件后可继续页面操作。目录选择不支持，关闭/导航/退出会结束待决面板。`python3 tests/reliability.py --downloads-only` 验证真实委托、同名、失败/取消/等待期限、Space/Tab 隔离、关闭/重启和后台选择限制。
+
 ## Space 休眠与恢复
 
 `space suspend NAME_OR_ID` 先保存元数据，再关闭并释放该 Space 全部 Tab/WebView；不删除网站数据。同进程保留轻量 DataStore 协调对象以维持 Cookie 会话；没有 WebView 不代表 WebKit 的共享网络进程立即退出。`space info/list` 返回 `lifecycle: active|suspended` 和 `liveWebViews`，`status.liveWebViews` 为宿主当前持有的总数，不是 OS 进程或内存统计。`tab list` / `state` 可读休眠元数据，不唤醒；休眠时 diagnostics/dialog 返回 `space_suspended`。

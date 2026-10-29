@@ -19,7 +19,8 @@ struct Request: Codable {
             "tab.close":1...1, "tab.default":1...1, "open":1...1, "reload":0...0,
             "snapshot":0...0, "state":0...0, "evaluate":1...1, "click":1...1,
             "fill":2...2, "screenshot":0...0, "wait":0...1, "diagnostics":0...0,
-            "dialog.list":0...0, "dialog.respond":2...2, "space.suspend":1...1, "space.resume":1...1]
+            "dialog.list":0...0, "dialog.respond":2...2, "space.suspend":1...1, "space.resume":1...1,
+            "download.list":0...0, "download.wait":1...1, "download.cancel":1...1]
 
     static func allowedOptions(for command: String) -> Set<String> {
         var allowed: Set<String> = ["socket", "data-dir"]
@@ -34,6 +35,7 @@ struct Request: Codable {
         if command == "wait" { allowed.formUnion(["url", "text", "state"]) }
         if command == "screenshot" { allowed.insert("out") }
         if command == "shutdown" { allowed.insert("all") }
+        if command == "download.wait" { allowed.insert("timeout") }
         if command == "diagnostics" { allowed.formUnion(["clear", "detail", "inspectable"]) }
         if command == "dialog.respond" { allowed.insert("text") }
         return allowed
@@ -132,7 +134,7 @@ struct Options {
             i += 1
         }
         var command = positionals.isEmpty ? "help" : positionals.removeFirst()
-        if ["space", "tab", "dialog"].contains(command) {
+        if ["space", "tab", "dialog", "download"].contains(command) {
             guard !positionals.isEmpty else { throw BrowserError("invalid_arguments", "需要子命令") }
             command += "." + positionals.removeFirst()
         }
@@ -163,6 +165,8 @@ browser snapshot|state --space NAME_OR_ID [--tab ID]
 browser diagnostics --space NAME_OR_ID [--tab ID] [--clear] [--detail on|off | --inspectable on|off]
 browser dialog list --space NAME_OR_ID [--tab ID]
 browser dialog respond ID accept|dismiss --space NAME_OR_ID [--tab ID] [--text PROMPT_VALUE]
+browser download list --space NAME_OR_ID [--tab ID]
+browser download wait|cancel ID --space NAME_OR_ID [--tab ID]
 browser click SELECTOR_OR_REF --space NAME_OR_ID [--tab ID] [--wait-for-navigation | --wait-for-popup] [--timeout 15000]
 browser fill SELECTOR_OR_REF VALUE --space NAME_OR_ID [--tab ID]
 browser evaluate JAVASCRIPT --space NAME_OR_ID [--tab ID] [--await] [--timeout 15000]

@@ -6,6 +6,7 @@ enum CLIContract {
         "help": ["COMMAND", "SUBCOMMAND"], "space.create": ["NAME"],
         "space.info": ["NAME_OR_ID"], "space.delete": ["NAME_OR_ID"],
         "space.suspend": ["NAME_OR_ID"], "space.resume": ["NAME_OR_ID"],
+        "download.wait": ["ID"], "download.cancel": ["ID"],
         "tab.new": ["URL"], "tab.close": ["ID"], "tab.default": ["ID"],
         "open": ["URL"], "evaluate": ["JAVASCRIPT"], "click": ["SELECTOR_OR_REF"],
         "fill": ["SELECTOR_OR_REF", "VALUE"], "wait": ["SELECTOR_OR_REF"], "dialog.respond": ["ID", "ACTION"]
@@ -85,6 +86,7 @@ enum CLIContract {
         case "diagnostics": result = "diagnostics"
         case "dialog.list": result = "dialogs"
         case "dialog.respond": result = "dialogResponse"
+        case "download.list", "download.wait", "download.cancel": result = "downloads"
         default: result = "page"
         }
         return ["command": name, "usage": synopsis(name),
@@ -136,6 +138,7 @@ enum CLIContract {
                     "shutdown": object(["shutdown", "shutdownImpact"], ["shutdown": ["const": true], "shutdownImpact": shutdownImpact]), "space": space,
                     "spaces": ["type": "array", "items": space], "tab": tab,
                     "tabs": ["type": "array", "items": tab], "page": page,
+                    "downloads": object(["spaceId", "tabId", "value"]),
                     "deletion": object(["deleted", "spaceId", "websiteDataRemoved", "dataStoreRemoved", "cleanupPending"]),
                     "tabClose": object(["closed", "defaultTabId"]), "tabDefault": object(["defaultTabId"]),
                     "diagnostics": object(["spaceId", "tabId", "busy", "networkBlocked", "networkErrorCode", "value"]),
@@ -161,13 +164,15 @@ enum CLIContract {
                 "recovery": "never automatically replay actions after timeout; inspect state/diagnostics; explicit reload/open can replace unresponsive view retaining Tab ID and Space data",
                 "proxy": "direct rejects enabled system proxy; no VPN/content-filter bypass; loopback routing unverified; routeVerified=false",
                 "dialogs": "explicit per-Space/Tab list/respond; no automatic confirm acceptance; queries and replies work while busy; deadlines dismiss safely; no foreground activation",
-                "unsupported": "native keyboard/mouse; file chooser/upload/download control; complete DevTools network trace"
+                "downloads": "per-Tab native WKDownload; private per-ID output directory; list/wait/cancel; timeout does not replay or cancel; 8 active, 64 records, 300000 ms lifetime; completed files retained after close/delete/restart, runtime records reset",
+                "fileChooser": "native panel only for already active key window; background delegate cancels with state.page.fileChooser.requiresForeground=true; never activates a window",
+                "unsupported": "native keyboard/mouse; CLI file upload; complete DevTools network trace"
             ]
         ]
     }
 
     private static let errorCodes = [
-        "already_running", "certificate_rejected", "data_removal_failed", "data_removal_timeout",
+        "already_running", "certificate_rejected", "data_removal_failed", "data_removal_timeout", "download_not_found", "download_failed",
         "direct_system_proxy_conflict", "diagnostics_unavailable", "dialog_not_found", "dialog_already_handled", "dialog_expired", "dialog_cancelled", "dialog_capacity", "element_not_actionable", "element_not_editable", "element_readonly",
         "invalid_arguments", "invalid_certificate", "invalid_json_result", "invalid_name", "invalid_option",
         "invalid_proxy", "invalid_response", "invalid_selector", "invalid_timeout", "invalid_url", "ipc_error",
