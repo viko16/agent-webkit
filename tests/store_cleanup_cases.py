@@ -1,6 +1,115 @@
 """Restore a real pending store when no live Space has initialized WebKit yet."""
 import json
 import os
+from pathlib import Path
+import plistlib
+import subprocess
+import time
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def cleanup_failure_app(out):
+    """Instrument a generated source copy; ship no fault-injection hooks."""
+    source = (ROOT / 'Sources/Browser/Browser.swift').read_text()
+    removal = '    private func removeStoreOnce(_ id: UUID) async throws {\n'
+    clearing = '            store.removeData(ofTypes: types, modifiedSince: .distantPast) {\n'
+    assert source.count(removal) == source.count(clearing) == 1
+    source = source.replace(removal, removal + '''        if ProcessInfo.processInfo.environment["BROWSER_TEST_CLEANUP_ID"] == id.uuidString {
+            throw BrowserError("injected_store_in_use", "Force the clearStoreContents fallback")
+        }
+''')
+    source = source.replace(clearing, '''            if ProcessInfo.processInfo.environment["BROWSER_TEST_CLEANUP_ID"] == id.uuidString {
+                let code = ProcessInfo.processInfo.environment["BROWSER_TEST_CLEANUP_ERROR"]!
+                fputs("Injected cleanup failure: \\(code) \\(id)\\n", stderr)
+                if code == "data_removal_failed" {
+                    operation.finish(.failure(BrowserError(code, "Injected remaining website data")))
+                } else {
+                    // Model a delayed WebKit callback that retains the operation.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 6) { operation.finish(.success(())) }
+                }
+                // For data_removal_timeout, let the original five-second timer fire.
+                return
+            }
+''' + clearing)
+    generated = out / 'Browser.swift'
+    generated.write_text(source)
+    app = out / 'Cleanup Failure.app'
+    binary = app / 'Contents/MacOS/browser'
+    binary.parent.mkdir(parents=True)
+    # Keep the product Bundle ID: the fixture must use the same real WebKit stores.
+    (app / 'Contents/Info.plist').write_bytes(plistlib.dumps(
+        plistlib.loads((ROOT / 'packaging/Info.plist').read_bytes())))
+    sources = [str(generated) if path.name == 'Browser.swift' else str(path)
+               for path in sorted((ROOT / 'Sources/Browser').glob('*.swift'))]
+    build = subprocess.run(['swiftc', '-g', *sources, '-o', str(binary)],
+                           capture_output=True, text=True, timeout=120)
+    (out / 'cleanup-failure-build.log').write_text(build.stdout + build.stderr)
+    assert build.returncode == 0, f'Failure fixture build failed; see {out / "cleanup-failure-build.log"}'
+    subprocess.run(['codesign', '--force', '--sign', '-', str(app)], check=True, capture_output=True)
+    return binary
+
+
+def verify_store_cleanup_failures(cli, start, stop, state, base, out):
+    # The preceding real-store case may have left a deferred empty container.
+    stop(); start()
+    executable = cleanup_failure_app(out)
+    registry = state / 'spaces.json'
+    results = []
+    for code in ('data_removal_failed', 'data_removal_timeout'):
+        failed = cli('space', 'create', 'cleanup-failed', '--proxy', 'direct')
+        later = cli('space', 'create', 'cleanup-later', '--proxy', 'direct')
+        healthy = cli('space', 'create', 'cleanup-healthy', '--proxy', 'direct')
+        url = base + '?cleanup=' + code
+        cli('open', url, '--space', 'cleanup-healthy')
+        cli('evaluate', 'localStorage.setItem("restore-probe", "preserved"); true', '--space', 'cleanup-healthy')
+        stop()
+        records = json.loads(registry.read_text())
+        for record in records:
+            if record['id'] in (failed['id'], later['id']):
+                record['deleting'] = True
+        temporary = state / 'cleanup-failures.tmp'
+        temporary.write_text(json.dumps(records))
+        os.replace(temporary, registry)
+        started = time.monotonic()
+        start(executable=executable, extra_env={
+            'BROWSER_TEST_CLEANUP_ID': failed['id'], 'BROWSER_TEST_CLEANUP_ERROR': code})
+        startup_seconds = time.monotonic() - started
+        if code == 'data_removal_timeout':
+            assert startup_seconds >= 5, startup_seconds
+        status = cli('status')
+        assert status['ready'] and status['pendingStoreCleanup'] == 1, status
+        spaces = cli('space', 'list')
+        assert [space['id'] for space in spaces] == [healthy['id']], spaces
+        assert spaces[0]['defaultTabId'] == healthy['defaultTabId'], spaces
+        cli('wait', '#message', '--space', 'cleanup-healthy')
+        restored = cli('evaluate', '[location.href, localStorage.getItem("restore-probe")]', '--space', 'cleanup-healthy')
+        assert restored['value'] == [url, 'preserved'], restored
+        records = json.loads(registry.read_text())
+        pending = [record for record in records if record.get('deleting')]
+        assert [record['id'] for record in pending] == [failed['id']], records
+        assert all(record['id'] != later['id'] for record in records), records
+        # Explicit deletion still reports the cleanup error instead of false success.
+        cli('space', 'delete', failed['id'], error=code)
+        assert cli('status')['ready'] and cli('status')['pendingStoreCleanup'] == 1
+        stop()
+        assert any(record['id'] == failed['id'] and record['deleting']
+                   for record in json.loads(registry.read_text()))
+        start()
+        assert cli('status')['pendingStoreCleanup'] == 0
+        cli('wait', '#message', '--space', 'cleanup-healthy')
+        assert cli('evaluate', 'localStorage.getItem("restore-probe")', '--space', 'cleanup-healthy')['value'] == 'preserved'
+        assert cli('space', 'delete', 'cleanup-healthy')['websiteDataRemoved']
+        # Finish any deferred container removal through the normal daemon.
+        stop(); start()
+        assert cli('status')['pendingStoreCleanup'] == 0
+        assert json.loads(registry.read_text()) == []
+        results.append(dict(error=code, ready=True, pendingStoreCleanup=1,
+                            laterTombstoneRemoved=True, healthySpaceRestored=True,
+                            explicitDeleteStillFails=True, retryAfterRestart=True,
+                            startupSeconds=startup_seconds))
+    return dict(passed=True, method='generated daemon with injected Store fallback failures', cases=results)
 
 
 def verify_pending_store_only(cli, start, stop, state, base):

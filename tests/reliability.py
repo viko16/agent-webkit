@@ -16,7 +16,7 @@ from wait_cases import verify_waits
 from form_cases import framework_site, verify_forms
 from diagnostic_cases import verify_diagnostics
 from detailed_diagnostic_cases import verify_detailed_diagnostics
-from store_cleanup_cases import verify_pending_store_only
+from store_cleanup_cases import verify_pending_store_only, verify_store_cleanup_failures
 from contract_cases import verify_offline, verify_live_contract
 from dialog_cases import verify_dialogs
 from lifecycle_cases import verify_lifecycle
@@ -31,7 +31,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--forms', action='store_true', help='Run real React/Vue fixtures (npm ci --prefix tests/forms)')
     parser.add_argument('--diagnostics-only', action='store_true', help='Run only the diagnostic regression cases')
-    parser.add_argument('--cleanup-only', action='store_true', help='Run only pending-store restoration with no live Spaces')
+    parser.add_argument('--cleanup-only', action='store_true', help='Run only pending-store restoration and cleanup failure isolation')
     parser.add_argument('--dialogs-only', action='store_true', help='Run only real JavaScript dialog cases')
     parser.add_argument('--lifecycle-only', action='store_true', help='Run only Space suspend/resume cases')
     parser.add_argument('--downloads-only', action='store_true', help='Run only native file download cases')
@@ -65,11 +65,11 @@ def main():
             return response
         return response['result']
 
-    def start():
+    def start(*, executable=app, extra_env=None):
         nonlocal daemon
         log = (out / f'daemon-{len(logs)}.log').open('w')
         logs.append(log)
-        daemon = subprocess.Popen([str(app), 'daemon'], env=env, stdout=log, stderr=log)
+        daemon = subprocess.Popen([str(executable), 'daemon'], env=dict(env, **(extra_env or {})), stdout=log, stderr=log)
         for _ in range(100):
             assert daemon.poll() is None, f'App exited; see {log.name}'
             if (state / 'browser.sock').exists():
@@ -137,6 +137,7 @@ def main():
             print(json.dumps(report))
             return
         checks.append(verify_pending_store_only(cli, start, stop, state, base))
+        checks.append(verify_store_cleanup_failures(cli, start, stop, state, base, out))
         if args.cleanup_only:
             report = dict(ok=True, checks=checks, artifacts=str(out))
             (out / 'report.json').write_text(json.dumps(report, indent=2))

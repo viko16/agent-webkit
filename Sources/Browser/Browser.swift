@@ -712,7 +712,13 @@ final class BrowserModel {
         let cleanupBootstrap = records.contains(where: \.deleting) ? WKWebsiteDataStore.nonPersistent() : nil
         defer { withExtendedLifetime(cleanupBootstrap) {} }
         for record in records.filter(\.deleting) {
-            if try await removeStore(record.id) {
+            let removed: Bool
+            do { removed = try await removeStore(record.id) }
+            catch {
+                fputs("Pending store cleanup failed (\(record.id)): \(error)\n", stderr)
+                continue
+            }
+            if removed {
                 records.removeAll { $0.id == record.id }; try persist()
             }
         }
