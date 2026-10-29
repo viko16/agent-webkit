@@ -766,13 +766,15 @@ final class BrowserModel {
             tab.closeRequested = { [weak self, weak space, weak tab] in
                 guard let self, let space, let tab, !tab.closed,
                       self.spaces.contains(where: { $0 === space }) else { return }
-                space.tabs.removeAll { $0 === tab }; tab.close()
-                if space.tabs.isEmpty {
-                    space.tabs.append(Tab(record: TabRecord(id: UUID(), url: "about:blank"), store: tab.webView.configuration.websiteDataStore, tls: space.record.tls))
-                    self.bind(space)
-                }
-                if space.record.defaultTab == tab.id { space.record.defaultTab = space.tabs[0].id }
-                do { try self.save(space) } catch { fputs("Persistence error: \(error)\n", stderr) }
+                var remaining = space.tabs.filter { $0 !== tab }
+                let replacement = remaining.isEmpty ? Tab(record: TabRecord(id: UUID(), url: "about:blank"), store: tab.webView.configuration.websiteDataStore, tls: space.record.tls) : nil
+                if let replacement { remaining.append(replacement) }
+                var record = space.record
+                record.tabs = remaining.map { TabRecord(id: $0.id, url: $0.persistedURL) }
+                if record.defaultTab == tab.id { record.defaultTab = remaining[0].id }
+                do { try self.commitSpaceRecord(record, for: space) }
+                catch { replacement?.close(); fputs("Persistence error: \(error)\n", stderr); return }
+                space.tabs = remaining; tab.close(); self.bind(space)
                 self.changed?()
             }
             tab.networkCheck = { [weak space] in
@@ -788,9 +790,25 @@ final class BrowserModel {
     }
 
     func save(_ space: Space) throws {
-        if !space.suspended { space.record.tabs = space.tabs.map { TabRecord(id: $0.id, url: $0.persistedURL) } }
-        if let index = records.firstIndex(where: { $0.id == space.record.id }) { records[index] = space.record }
-        try persist()
+        var record = space.record
+        if !space.suspended { record.tabs = space.tabs.map { TabRecord(id: $0.id, url: $0.persistedURL) } }
+        try commitSpaceRecord(record, for: space)
+    }
+
+    private func commitSpaceRecord(_ record: SpaceRecord, for space: Space) throws {
+        var candidate = records
+        if let index = candidate.firstIndex(where: { $0.id == record.id }) { candidate[index] = record }
+        try commitRecords(candidate)
+        space.record = record
+    }
+
+    func saveAll() throws {
+        var errors: [String] = []
+        for space in spaces {
+            do { try save(space) }
+            catch { errors.append("\(space.record.name): \(error.localizedDescription)") }
+        }
+        if !errors.isEmpty { throw BrowserError("persistence_failed", errors.joined(separator: "\n")) }
     }
 
     private func resume(_ space: Space) throws {
@@ -920,7 +938,7 @@ final class BrowserModel {
         }
         if command == "shutdown" {
             guard !spaces.contains(where: \.busy) else { throw BrowserError("space_busy", "仍有操作执行中") }
-            for space in spaces { try save(space) }
+            try saveAll()
             let impact = shutdownImpact
             shuttingDown = true
             finishDialogsForExit()
@@ -1073,6 +1091,26 @@ final class BrowserModel {
         }
         if command == "open" { _ = try validateURL(arg(0)) }
         if command == "tab.new" { _ = try validateURL(r.args.first ?? "about:blank") }
+        if command == "tab.default" || command == "tab.close" {
+            let tabID = try arg(0)
+            var record = space.record
+            if !space.suspended { record.tabs = space.tabs.map { TabRecord(id: $0.id, url: $0.persistedURL) } }
+            let index = record.tabs.firstIndex { $0.id.uuidString.lowercased() == tabID.lowercased() }!
+            let id = record.tabs[index].id
+            if command == "tab.default" {
+                record.defaultTab = id
+            } else {
+                record.tabs.remove(at: index)
+                if record.defaultTab == id { record.defaultTab = record.tabs[0].id }
+            }
+            try commitSpaceRecord(record, for: space)
+            if command == "tab.close", let tab = space.tabs.first(where: { $0.id == id }) {
+                space.tabs.removeAll { $0 === tab }; tab.close()
+            }
+            changed?()
+            if command == "tab.default" { return ["defaultTabId": record.defaultTab.uuidString] }
+            return ["closed": tabID, "defaultTabId": record.defaultTab.uuidString]
+        }
         let wasSuspended = space.suspended
         try resume(space)
         guard let store = space.store else { throw BrowserError("space_suspended", "Space 尚未恢复") }
@@ -1081,24 +1119,17 @@ final class BrowserModel {
             let tab = Tab(record: TabRecord(id: UUID(), url: "about:blank"), store: store, tls: space.record.tls)
             tab.operationTiming = timing; tab.deadline = monotonicNow() + UInt64(timeout) * 1_000_000
             defer { tab.operationTiming = nil; tab.deadline = nil }
-            space.tabs.append(tab); bind(space); try save(space); changed?()
-            tab.load(url); try await tab.wait(selector: nil, timeout: timeout); try save(space)
+            space.tabs.append(tab); bind(space)
+            do { try save(space) }
+            catch { space.tabs.removeAll { $0 === tab }; tab.close(); throw error }
+            changed?()
+            do {
+                tab.load(url); try await tab.wait(selector: nil, timeout: timeout); try save(space)
+            } catch {
+                throw BrowserError((error as? BrowserError)?.code ?? "operation_failed",
+                    "标签页已创建（\(tab.id.uuidString)），但导航或保存未完成：\(error.localizedDescription)；请查询该 Tab 状态后再继续，避免重复创建")
+            }
             return tab.state
-        }
-        if command == "tab.default" {
-            let tabID = try arg(0)
-            guard let tab = space.tabs.first(where: { $0.id.uuidString.lowercased() == tabID.lowercased() }) else { throw BrowserError("tab_not_found", "标签页不存在") }
-            space.record.defaultTab = tab.id
-            try save(space); changed?()
-            return ["defaultTabId": tab.id.uuidString]
-        }
-        if command == "tab.close" {
-            let tabID = try arg(0)
-            guard let index = space.tabs.firstIndex(where: { $0.id.uuidString.lowercased() == tabID.lowercased() }) else { throw BrowserError("tab_not_found", "标签页不存在") }
-            guard space.tabs.count > 1 else { throw BrowserError("last_tab", "不能关闭最后一个标签页；可删除 Space") }
-            let tab = space.tabs.remove(at: index); tab.close()
-            if space.record.defaultTab == tab.id { space.record.defaultTab = space.tabs[0].id }
-            try save(space); changed?(); return ["closed": tabID, "defaultTabId": space.record.defaultTab.uuidString]
         }
         let tabID = r.options["tab"] ?? space.record.defaultTab.uuidString
         guard var tab = space.tabs.first(where: { $0.id.uuidString.lowercased() == tabID.lowercased() }) else { throw BrowserError("tab_not_found", "Space 中不存在该标签页") }

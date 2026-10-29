@@ -118,7 +118,7 @@ def main():
             print(json.dumps(report))
             return
         if args.lifecycle_only:
-            checks.append(verify_lifecycle(cli, base, out, lambda: (stop(), start()), state, interrupt_restart))
+            checks.append(verify_lifecycle(cli, base, out, lambda: (stop(), start()), state, interrupt_restart, site_events))
             report = dict(ok=True, checks=checks, artifacts=str(out))
             (out / 'report.json').write_text(json.dumps(report, indent=2))
             print(json.dumps(report))
@@ -144,7 +144,7 @@ def main():
             (out / 'report.json').write_text(json.dumps(report, indent=2))
             print(json.dumps(report))
             return
-        checks.append(verify_lifecycle(cli, base, out, lambda: (stop(), start()), state, interrupt_restart))
+        checks.append(verify_lifecycle(cli, base, out, lambda: (stop(), start()), state, interrupt_restart, site_events))
         checks.append(verify_downloads(cli, base, out, lambda: (stop(), start()), state))
         checks.append(verify_uploads(cli, base, out, site_events, site.fixture_nonce))
         checks.append(verify_screenshots(cli, base, out, lambda: (stop(), start())))

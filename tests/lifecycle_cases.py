@@ -4,7 +4,7 @@ import json
 import time
 
 
-def verify_lifecycle(cli, base, out, restart, state, interrupt_restart):
+def verify_lifecycle(cli, base, out, restart, state, interrupt_restart, site_events=None):
     name, peer = 'sleep-work', 'sleep-peer'
     work = cli('space', 'create', name, '--proxy', 'direct', '--ignore-certificate-errors')
     cli('space', 'create', peer, '--proxy', 'direct')
@@ -17,6 +17,46 @@ def verify_lifecycle(cli, base, out, restart, state, interrupt_restart):
     try:
         cli('open', base + '?sleep=default', '--space', name)
         cli('open', base, '--space', peer)
+        if site_events:
+            previous = {tab['tabId'] for tab in cli('tab', 'list', '--space', name)}
+            with ThreadPoolExecutor(1) as pool:
+                pending_tab = pool.submit(cli, 'tab', 'new', base + '?delay=.6&transaction=late-save', '--space', name, error='operation_failed')
+                for _ in range(200):
+                    if cli('space', 'info', name)['busy']:
+                        break
+                    time.sleep(.01)
+                else:
+                    raise AssertionError('No delayed Tab operation')
+                time.sleep(.15)
+                assert not pending_tab.done(), 'Navigation completed before failure injection'
+                permissions = state.stat().st_mode & 0o777
+                try:
+                    state.chmod(0o500)
+                    response = pending_tab.result()
+                finally:
+                    state.chmod(permissions)
+            created = next(tab['tabId'] for tab in cli('tab', 'list', '--space', name) if tab['tabId'] not in previous)
+            assert created in response['error']['message'], response
+            cli('tab', 'close', created, '--space', name)
+        stable = cli('space', 'info', name)
+        command('evaluate', 'window.transactionProbe="kept";true')
+        permissions = state.stat().st_mode & 0o777
+        try:
+            state.chmod(0o500)
+            cli('tab', 'new', '--space', name, error='operation_failed')
+            cli('tab', 'default', target, '--space', name, error='operation_failed')
+            cli('tab', 'close', target, '--space', name, error='operation_failed')
+        finally:
+            state.chmod(permissions)
+        current = cli('space', 'info', name)
+        for key in ('defaultTabId', 'tabs', 'liveWebViews'):
+            assert current[key] == stable[key], (key, stable, current)
+        assert command('evaluate', 'window.transactionProbe')['value'] == 'kept'
+        cli('tab', 'new', '--space', peer)
+        registry = json.loads((state / 'spaces.json').read_text())
+        record = next(record for record in registry if record['id'] == work['id'])
+        assert record['defaultTab'] == stable['defaultTabId']
+        assert [tab['id'] for tab in record['tabs']] == [tab['tabId'] for tab in stable['tabs']]
         command('evaluate', 'document.cookie="sleep=kept; Max-Age=3600; Path=/";localStorage.sleep="kept";window.memoryOnly=42;true')
         assert command('evaluate', 'document.cookie')['value'] == 'sleep=kept'
         ref = command('snapshot')['value']['elements'][0]['ref']
@@ -67,8 +107,19 @@ def verify_lifecycle(cli, base, out, restart, state, interrupt_restart):
         cli('tab', 'new', 'invalid-url', '--space', name, error='invalid_url')
         assert cli('space', 'info', name)['liveWebViews'] == 0
         assert cli('status')['liveWebViews'] == before['liveWebViews'] - 2
-        assert cli('status')['frontmostPid'] == before['frontmostPid']
         cli('space', 'suspend', peer)
+        peer_extra = cli('tab', 'list', '--space', peer)[1]['tabId']
+        requests = len(site_events.items) if site_events else None
+        cli('tab', 'default', target, '--space', name)
+        cli('tab', 'default', original['defaultTabId'], '--space', name)
+        cli('tab', 'default', peer_extra, '--space', peer)
+        cli('tab', 'close', peer_extra, '--space', peer)
+        assert cli('space', 'info', name)['liveWebViews'] == 0
+        assert cli('space', 'info', peer)['liveWebViews'] == 0
+        time.sleep(.15)
+        if site_events:
+            assert len(site_events.items) == requests
+        assert cli('status')['frontmostPid'] == before['frontmostPid']
         assert cli('status')['liveWebViews'] == 0
         started = time.monotonic()
         restart()
@@ -110,7 +161,8 @@ def verify_lifecycle(cli, base, out, restart, state, interrupt_restart):
         assert cli('status')['frontmostPid'] == before['frontmostPid']
         report = dict(lifecycle=True, suspendedWebViews=0, releasedWebViews=2,
                       restartWithSuspendedSpaceMs=restart_ms, persistentOutcome=outcome,
-                      busyAndSaveFailure=True, dialogAndHungRecovery=True, interruptedRestart=True, deletionVerified=True)
+                      busyAndSaveFailure=True, tabTransactions=True, sleepingMetadataKeepsZeroViews=True,
+                      dialogAndHungRecovery=True, interruptedRestart=True, deletionVerified=True)
         (out / 'lifecycle.json').write_text(json.dumps(report, indent=2))
         return report
     finally:

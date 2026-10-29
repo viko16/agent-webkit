@@ -72,8 +72,19 @@ final class Application: NSObject, NSApplicationDelegate {
         observer?.window.makeKeyAndOrderFront(nil); return true
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        do { for space in model?.spaces ?? [] { try model?.save(space) } }
-        catch { fputs("Failed to save: \(error)\n", stderr) }
+        if model?.shuttingDown == true { return .terminateNow }
+        do { try model?.saveAll() }
+        catch {
+            fputs("Failed to save: \(error)\n", stderr)
+            if let window = observer?.window, window.attachedSheet == nil {
+                let alert = NSAlert()
+                alert.messageText = "无法保存，已取消退出"
+                alert.informativeText = "\(error.localizedDescription)\n请解决存储问题后重试退出。"
+                alert.addButton(withTitle: "继续使用")
+                alert.beginSheetModal(for: window)
+            }
+            return .terminateCancel
+        }
         return .terminateNow
     }
 }
