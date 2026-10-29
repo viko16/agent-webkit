@@ -108,7 +108,7 @@ def main():
         cli('open', 'https://example.com', '--space', 'work', '--proxy', 'direct', error='invalid_arguments')
         start()
         if args.resources_only:
-            checks.append(verify_capacity(cli, base, out, start, stop))
+            checks.append(verify_capacity(cli, base, out, start, stop, state))
             checks.append(verify_snapshot_budget(cli, base, out))
             report = dict(ok=True, checks=checks, artifacts=str(out))
             return
@@ -152,7 +152,7 @@ def main():
             return
         checks.append(verify_state_integrity(cli, base, out, start, stop, state))
         checks.append(verify_proxy_summary(cli, start, stop, out, base))
-        checks.append(verify_capacity(cli, base, out, start, stop))
+        checks.append(verify_capacity(cli, base, out, start, stop, state))
         checks.append(verify_snapshot_budget(cli, base, out))
         checks.append(verify_lifecycle(cli, base, out, lambda: (stop(), start()), state, interrupt_restart, site_events))
         checks.append(verify_downloads(cli, base, out, lambda: (stop(), start()), state))

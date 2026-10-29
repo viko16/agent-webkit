@@ -1,9 +1,10 @@
 """Real creation, popup and suspended-restoration capacity boundaries."""
 import json
+import os
 from urllib.parse import urljoin
 
 
-def verify_capacity(cli, base, out, start, stop):
+def verify_capacity(cli, base, out, start, stop, state):
     names = ('capacity-work', 'capacity-peer', 'capacity-sleep')
     environment = dict(BROWSER_MAX_SPACES='3', BROWSER_MAX_TABS_PER_SPACE='3',
                        BROWSER_MAX_TOTAL_TABS='6', BROWSER_MAX_LIVE_WEBVIEWS='4',
@@ -59,5 +60,54 @@ def verify_capacity(cli, base, out, start, stop):
             if space['name'] in names:
                 cli('space', 'delete', space['id'])
         stop(); start()
+    report['loweredPopupQuota'] = verify_lowered_popup_quota(cli, base, start, stop, state)
     (out / 'capacity.json').write_text(json.dumps(report, indent=2))
     return report
+
+
+def verify_lowered_popup_quota(cli, base, start, stop, state):
+    name = 'popup-restore-quota'
+    stop(); start(extra_env={'BROWSER_MAX_POPUPS_PER_SPACE': '2'})
+    try:
+        space = cli('space', 'create', name, '--proxy', 'direct')
+        cli('open', urljoin(base, '/popups'), '--space', name)
+        popups = []
+        for _ in range(2):
+            popup = cli('click', '#blank', '--wait-for-popup', '--space', name)['value']['newTabId']
+            cli('wait', '--space', name, '--tab', popup)
+            popups.append(popup)
+        tab_ids = [tab['tabId'] for tab in cli('tab', 'list', '--space', name)]
+        cli('space', 'suspend', name)
+        stop(); start(extra_env={'BROWSER_MAX_POPUPS_PER_SPACE': '1'})
+        cli('space', 'resume', name, error='resource_limit')
+        cli('snapshot', '--space', name, error='resource_limit')
+        assert cli('space', 'info', name)['liveWebViews'] == 0
+        assert [tab['tabId'] for tab in cli('tab', 'list', '--space', name)] == tab_ids
+        stop()
+        # Only this run's own registry: request active restoration under the lower limit.
+        registry = state / 'spaces.json'
+        records = json.loads(registry.read_text())
+        next(record for record in records if record['id'] == space['id'])['suspended'] = False
+        temporary = state / 'popup-quota.tmp'
+        temporary.write_text(json.dumps(records)); os.replace(temporary, registry)
+        start(extra_env={'BROWSER_MAX_POPUPS_PER_SPACE': '1'})
+        blocked = cli('space', 'info', name)
+        assert blocked['lifecycle'] == 'suspended' and blocked['liveWebViews'] == 0 and blocked['resourceBlockedReason'], blocked
+        assert [tab['tabId'] for tab in blocked['tabs']] == tab_ids
+        cli('space', 'resume', name, error='resource_limit')
+        cli('tab', 'close', popups[-1], '--space', name)
+        cli('space', 'resume', name)
+        cli('wait', '--space', name)
+        cli('wait', '--space', name, '--tab', popups[0])
+        cli('click', '#blank', '--wait-for-popup', '--timeout', '500', '--space', name, error='resource_limit')
+        stop(); start(extra_env={'BROWSER_MAX_POPUPS_PER_SPACE': '1'})
+        restored = cli('space', 'info', name)
+        assert restored['lifecycle'] == 'active' and restored['liveWebViews'] == 2, restored
+        assert [tab['tabId'] for tab in restored['tabs']] == [space['defaultTabId'], popups[0]]
+    finally:
+        for item in cli('space', 'list'):
+            if item['name'] == name:
+                cli('space', 'delete', item['id'])
+        stop(); start()
+    return dict(passed=True, loweredLimitBlocksResume=True, loweredLimitBlocksStartup=True,
+                metadataPreserved=True, closeExtraPopupAllowsResume=True, exactLimitRestores=True)

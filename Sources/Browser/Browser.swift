@@ -14,6 +14,7 @@ struct SpaceRecord: Codable {
     var deleting: Bool = false
     var tls: TLSConfiguration?
     var suspended: Bool?
+    var popupCount: Int { tabs.filter { $0.openerTabID != nil }.count }
 }
 
 struct BrowserLimits {
@@ -772,10 +773,11 @@ final class BrowserModel {
         if FileManager.default.fileExists(atPath: file.path) { records = try JSONDecoder().decode([SpaceRecord].self, from: Data(contentsOf: file)) }
         for var record in records where !record.deleting {
             let exceedsCapacity = record.suspended != true &&
-                (record.tabs.count > limits.tabsPerSpace || spaces.reduce(0) { $0 + $1.tabs.count } + record.tabs.count > limits.liveWebViews)
+                (record.tabs.count > limits.tabsPerSpace || record.popupCount > limits.popupsPerSpace ||
+                 spaces.reduce(0) { $0 + $1.tabs.count } + record.tabs.count > limits.liveWebViews)
             if exceedsCapacity { record.suspended = true }
             let space = try Space(record, restoring: true)
-            if exceedsCapacity { space.resourceBlockedReason = "恢复所需 WebView 超出容量；已保留为休眠 Space，可关闭多余 Tab 或释放容量后 resume" }
+            if exceedsCapacity { space.resourceBlockedReason = "恢复所需页面或弹窗超出容量；已保留为休眠 Space，可关闭多余 Tab 或释放容量后 resume" }
             spaces.append(space)
         }
         for space in spaces { bind(space) }
@@ -910,7 +912,7 @@ final class BrowserModel {
         else if let space, space.record.tabs.count + addingTabs > limits.tabsPerSpace { reason = "每个 Space 的 Tab 上限 \(limits.tabsPerSpace)" }
         else if records.filter({ !$0.deleting }).reduce(0, { $0 + $1.tabs.count }) + addingTabs > limits.totalTabs { reason = "总 Tab 上限 \(limits.totalTabs)" }
         else if spaces.reduce(0, { $0 + $1.tabs.count }) + addingViews > limits.liveWebViews { reason = "活跃 WebView 上限 \(limits.liveWebViews)" }
-        else if popup, let space, space.tabs.filter({ $0.openerTabID != nil }).count >= limits.popupsPerSpace { reason = "网页弹窗上限 \(limits.popupsPerSpace)" }
+        else if let space, space.record.popupCount + (popup ? 1 : 0) > limits.popupsPerSpace { reason = "网页弹窗上限 \(limits.popupsPerSpace)" }
         else { reason = nil }
         if let reason { throw BrowserError("resource_limit", "已达到\(reason)；请显式关闭或休眠不再使用的页面") }
     }
@@ -987,7 +989,7 @@ final class BrowserModel {
     private var shutdownImpact: [String: Any] {
         ["spaces": spaces.map { space in
             ["spaceId": space.record.id.uuidString, "name": space.record.name,
-             "tabIds": space.suspended ? space.record.tabs.map { $0.id.uuidString } : space.tabs.map { $0.id.uuidString }] as [String: Any]
+             "tabIds": space.record.tabs.map { $0.id.uuidString }] as [String: Any]
         }, "websiteDataPreserved": true, "pageMemoryPreserved": false]
     }
 

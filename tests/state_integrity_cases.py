@@ -84,6 +84,7 @@ def verify_state_integrity(cli, base, out, start, stop, state):
         cli('open', base + '?configuration=healthy', '--space', names[1])
         cli('open', base + '?configuration=bad', '--space', names[2])
         cli('tab', 'new', base + '?configuration=bad-extra', '--space', names[2])
+        cli('tab', 'new', base + '?configuration=bad-third', '--space', names[2])
         cli('open', base + '?configuration=suspended', '--space', names[3])
         cli('space', 'suspend', names[3])
         expected_tabs = {name: [(tab['tabId'], tab['url']) for tab in cli('tab', 'list', '--space', name)]
@@ -107,6 +108,8 @@ def verify_state_integrity(cli, base, out, start, stop, state):
             assert info['liveWebViews'] == 0 and info['proxy'] == invalid_proxy, info
             tabs = cli('tab', 'list', '--space', name)
             assert [(tab['tabId'], tab['url']) for tab in tabs] == expected_tabs[name], tabs
+            impact = next(space for space in cli('status')['shutdownImpact']['spaces'] if space['spaceId'] == info['id'])
+            assert impact['tabIds'] == [tab_id for tab_id, _ in expected_tabs[name]], impact
             cli('snapshot', '--space', name, error='invalid_proxy')
             cli('open', base, '--space', name, error='invalid_proxy')
             cli('space', 'resume', name, error='invalid_proxy')
@@ -117,7 +120,7 @@ def verify_state_integrity(cli, base, out, start, stop, state):
                       cancelledRestoreTokenCannotAliasNewNavigation=True,
                       restoreURLSurvivesFailureAndRestart=True, pageErrorsRemainJavascriptErrors=True,
                       genuineStaleReferenceRejected=True, invalidActiveAndSuspendedConfigurationIsolated=True,
-                      invalidConfigurationPreservesTabs=True, noProxyFallback=True)
+                      invalidConfigurationPreservesTabs=True, invalidConfigurationShutdownImpactComplete=True, noProxyFallback=True)
     finally:
         original_failure = sys.exc_info()[0] is not None
         cleanup_errors = []
