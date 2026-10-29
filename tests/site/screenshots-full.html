@@ -1,0 +1,20 @@
+<!doctype html><meta charset="utf-8"><title>Full-page boundaries</title>
+<style>html,body{margin:0}section{height:700px}#red{background:red}#green{background:lime}#blue{background:blue}#yellow{height:250px;background:yellow}#fixed{position:fixed;top:0;left:0;right:0;height:30px;background:magenta;display:none}#nested{position:absolute;left:0;top:900px;width:150px;height:90px;overflow:auto;background:cyan}#nested div{height:500px}#virtual{position:absolute;top:0;left:0;width:100%;height:2350px;pointer-events:none}</style>
+<section id="red"></section><section id="green"></section><section id="blue"></section><section id="yellow"></section>
+<div id="nested"><div></div></div><div id="fixed"></div><div id="virtual"></div>
+<script>
+const colors=['red','lime','blue','yellow'];
+function renderVirtual(){
+ if(!window.virtualized)return;
+ const root=document.querySelector('#virtual');root.replaceChildren();
+ for(let i=Math.floor(scrollY/700);i<=Math.min(3,Math.floor((scrollY+innerHeight-1)/700));i++){
+  const item=document.createElement('div');item.style.cssText=`position:absolute;top:${i*700}px;height:${Math.min(700,2350-i*700)}px;width:100%;background:${colors[i]}`;root.append(item);
+ }
+}
+window.enableVirtual=()=>{window.virtualized=true;for(const s of document.querySelectorAll('section'))s.style.background='white';renderVirtual()};
+addEventListener('scroll',()=>{
+ if(window.growPage&&scrollY>=1300){window.growPage=false;document.querySelector('#yellow').style.height='450px'}
+ if(window.lazyColors&&scrollY>500)document.querySelector('#green').style.background='rgb(128,0,128)';
+ renderVirtual();
+});
+</script>

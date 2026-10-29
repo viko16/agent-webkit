@@ -33,7 +33,7 @@ struct Request: Codable {
         if command == "click" { allowed.formUnion(["wait-for-navigation", "wait-for-popup"]) }
         if command == "evaluate" { allowed.insert("await") }
         if command == "wait" { allowed.formUnion(["url", "text", "state"]) }
-        if command == "screenshot" { allowed.formUnion(["out", "element"]) }
+        if command == "screenshot" { allowed.formUnion(["out", "element", "full-page"]) }
         if command == "shutdown" { allowed.insert("all") }
         if command == "download.wait" { allowed.insert("timeout") }
         if command == "upload" { allowed.insert("timeout") }
@@ -47,6 +47,7 @@ struct Request: Codable {
             throw BrowserError("invalid_arguments", "未知命令或参数数量不正确：\(command)；browser help 查看用法")
         }
         let allowed = Self.allowedOptions(for: command)
+        if options["element"] != nil && options["full-page"] != nil { throw BrowserError("invalid_arguments", "--element 与 --full-page 互斥") }
         if command == "shutdown", options["all"] != "true" {
             throw BrowserError("invalid_arguments", "shutdown 会退出全部 Space；先用 status 查看 shutdownImpact，确认全局退出意图后使用 shutdown --all")
         }
@@ -80,7 +81,7 @@ struct Request: Codable {
         if let key = options.keys.sorted().first(where: { !allowed.contains($0) }) {
             throw BrowserError("invalid_arguments", "\(command) 不支持 --\(key)")
         }
-        for key in ["await", "wait-for-navigation", "wait-for-popup", "ignore-certificate-errors", "clear", "all"] {
+        for key in ["await", "wait-for-navigation", "wait-for-popup", "ignore-certificate-errors", "clear", "all", "full-page"] {
             if let value = options[key], value != "true" { throw BrowserError("invalid_arguments", "--\(key) 是无值开关") }
         }
     }
@@ -124,7 +125,7 @@ struct Options {
             }
             if arg.hasPrefix("--"), !literal {
                 let key = String(arg.dropFirst(2))
-                if ["ignore-certificate-errors", "wait-for-navigation", "wait-for-popup", "await", "clear", "all"].contains(key), options[key] == nil {
+                if ["ignore-certificate-errors", "wait-for-navigation", "wait-for-popup", "await", "clear", "all", "full-page"].contains(key), options[key] == nil {
                     options[key] = "true"; i += 1; continue
                 }
                 guard allowed.contains(key), i + 1 < arguments.count, options[key] == nil else {
@@ -172,7 +173,7 @@ browser upload SELECTOR_OR_REF FILE_PATH [FILE_PATH ...] --space NAME_OR_ID [--t
 browser click SELECTOR_OR_REF --space NAME_OR_ID [--tab ID] [--wait-for-navigation | --wait-for-popup] [--timeout 15000]
 browser fill SELECTOR_OR_REF VALUE --space NAME_OR_ID [--tab ID]
 browser evaluate JAVASCRIPT --space NAME_OR_ID [--tab ID] [--await] [--timeout 15000]
-browser screenshot --space NAME_OR_ID [--tab ID] --out PATH [--element SELECTOR_OR_REF]
+browser screenshot --space NAME_OR_ID [--tab ID] --out PATH [--element SELECTOR_OR_REF | --full-page]
 browser wait [SELECTOR_OR_REF] --space NAME_OR_ID [--tab ID] [--timeout 15000]
 browser wait --url EXACT_URL --space NAME_OR_ID
 browser wait [SELECTOR_OR_REF] --text TEXT --space NAME_OR_ID

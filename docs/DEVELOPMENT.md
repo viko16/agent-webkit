@@ -371,6 +371,16 @@ Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 
 
 `python3 tests/reliability.py --screenshots-only` 通过真实 PNG 像素检查定位和裁剪，而非只检查截图尺寸；也覆盖错误、滚动还原、目标隔离和重启。无 --element 的既有视口路径保留，普通截图不会激活观察窗口。
 
+## 整页截图
+
+`screenshot --full-page --space NAME --tab ID --out PATH` 与 --element 互斥。单次超视口 rect 实验在本机生成了尺寸正确但首屏后纯白的图，SDK 也要求 rect 位于 view bounds 内；因此正式路径只使用视口内的公开快照，按垂直分块拼接，不改变 WebView 尺寸或页面 CSS。输出 `mode: full-page`、document-css 的 range、tiles、PNG 像素尺寸、scrollRestored、`captureConsistency: best-effort` 和 limitations。
+
+最多16000 CSS px高、预计及实际均不超过3200万像素，复用整条命令期限；不支持横向溢出。尺寸/视口改变、文档替换、滚动被吸附或脚本阻止时明确失败，不输出部分图。成功和可恢复错误后还原主文档滚动；原嵌套滚动容器不展开。窗口隐藏或不在前台也不激活。
+
+固定/sticky 内容可能在分块间重复，不修改其样式来隐藏。滚动可能触发懒加载或虚拟化；只截取当时实际渲染的内容，不等待任意资源或业务完成。布局尺寸变化会拒绝，尺寸稳定的动画、文字和像素变化不能保证跨分块原子一致。快照不是所有逻辑列表项或嵌套内容的完整导出。
+
+`tests/full_page_probe.swift` 是独立 nonPersistent、禁止激活的单次 rect 实验，不链接到产品。`python3 tests/reliability.py --screenshots-only` 同时验证元素及整页静态首中尾像素/最后部分块、真实固定内容重复、懒绘制、简化虚拟化、嵌套滚动保持、布局增长拒绝、大小/横向/期限错误和重启。
+
 ## DOM bridge 隔离
 
 `snapshot/click/fill/wait` 的脚本注入与调用统一使用命名 `WKContentWorld`（`AgentWebKit.DOM`），不注册跨 world 消息处理器。`evaluate` 和 `evaluate --await` 明确留在 `.page`，可读取网页全局变量；等待 readyState 也在隔离 world 执行。

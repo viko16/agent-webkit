@@ -22,7 +22,7 @@ from dialog_cases import verify_dialogs
 from lifecycle_cases import verify_lifecycle
 from download_cases import verify_downloads
 from upload_cases import verify_uploads
-from screenshot_cases import verify_screenshots
+from screenshot_cases import verify_screenshots, verify_fullpage
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -100,6 +100,7 @@ def main():
         start()
         if args.screenshots_only:
             checks.append(verify_screenshots(cli, base, out, lambda: (stop(), start())))
+            checks.append(verify_fullpage(cli, base, out, lambda: (stop(), start())))
             report = dict(ok=True, checks=checks, artifacts=str(out))
             (out / 'report.json').write_text(json.dumps(report, indent=2))
             print(json.dumps(report))
@@ -145,6 +146,7 @@ def main():
         checks.append(verify_downloads(cli, base, out, lambda: (stop(), start()), state))
         checks.append(verify_uploads(cli, base, out, site_events, site.fixture_nonce))
         checks.append(verify_screenshots(cli, base, out, lambda: (stop(), start())))
+        checks.append(verify_fullpage(cli, base, out, lambda: (stop(), start())))
         work = cli('space', 'create', 'work', '--proxy', 'direct')
         cli('space', 'create', 'other', '--proxy', 'direct')
         cli('open', base, '--space', 'work')

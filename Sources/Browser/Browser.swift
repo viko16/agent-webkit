@@ -323,10 +323,78 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         throw BrowserError("timeout", "等待页面条件超时（\(timeout) ms）")
     }
 
-    func screenshot(path: String, element: String? = nil) async throws -> [String: Any] {
+    private func snapshotBitmap(rect: CGRect) async throws -> NSBitmapImageRep {
+        guard webView.bounds.contains(rect), !rect.isEmpty else { throw BrowserError("unsupported_screenshot_geometry", "截图范围超出 WebView 视口") }
         let configuration = WKSnapshotConfiguration()
-        configuration.rect = webView.bounds
+        configuration.rect = rect
+        let image: NSImage = try await perform("takeSnapshot") { complete in
+            webView.takeSnapshot(with: configuration) { image, error in
+                if let error { complete(.failure(error)) }
+                else if let image { complete(.success(image)) }
+                else { complete(.failure(BrowserError("snapshot_failed", "WebKit 未返回图像"))) }
+            }
+        }
+        guard let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
+              bitmap.pixelsWide > 0, bitmap.pixelsHigh > 0 else { throw BrowserError("png_failed", "无法读取截图像素") }
+        return bitmap
+    }
+
+    private func fullPageBitmap(token: String) async throws -> (bitmap: NSBitmapImageRep, range: [String: Any], tiles: Int) {
+        let literal = try quoteJS(token)
+        guard let info = try await runJS("window.__agentWebKit.pageScreenshotBounds(\(literal))", world: DOM.world) as? [String: Double],
+              let width = info["width"], let height = info["height"], let viewportWidth = info["viewportWidth"], let viewportHeight = info["viewportHeight"],
+              [width,height,viewportWidth,viewportHeight].allSatisfy({ $0.isFinite && $0 > 0 }) else { throw BrowserError("snapshot_failed", "无效整页范围") }
+        guard width <= viewportWidth else { throw BrowserError("unsupported_screenshot_geometry", "整页截图暂不支持横向溢出；请截取元素或视口") }
+        let scaleX = webView.bounds.width / viewportWidth, scaleY = webView.bounds.height / viewportHeight
+        let backing = webView.window?.backingScaleFactor ?? 2
+        guard height <= 16000, width * height * pow(max(scaleX, scaleY) * backing, 2) <= 32_000_000 else {
+            throw BrowserError("screenshot_too_large", "整页截图最多16000 CSS px高、预计3200万像素")
+        }
+        var canvas: CGContext?
+        var outputWidth = 0, outputHeight = 0, tiles = 0
+        var pixelScaleY = 0.0
+        for y in stride(from: 0.0, to: height, by: viewportHeight) {
+            _ = try await runJS("window.__agentWebKit.scrollScreenshot(\(literal),\(min(y, max(0, height - viewportHeight))))", world: DOM.world)
+            try await Task.sleep(nanoseconds: 50_000_000)
+            guard let state = try await runJS("window.__agentWebKit.pageScreenshotBounds(\(literal))", world: DOM.world) as? [String: Double],
+                  state["width"] == width, state["height"] == height, state["viewportWidth"] == viewportWidth, state["viewportHeight"] == viewportHeight,
+                  let actualY = state["y"], let actualX = state["x"], abs(actualX) < 1 else {
+                throw BrowserError("screenshot_changed", "分块期间页面尺寸、文档或视口改变；未写成功文件")
+            }
+            let tileHeight = min(viewportHeight, height - y), offset = y - actualY
+            guard offset >= 0, offset + tileHeight <= viewportHeight else {
+                throw BrowserError("unsupported_screenshot_geometry", "页面滚动吸附或脚本阻止了目标分块定位")
+            }
+            let tile = try await snapshotBitmap(rect: CGRect(x: 0, y: max(0, offset) * scaleY, width: width * scaleX, height: tileHeight * scaleY))
+            if canvas == nil {
+                outputWidth = tile.pixelsWide; pixelScaleY = Double(tile.pixelsHigh) / tileHeight
+                outputHeight = Int((height * pixelScaleY).rounded())
+                guard Double(outputWidth) * Double(outputHeight) <= 32_000_000, let space = CGColorSpace(name: CGColorSpace.sRGB),
+                      let context = CGContext(data: nil, width: outputWidth, height: outputHeight, bitsPerComponent: 8, bytesPerRow: 0,
+                                              space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+                    throw BrowserError("screenshot_too_large", "整页像素范围超限或无法分配画布")
+                }
+                canvas = context
+            }
+            guard tile.pixelsWide == outputWidth, abs(Double(tile.pixelsHigh) - tileHeight * pixelScaleY) <= 1,
+                  let image = tile.cgImage else { throw BrowserError("screenshot_changed", "分块像素比例改变") }
+            let start = Int((y * pixelScaleY).rounded()), end = Int(((y + tileHeight) * pixelScaleY).rounded())
+            canvas!.draw(image, in: CGRect(x: 0, y: outputHeight - end, width: outputWidth, height: end - start))
+            tiles += 1
+        }
+        guard let final = try await runJS("window.__agentWebKit.pageScreenshotBounds(\(literal))", world: DOM.world) as? [String: Double],
+              final["width"] == width, final["height"] == height,
+              final["viewportWidth"] == viewportWidth, final["viewportHeight"] == viewportHeight else {
+            throw BrowserError("screenshot_changed", "最后分块完成后页面范围改变；未写成功文件")
+        }
+        guard let image = canvas?.makeImage() else { throw BrowserError("snapshot_failed", "没有生成整页图像") }
+        return (NSBitmapImageRep(cgImage: image), ["x": 0, "y": 0, "width": width, "height": height, "coordinateSpace": "document-css"], tiles)
+    }
+
+    func screenshot(path: String, element: String? = nil, fullPage: Bool = false) async throws -> [String: Any] {
+        var rect = webView.bounds
         var token: String?
+        var tiles = 1
         var range: [String: Any] = ["x": 0, "y": 0, "width": webView.bounds.width, "height": webView.bounds.height, "coordinateSpace": "view-points"]
         func restore() async throws {
             guard let current = token else { return }
@@ -339,39 +407,43 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
             }
         }
         do {
-            if let element {
-                guard let current = try await runJS("window.__agentWebKit.prepareScreenshot(\(try quoteJS(element)))", world: DOM.world) as? String else {
-                    throw BrowserError("snapshot_failed", "无法准备元素截图")
+            var bitmap: NSBitmapImageRep
+            if fullPage {
+                guard let current = try await runJS("window.__agentWebKit.prepareScreenshot('html')", world: DOM.world) as? String else {
+                    throw BrowserError("snapshot_failed", "无法准备整页截图")
                 }
                 token = current
-                try await Task.sleep(nanoseconds: 50_000_000)
-                guard let bounds = try await runJS("window.__agentWebKit.screenshotBounds(\(try quoteJS(current)))", world: DOM.world) as? [String: Any],
-                      let x = bounds["x"] as? Double, let y = bounds["y"] as? Double,
-                      let width = bounds["width"] as? Double, let height = bounds["height"] as? Double,
-                      let viewportWidth = bounds["viewportWidth"] as? Double, let viewportHeight = bounds["viewportHeight"] as? Double,
-                      viewportWidth > 0, viewportHeight > 0 else { throw BrowserError("snapshot_failed", "无效元素截图范围") }
-                let scaleX = webView.bounds.width / viewportWidth, scaleY = webView.bounds.height / viewportHeight
-                configuration.rect = CGRect(x: x * scaleX, y: y * scaleY, width: width * scaleX, height: height * scaleY).intersection(webView.bounds)
-                guard !configuration.rect.isEmpty else { throw BrowserError("element_not_actionable", "元素完全位于可截图范围之外") }
-                range = ["x": x, "y": y, "width": width, "height": height, "coordinateSpace": "main-viewport-css", "clipped": bounds["clipped"] ?? false]
-            }
-            let image: NSImage = try await perform("takeSnapshot") { complete in
-                webView.takeSnapshot(with: configuration) { image, error in
-                    if let error { complete(.failure(error)) }
-                    else if let image { complete(.success(image)) }
-                    else { complete(.failure(BrowserError("snapshot_failed", "WebKit 未返回图像"))) }
+                let result = try await fullPageBitmap(token: current)
+                bitmap = result.bitmap; range = result.range; tiles = result.tiles
+            } else {
+                if let element {
+                    guard let current = try await runJS("window.__agentWebKit.prepareScreenshot(\(try quoteJS(element)))", world: DOM.world) as? String else {
+                        throw BrowserError("snapshot_failed", "无法准备元素截图")
+                    }
+                    token = current
+                    try await Task.sleep(nanoseconds: 50_000_000)
+                    guard let bounds = try await runJS("window.__agentWebKit.screenshotBounds(\(try quoteJS(current)))", world: DOM.world) as? [String: Any],
+                          let x = bounds["x"] as? Double, let y = bounds["y"] as? Double,
+                          let width = bounds["width"] as? Double, let height = bounds["height"] as? Double,
+                          let viewportWidth = bounds["viewportWidth"] as? Double, let viewportHeight = bounds["viewportHeight"] as? Double,
+                          viewportWidth > 0, viewportHeight > 0 else { throw BrowserError("snapshot_failed", "无效元素截图范围") }
+                    let scaleX = webView.bounds.width / viewportWidth, scaleY = webView.bounds.height / viewportHeight
+                    rect = CGRect(x: x * scaleX, y: y * scaleY, width: width * scaleX, height: height * scaleY).intersection(webView.bounds)
+                    guard !rect.isEmpty else { throw BrowserError("element_not_actionable", "元素完全位于可截图范围之外") }
+                    range = ["x": x, "y": y, "width": width, "height": height, "coordinateSpace": "main-viewport-css", "clipped": bounds["clipped"] ?? false]
                 }
+                bitmap = try await snapshotBitmap(rect: rect)
             }
-            guard let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
-                  bitmap.pixelsWide > 0, bitmap.pixelsHigh > 0,
-                  let data = bitmap.representation(using: .png, properties: [:]) else {
+            guard let data = bitmap.representation(using: .png, properties: [:]) else {
                 throw BrowserError("png_failed", "无法编码 PNG")
             }
             try await restore()
             let url = URL(fileURLWithPath: path)
             try data.write(to: url, options: .atomic)
             return ["path": url.path, "width": bitmap.pixelsWide, "height": bitmap.pixelsHigh, "requiresForeground": false,
-                    "mode": element == nil ? "viewport" : "element", "range": range, "scrollRestored": true]
+                    "mode": fullPage ? "full-page" : element == nil ? "viewport" : "element", "range": range, "scrollRestored": true,
+                    "tiles": tiles, "captureConsistency": fullPage ? "best-effort" : "single-snapshot",
+                    "limitations": fullPage ? ["Fixed/sticky content can repeat across tiles", "Lazy and virtualized content is captured only as rendered; dimensions must remain stable", "Nested scroll containers are not expanded; dynamic pixels are not atomic across tiles"] : []]
         } catch let originalError {
             do { try await restore() }
             catch { throw BrowserError((originalError as? BrowserError)?.code ?? "snapshot_failed", "\(originalError.localizedDescription)；滚动还原未完成：\(error.localizedDescription)") }
@@ -827,7 +899,7 @@ final class BrowserModel {
                     "pendingStoreCleanup": records.filter(\.deleting).count,
                     "blockedSpaces": spaces.filter { $0.networkError != nil }.map { $0.record.id.uuidString },
                     "systemProxy": systemProxyState(), "frontmostPid": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1,
-                    "capabilities": ["input":"dom-synthetic", "snapshot":"same-origin-frames-and-open-shadow-roots", "screenshot":"viewport", "screenshotModes":["viewport", "element"], "foregroundRequired":false],
+                    "capabilities": ["input":"dom-synthetic", "snapshot":"same-origin-frames-and-open-shadow-roots", "screenshot":"viewport", "screenshotModes":["viewport", "element", "full-page"], "foregroundRequired":false],
                     "directPolicy":"reject-enabled-system-proxy; no VPN/content-filter bypass guarantee"] as [String: Any]
         }
         if command == "shutdown" {
@@ -1049,7 +1121,7 @@ final class BrowserModel {
             try await tab.wait(selector: r.args.first, timeout: timeout, state: r.options["state"] ?? "visible", text: r.options["text"], url: r.options["url"])
         case "screenshot":
             guard let path = r.options["out"] else { throw BrowserError("invalid_arguments", "截图需要 --out PATH") }
-            value = try await tab.screenshot(path: path, element: r.options["element"])
+            value = try await tab.screenshot(path: path, element: r.options["element"], fullPage: r.options["full-page"] == "true")
         case "upload": value = try await tab.upload(target: arg(0), paths: Array(r.args.dropFirst()))
         default: throw BrowserError("unknown_command", "未知命令")
         }

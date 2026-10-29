@@ -1,5 +1,19 @@
 # 实际验收记录
 
+## P2 / #8：整页实验与有界分块（2026-10-29）
+
+先以独立 nonPersistent、禁止激活的 `tests/full_page_probe.swift` 实测单次超视口 rect。[原始结果](../.artifacts/issue8-full-page-probe-20261029/result.json)为2000×4200像素，但[图像](../.artifacts/issue8-full-page-probe-20261029/single.png)只有首屏红色，中/尾通道均为白色；文档本应为红/绿/蓝三屏。SDK明确rect应在view bounds内，没有把尺寸正确当作整页成功。
+
+正式 `--full-page` 采用视口内快照+有界CGContext垂直拼接，不放大WebView或修改CSS；最多16000 CSS px高、预计及实际3200万像素，原期限内执行，横向溢出/范围改变/不能定位/超限明确拒绝。复用滚动还原、PNG原子写入，返回document-css范围、tiles、像素尺寸和best-effort/limitations。
+
+[真实截图专项](../.artifacts/reliability-20261029-110921/report.json)验证元素旧能力、静态首中尾及最后部分块的准确像素、固定内容跨块重复、懒绘制和简化虚拟化、嵌套滚动保持、布局增长拒绝、大小/横向/期限/参数互斥、目标及重启。已目视检查[2350 CSS px整页](../.artifacts/reliability-20261029-110921/full-static.png)，PNG为2000×4700，色块位置和末块正确。固定/sticky可能重复、懒加载/虚拟列表仅记录各块当时渲染内容、不展开嵌套容器、动态像素不保证原子一致；未宣称适配任意站点。
+
+最终 Debug [完整可靠性/表单](../.artifacts/reliability-20261029-111146/report.json)通过，含新增两种截图与全部既有能力、六次框架提交及16项计时；32命令离线契约及11项守卫通过。以 `c6a018c` 为基准的独立 Standards / Spec 审查均0项发现。测试系统仍限本机版本；公网真实站点/GUI、真实OS代理开关、长稳不在本轮重跑范围。
+
+最终 [Release 完整代理/TLS/HMR](../.artifacts/issue8-final-full-20261029/report.json)通过：原代理参数、Direct冲突注入、弹窗、A/B/C/D、fetch/WSS、下载TLS、上传/历史POST、双代理休眠恢复及Vite HMR全部保留。Debug/Release构建签名通过，仍有既有CLT搜索目录警告。
+
+以已构建的Release应用执行的[最终截图窄复核](../.artifacts/reliability-20261029-111639/report.json)也通过，含全部元素/整页像素与边界用例。[清理核查](../.artifacts/issue8-final-full-20261029/cleanup-check.json)覆盖本次13轮成功/失败运行：注册表全部为空、Socket无服务；独立单次rect实验只使用nonPersistent Store，不访问用户默认网站数据。
+
 ## P2 / #8：元素截图（2026-10-29）
 
 `screenshot --element SELECTOR_OR_REF` 滚入视口，换算同源 iframe 坐标并裁剪到各层容器/视口，输出 mode/range 与 PNG 像素尺寸，还原各层滚动；普通视口路径保留。超出可见范围的元素只返回实际裁剪区，不展开嵌套滚动容器；变换或 zoom 影响 iframe/裁剪链时明确拒绝，不把不可靠范围当成功。

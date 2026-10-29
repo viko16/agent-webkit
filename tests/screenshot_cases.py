@@ -84,3 +84,60 @@ def verify_screenshots(cli, base, out, restart):
     finally:
         cli('space', 'delete', name)
         cli('space', 'delete', peer)
+
+
+def verify_fullpage(cli, base, out, restart):
+    name = 'full-screen'
+    work = cli('space', 'create', name, '--proxy', 'direct')
+    target = cli('tab', 'new', urljoin(base, '/screenshots-full'), '--space', name)['tabId']
+    flags = ('--space', name, '--tab', target)
+    def command(*args, **kwargs):
+        return cli(*args, *flags, **kwargs)
+    def capture(filename):
+        original = command('evaluate', '({y:scrollY,nested:document.querySelector("#nested").scrollTop})')['value']
+        path = out / filename
+        result = command('screenshot', '--full-page', '--out', str(path))['value']
+        assert result['mode'] == 'full-page' and result['tiles'] == 4 and result['scrollRestored']
+        assert result['range']['height'] == 2350 and result['range']['coordinateSpace'] == 'document-css'
+        assert result['captureConsistency'] == 'best-effort' and len(result['limitations']) == 3
+        assert command('evaluate', '({y:scrollY,nested:document.querySelector("#nested").scrollTop})')['value'] == original
+        return image_pixels(path, '0.5,0.1', '0.5,0.4', '0.5,0.75', '0.5,0.95')
+    expected = [[255,0,0,255],[0,255,0,255],[0,0,255,255],[255,255,0,255]]
+    try:
+        before = cli('status')
+        command('evaluate', 'scrollTo(0,123);document.querySelector("#nested").scrollTop=41;true')
+        pixels = capture('full-static.png')
+        assert pixels['samples'] == expected, pixels
+        command('evaluate', 'document.querySelector("#fixed").style.display="block";true')
+        capture('full-fixed.png')
+        repeated = image_pixels(out / 'full-fixed.png', '0.5,0.002', f'0.5,{705/2350}', f'0.5,{1405/2350}')
+        assert repeated['samples'] == [[255,0,255,255]] * 3, repeated
+        command('evaluate', 'document.querySelector("#fixed").style.display="none";window.lazyColors=true;true')
+        lazy = capture('full-lazy.png')
+        assert lazy['samples'][1] == [128,0,128,255], lazy
+        command('reload');command('evaluate', 'enableVirtual();true')
+        virtual = capture('full-virtual.png')
+        assert virtual['samples'] == expected, virtual
+        command('reload');command('evaluate', 'scrollTo(0,123);window.growPage=true;true')
+        command('screenshot', '--full-page', '--out', str(out / 'full-rejected.png'), error='screenshot_changed')
+        assert command('evaluate', 'scrollY')['value'] == 123
+        command('reload');command('evaluate', 'document.body.style.width="1500px";true')
+        command('screenshot', '--full-page', '--out', str(out / 'full-rejected.png'), error='unsupported_screenshot_geometry')
+        command('reload');command('evaluate', 'document.querySelector("#yellow").style.height="20000px";true')
+        command('screenshot', '--full-page', '--out', str(out / 'full-rejected.png'), error='screenshot_too_large')
+        command('reload')
+        command('screenshot', '--full-page', '--out', str(out / 'full-rejected.png'), '--timeout', '25', error='timeout')
+        command('screenshot', '--full-page', '--element', '#red', '--out', str(out / 'full-rejected.png'), error='invalid_arguments')
+        assert not (out / 'full-rejected.png').exists()
+        assert cli('space', 'info', name)['defaultTabId'] == work['defaultTabId']
+        assert cli('status')['frontmostPid'] == before['frontmostPid']
+        restart();command('wait')
+        capture('full-restarted.png')
+        report = dict(fullPage=True, method='viewport-tiles', staticPixels=True, lastPartialTile=True,
+                      fixedRepetitionVerified=True, lazyPaint=True, virtualizedFixture=True, nestedNotExpanded=True,
+                      dimensionChangeRejected=True, sizeLimit=True, horizontalOverflowRejected=True,
+                      timeout=True, scrollRestored=True, foregroundUnchanged=True)
+        (out / 'full-page.json').write_text(json.dumps(report, indent=2))
+        return report
+    finally:
+        cli('space', 'delete', name)

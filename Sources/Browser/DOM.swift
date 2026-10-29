@@ -212,7 +212,18 @@ enum DOM {
         return state.positions.every(e=>Math.abs(e.node.scrollLeft-e.left)<1&&Math.abs(e.node.scrollTop-e.top)<1)&&
           state.views.every(e=>Math.abs(e.view.scrollX-e.left)<1&&Math.abs(e.view.scrollY-e.top)<1);
       }
-      window.__agentWebKit={snapshot,resolve,act,visible,matchesCondition,prepareScreenshot,screenshotBounds,restoreScreenshot};
+      function pageScreenshotBounds(token) {
+        if(screenshotState?.token!==token||!connected(screenshotState.el)) throw new Error('stale_ref: screenshot document changed');
+        return {width:Math.max(document.documentElement.scrollWidth,document.body?.scrollWidth||0,innerWidth),
+          height:Math.max(document.documentElement.scrollHeight,document.body?.scrollHeight||0,innerHeight),
+          viewportWidth:innerWidth,viewportHeight:innerHeight,x:scrollX,y:scrollY};
+      }
+      function scrollScreenshot(token,y) {
+        pageScreenshotBounds(token);
+        window.scrollTo({left:0,top:y,behavior:'instant'});
+        return pageScreenshotBounds(token);
+      }
+      window.__agentWebKit={snapshot,resolve,act,visible,matchesCondition,prepareScreenshot,screenshotBounds,restoreScreenshot,pageScreenshotBounds,scrollScreenshot};
     })();
     """#
 }
