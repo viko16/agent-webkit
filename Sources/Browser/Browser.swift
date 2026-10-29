@@ -20,17 +20,24 @@ func systemProxyState() -> [String: Any] {
     (CFNetworkCopySystemProxySettings()?.takeRetainedValue() as? [String: Any]) ?? [:]
 }
 
-func requireDirectAvailable() throws {
-    let settings = systemProxyState()
+func activeSystemProxyTypes() -> [String] {
     let keys = ["HTTPEnable", "HTTPSEnable", "SOCKSEnable", "ProxyAutoConfigEnable", "ProxyAutoDiscoveryEnable"]
-    func enabled(_ dictionary: [String: Any]) -> [String] {
-        var active = keys.filter { (dictionary[$0] as? NSNumber)?.boolValue == true }
-        for (key, value) in dictionary {
-            if let nested = value as? [String: Any] { active += enabled(nested).map { "\(key).\($0)" } }
-        }
-        return active
+    var active = Set<String>()
+    func visit(_ settings: [String: Any]) {
+        for key in keys where (settings[key] as? NSNumber)?.boolValue == true { active.insert(key) }
+        for value in settings.values { if let nested = value as? [String: Any] { visit(nested) } }
     }
-    let active = enabled(settings)
+    visit(systemProxyState())
+    return active.sorted()
+}
+
+func systemProxySummary() -> [String: Any] {
+    let active = activeSystemProxyTypes()
+    return ["enabled": !active.isEmpty, "enabledTypes": active]
+}
+
+func requireDirectAvailable() throws {
+    let active = activeSystemProxyTypes()
     if !active.isEmpty {
         throw BrowserError("direct_system_proxy_conflict", "此 Direct Space 已暂停：系统代理已启用（\(active.joined(separator: ","))）。关闭系统代理后重新加载即可恢复；Cookie、Tab ID 和 URL 保留。公开 WebKit API 无强制直连开关")
     }
@@ -60,6 +67,8 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     var unresponsive = false
     private(set) var closed = false
     private(set) var persistedURL: String
+    private(set) var requestedURL: String?
+    private(set) var committedDocumentURL = "about:blank"
     var deadline: UInt64?
     private var observations: [NSKeyValueObservation] = []
     private var pending: [UUID: (Error) -> Void] = [:]
@@ -118,8 +127,21 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
                     guard let self, !self.webView.isLoading, !self.navigationPending,
                           self.navigationSequence == self.completedNavigationSequence,
                           let url = self.webView.url else { return }
-                    self.persistedURL = url.absoluteString
-                    self.changed?()
+                    if self.navigationError == nil {
+                        self.persistedURL = url.absoluteString
+                        self.committedDocumentURL = url.absoluteString
+                        self.changed?()
+                    } else {
+                        // A failed provisional request may leave url pointing at its target.
+                        // Read the surviving document before accepting a same-document update.
+                        let sequence = self.navigationSequence
+                        self.webView.evaluateJavaScript("location.href") { [weak self] value, _ in
+                            guard let self, !self.closed, !self.navigationPending,
+                                  self.navigationSequence == sequence, let actual = value as? String else { return }
+                            self.persistedURL = actual; self.committedDocumentURL = actual
+                            self.changed?()
+                        }
+                    }
                 }
             }
         ]
@@ -159,7 +181,8 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
 
     var state: [String: Any] {
-        ["tabId": id.uuidString, "url": persistedURL, "title": webView.title ?? "",
+        ["tabId": id.uuidString, "url": committedDocumentURL, "title": webView.title ?? "",
+         "requestedURL": requestedURL as Any? ?? NSNull(), "committedDocumentURL": committedDocumentURL, "restoreURL": persistedURL,
          "loading": webView.isLoading, "webContentTerminated": terminated, "suppressedDialogs": suppressedDialogs,
          "pendingDialogs": dialogs.pendingCount, "suspended": false,
          "activeDownloads": downloads.hasActive, "fileChooser": fileChooser.state,
@@ -209,27 +232,34 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
 
     func runJS(_ script: String, awaitPromise: Bool = false, world: WKContentWorld? = nil) async throws -> Any {
         let world = world ?? .page
+        let internalDOM = world == DOM.world
+        let source = internalDOM ? "(()=>{try{return (0,eval)(\(try quoteJS(script)))}catch(error){throw new Error('__agent_webkit_dom__:'+String(error?.message||error))}})()" : script
         return try await perform(awaitPromise ? "callAsyncJavaScript" : "evaluateJavaScript") { complete in
             let callback: (Any?, Error?) -> Void = { result, error in
                 if let error {
                     let nsError = error as NSError
                     if let message = nsError.userInfo["WKJavaScriptExceptionMessage"] as? String {
                         let codes = ["stale_ref", "selector_count", "invalid_selector", "unsupported_context", "element_not_actionable", "element_readonly", "unsupported_fill_type", "element_not_editable", "invalid_option", "unsupported_upload_target", "upload_multiple_not_allowed", "upload_unavailable", "unsupported_screenshot_geometry"]
-                        let code = codes.first { message.contains($0) } ?? "javascript_error"
-                        complete(.failure(BrowserError(code, message)))
+                        let prefix = "__agent_webkit_dom__:"
+                        let exception = message.hasPrefix("Error: ") ? String(message.dropFirst(7)) : message
+                        let tagged = internalDOM && exception.hasPrefix(prefix)
+                        let detail = tagged ? String(exception.dropFirst(prefix.count)) : message
+                        let candidate = String(detail.split(separator: ":", maxSplits: 1).first ?? "")
+                        let code = tagged && codes.contains(candidate) ? candidate : "javascript_error"
+                        complete(.failure(BrowserError(code, String(detail.prefix(2000)))))
                     } else { complete(.failure(error)) }
                 }
                 else { complete(.success(result ?? NSNull())) }
             }
             if awaitPromise {
-                webView.callAsyncJavaScript("return await (0, eval)(source)", arguments: ["source": script], in: nil, in: world) { result in
+                webView.callAsyncJavaScript("return await (0, eval)(source)", arguments: ["source": source], in: nil, in: world) { result in
                     switch result {
                     case .success(let value): callback(value, nil)
                     case .failure(let error): callback(nil, error)
                     }
                 }
             } else {
-                webView.evaluateJavaScript(script, in: nil, in: world) { result in
+                webView.evaluateJavaScript(source, in: nil, in: world) { result in
                     switch result {
                     case .success(let value): callback(value, nil)
                     case .failure(let error): callback(nil, error)
@@ -242,7 +272,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     func load(_ url: URL) {
         dialogs.cancelAll(code: "dialog_cancelled")
         fileChooser.stop()
-        persistedURL = url.absoluteString
+        requestedURL = url.absoluteString
         navigationError = nil; lastNavigationRejection = nil; certificateError = nil; tlsChallenge = [:]; terminated = false
         // A repeated failed load can return nil and still deliver a terminal delegate callback.
         // Never treat the previous document's readyState as completion of this request.
@@ -463,12 +493,12 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         changed?()
     }
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
-        if let url = webView.url { persistedURL = url.absoluteString }
+        if let url = webView.url { persistedURL = url.absoluteString; committedDocumentURL = url.absoluteString }
         changed?()
     }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         recordNavigation("navigation-finished", navigation: navigation)
-        if finishNavigation(navigation), let url = webView.url { persistedURL = url.absoluteString }
+        if finishNavigation(navigation), let url = webView.url { persistedURL = url.absoluteString; committedDocumentURL = url.absoluteString }
         changed?()
     }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
@@ -573,6 +603,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
             rejectNavigation(BrowserError("unsupported_navigation", "仅支持 http(s) 与 about:blank；已拒绝外部应用或不支持的 URL scheme"))
             decisionHandler(.cancel); return
         }
+        if navigationAction.targetFrame?.isMainFrame == true { requestedURL = url.absoluteString }
         decisionHandler(navigationAction.shouldPerformDownload ? .download : .allow)
     }
     private static func supports(_ url: URL) -> Bool {
@@ -617,13 +648,28 @@ final class Space {
     private(set) var store: WKWebsiteDataStore?
     var tabs: [Tab] = []
     var busy = false
-    init(_ record: SpaceRecord) throws {
+    private(set) var configurationError: BrowserError?
+    init(_ record: SpaceRecord, restoring: Bool = false) throws {
         self.record = record
-        if record.suspended != true { try activate() }
+        do {
+            _ = try proxyConfigurations()
+            if record.suspended != true { try activate() }
+        } catch {
+            guard restoring, let error = error as? BrowserError else { throw error }
+            configurationError = error
+        }
     }
     var suspended: Bool { record.suspended == true }
     func activate() throws {
         guard tabs.isEmpty else { return }
+        if let configurationError { throw configurationError }
+        let configurations = try proxyConfigurations()
+        let store = self.store ?? WKWebsiteDataStore(forIdentifier: record.id)
+        store.proxyConfigurations = configurations
+        self.store = store
+        tabs = record.tabs.map { Tab(record: $0, store: store, tls: record.tls) }
+    }
+    private func proxyConfigurations() throws -> [ProxyConfiguration] {
         let configurations: [ProxyConfiguration]
         if record.proxy == "direct" {
             configurations = []
@@ -639,10 +685,7 @@ final class Space {
             proxy.excludedDomains = []
             configurations = [proxy]
         }
-        let store = self.store ?? WKWebsiteDataStore(forIdentifier: record.id)
-        store.proxyConfigurations = configurations
-        self.store = store
-        tabs = record.tabs.map { Tab(record: $0, store: store, tls: record.tls) }
+        return configurations
     }
     func releaseRuntime() {
         for tab in tabs { tab.close() }
@@ -651,7 +694,7 @@ final class Space {
         tabs = []
     }
     var tabStates: [[String: Any]] {
-        if !suspended { return tabs.map(\.state) }
+        if !suspended && configurationError == nil { return tabs.map(\.state) }
         return record.tabs.map { tab in
             ["tabId": tab.id.uuidString, "url": tab.url, "title": "", "loading": false,
              "webContentTerminated": false, "unresponsive": false, "suspended": true,
@@ -662,7 +705,8 @@ final class Space {
         ["id": record.id.uuidString, "name": record.name, "proxy": record.proxy, "persistent": true,
          "dataStoreId": record.id.uuidString, "defaultTabId": record.defaultTab.uuidString,
          "tabs": tabStates, "busy": busy, "network": networkState,
-         "lifecycle": suspended ? "suspended" : "active", "liveWebViews": tabs.count,
+         "lifecycle": configurationError != nil ? "configuration-error" : suspended ? "suspended" : "active", "liveWebViews": tabs.count,
+         "configurationError": configurationError.map { failure($0)["error"]! } ?? NSNull(),
          "tls": record.tls?.summary ?? TLSConfiguration.systemSummary]
     }
     var networkState: [String: Any] {
@@ -675,6 +719,7 @@ final class Space {
             : "On tested macOS 27.0.1 loopback requests bypass this proxy, including localhost and 127.0.0.1. Configuration success is not route verification."]
     }
     var networkError: BrowserError? {
+        if let configurationError { return configurationError }
         guard record.proxy == "direct" else { return nil }
         do { try requireDirectAvailable(); return nil }
         catch { return error as? BrowserError }
@@ -702,7 +747,7 @@ final class BrowserModel {
         lockFD = Darwin.open(directory.appendingPathComponent("daemon.lock").path, O_CREAT | O_RDWR | O_NOFOLLOW, S_IRUSR | S_IWUSR)
         guard lockFD >= 0, flock(lockFD, LOCK_EX | LOCK_NB) == 0 else { throw BrowserError("already_running", "此数据目录已有运行中的应用") }
         if FileManager.default.fileExists(atPath: file.path) { records = try JSONDecoder().decode([SpaceRecord].self, from: Data(contentsOf: file)) }
-        for record in records where !record.deleting { spaces.append(try Space(record)) }
+        for record in records where !record.deleting { spaces.append(try Space(record, restoring: true)) }
         for space in spaces { bind(space) }
     }
 
@@ -791,7 +836,7 @@ final class BrowserModel {
 
     func save(_ space: Space) throws {
         var record = space.record
-        if !space.suspended { record.tabs = space.tabs.map { TabRecord(id: $0.id, url: $0.persistedURL) } }
+        if !space.suspended && space.configurationError == nil { record.tabs = space.tabs.map { TabRecord(id: $0.id, url: $0.persistedURL) } }
         try commitSpaceRecord(record, for: space)
     }
 
@@ -932,7 +977,7 @@ final class BrowserModel {
                     "pendingStoreCleanup": records.filter(\.deleting).count,
                     "storeCleanupErrors": storeCleanupErrors.map { ["spaceId": $0.key.uuidString, "error": $0.value] as [String: Any] },
                     "blockedSpaces": spaces.filter { $0.networkError != nil }.map { $0.record.id.uuidString },
-                    "systemProxy": systemProxyState(), "frontmostPid": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1,
+                    "systemProxy": systemProxySummary(), "frontmostPid": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1,
                     "capabilities": ["input":"dom-synthetic", "snapshot":"same-origin-frames-and-open-shadow-roots", "screenshot":"viewport", "screenshotModes":["viewport", "element", "full-page"], "foregroundRequired":false],
                     "directPolicy":"reject-enabled-system-proxy; no VPN/content-filter bypass guarantee"] as [String: Any]
         }
@@ -986,6 +1031,7 @@ final class BrowserModel {
         guard let space = spaces.first(where: { $0.record.id == id }) else { throw BrowserError("space_not_found", "Space 已删除") }
         if command == "space.info" { return space.summary }
         if command == "tab.list" { return space.tabStates }
+        if let error = space.configurationError { throw error }
         if command == "space.suspend" {
             guard !space.busy else { throw BrowserError("space_busy", "Space 正在操作中") }
             guard !space.tabs.contains(where: { $0.downloads.hasActive }) else { throw BrowserError("space_busy", "Space 有下载进行中；先等待或显式取消") }

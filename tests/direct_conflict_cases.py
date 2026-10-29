@@ -18,6 +18,32 @@ def prepare_proxy_settings(out):
     return path, dict(DYLD_INSERT_LIBRARIES=str(library), AW_TEST_PROXY_SETTINGS=str(path))
 
 
+def verify_proxy_summary(cli, start, stop, out, base):
+    settings, extra_env = prepare_proxy_settings(out)
+    stop()
+    settings.write_text(json.dumps({'ProxyAutoConfigEnable': 1,
+                                   'HTTPProxy': 'internal-sensitive-host',
+                                   'ProxyAutoConfigURLString': 'http://pac.internal/config?token=proxy-secret'}))
+    start(extra_env=extra_env)
+    try:
+        status = cli('status')
+        assert status['systemProxy'] == dict(enabled=True, enabledTypes=['ProxyAutoConfigEnable']), status
+        encoded = json.dumps(status)
+        assert all(secret not in encoded for secret in ('internal-sensitive-host', 'pac.internal', 'proxy-secret'))
+        cli('space', 'create', 'summary-direct', '--proxy', 'direct')
+        cli('open', base, '--space', 'summary-direct', error='direct_system_proxy_conflict')
+        settings.write_text('{}')
+        cli('open', base, '--space', 'summary-direct')
+        assert cli('evaluate', 'location.href', '--space', 'summary-direct')['value'] == base
+    finally:
+        settings.write_text('{}')
+        remaining = cli('space', 'list')
+        if any(space['name'] == 'summary-direct' for space in remaining):
+            cli('space', 'delete', 'summary-direct')
+        stop(); start()
+    return dict(passed=True, systemProxySummaryRedacted=True, directConflictStillEnforced=True)
+
+
 def verify_direct_conflicts(cli, start, stop, settings, base, target, nonce, whistle, events):
     def set_settings(value):
         temporary = settings.with_suffix('.tmp')
@@ -37,11 +63,14 @@ def verify_direct_conflicts(cli, start, stop, settings, base, target, nonce, whi
             stop()
             # Nested scopes must also be detected (e.g. per-interface proxy settings).
             value = {'__SCOPED__': {'test-interface': {key: 1}}} if key == 'SOCKSEnable' else {key: 1}
+            value.update(HTTPProxy='internal-sensitive-host', ProxyAutoConfigURLString='http://pac.internal/config?token=proxy-secret')
             set_settings(value)
             before = len(events.items)
             start()
             status = cli('status')
-            assert status['ready'] and status['systemProxy'] == value
+            assert status['ready'] and status['systemProxy'] == dict(enabled=True, enabledTypes=[key])
+            assert 'internal-sensitive-host' not in json.dumps(status)
+            assert 'proxy-secret' not in json.dumps(status)
             info = cli('space', 'info', 'conflict-direct')
             assert info['id'] in status['blockedSpaces'] and info['network']['blocked']
             assert info['network']['error']['code'] == 'direct_system_proxy_conflict'
@@ -49,7 +78,8 @@ def verify_direct_conflicts(cli, start, stop, settings, base, target, nonce, whi
             assert diagnostics['networkBlocked'] and diagnostics['networkErrorCode'] == 'direct_system_proxy_conflict'
             assert any(s['name'] == 'conflict-proxy' for s in cli('space', 'list'))
             page = cli('state', '--space', 'conflict-direct')['page']
-            assert page['tabId'] == original['tabId'] and page['url'] == original['url']
+            assert page['tabId'] == original['tabId'] and page['restoreURL'] == original['url']
+            assert page['url'] == 'about:blank'
             for command in [('reload',), ('open', base), ('evaluate', 'document.title')]:
                 assert cli(*command, '--space', 'conflict-direct', ok=False)['code'] == 'direct_system_proxy_conflict'
             assert not any(e.get('path') == '/index.html' for e in events.items[before:]), 'Blocked Direct restoration sent a request'

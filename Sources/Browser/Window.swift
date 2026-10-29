@@ -381,7 +381,10 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         guard !refreshing else { return }
         refreshing = true; defer { refreshing = false }
         filteredSpaces = model.spaces.filter { search.stringValue.isEmpty || $0.record.name.localizedCaseInsensitiveContains(search.stringValue) }
-        if !model.spaces.contains(where: { $0.record.id == selectedSpace }) { selectedSpace = model.spaces.first?.record.id }
+        if !filteredSpaces.contains(where: { $0.record.id == selectedSpace }) {
+            selectedSpace = filteredSpaces.first?.record.id
+            saveSelection()
+        }
         table.reloadData()
         if let row = filteredSpaces.firstIndex(where: { $0.record.id == selectedSpace }) { table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false) }
         else { table.deselectAll(nil) }

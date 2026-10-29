@@ -23,6 +23,8 @@ from lifecycle_cases import verify_lifecycle
 from download_cases import verify_downloads
 from upload_cases import verify_uploads
 from screenshot_cases import verify_screenshots, verify_fullpage
+from state_integrity_cases import verify_state_integrity
+from direct_conflict_cases import verify_proxy_summary
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -30,6 +32,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--forms', action='store_true', help='Run real React/Vue fixtures (npm ci --prefix tests/forms)')
+    parser.add_argument('--integrity-only', action='store_true', help='Run navigation identity, configuration isolation and JavaScript error cases')
     parser.add_argument('--diagnostics-only', action='store_true', help='Run only the diagnostic regression cases')
     parser.add_argument('--cleanup-only', action='store_true', help='Run only pending-store restoration and cleanup failure isolation')
     parser.add_argument('--dialogs-only', action='store_true', help='Run only real JavaScript dialog cases')
@@ -38,7 +41,7 @@ def main():
     parser.add_argument('--uploads-only', action='store_true', help='Run only real background multipart upload cases')
     parser.add_argument('--screenshots-only', action='store_true', help='Run only real screenshot geometry and pixel cases')
     args = parser.parse_args()
-    if sum([args.cleanup_only, args.diagnostics_only, args.dialogs_only, args.lifecycle_only, args.downloads_only, args.uploads_only, args.screenshots_only]) > 1 or (args.forms and (args.cleanup_only or args.dialogs_only or args.lifecycle_only or args.downloads_only or args.uploads_only or args.screenshots_only)):
+    if sum([args.integrity_only, args.cleanup_only, args.diagnostics_only, args.dialogs_only, args.lifecycle_only, args.downloads_only, args.uploads_only, args.screenshots_only]) > 1 or (args.forms and (args.integrity_only or args.cleanup_only or args.dialogs_only or args.lifecycle_only or args.downloads_only or args.uploads_only or args.screenshots_only)):
         parser.error('专项选项不能互相混用；--dialogs-only / --cleanup-only 不与 --forms 混用')
     out = ROOT / '.artifacts' / time.strftime('reliability-%Y%m%d-%H%M%S')
     out.mkdir(parents=True)
@@ -98,6 +101,13 @@ def main():
         verify_offline(cli)
         cli('open', 'https://example.com', '--space', 'work', '--proxy', 'direct', error='invalid_arguments')
         start()
+        if args.integrity_only:
+            checks.append(verify_state_integrity(cli, base, out, start, stop, state))
+            checks.append(verify_proxy_summary(cli, start, stop, out, base))
+            report = dict(ok=True, checks=checks, artifacts=str(out))
+            (out / 'report.json').write_text(json.dumps(report, indent=2))
+            print(json.dumps(report))
+            return
         if args.screenshots_only:
             checks.append(verify_screenshots(cli, base, out, lambda: (stop(), start())))
             checks.append(verify_fullpage(cli, base, out, lambda: (stop(), start())))
@@ -144,6 +154,8 @@ def main():
             (out / 'report.json').write_text(json.dumps(report, indent=2))
             print(json.dumps(report))
             return
+        checks.append(verify_state_integrity(cli, base, out, start, stop, state))
+        checks.append(verify_proxy_summary(cli, start, stop, out, base))
         checks.append(verify_lifecycle(cli, base, out, lambda: (stop(), start()), state, interrupt_restart, site_events))
         checks.append(verify_downloads(cli, base, out, lambda: (stop(), start()), state))
         checks.append(verify_uploads(cli, base, out, site_events, site.fixture_nonce))
