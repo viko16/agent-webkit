@@ -65,9 +65,12 @@ private actor DownloadBudget {
 
     func usage(_ root: URL, refresh: Bool = false) async throws -> Usage {
         let root = root.resolvingSymlinksInPath()
+        // A transfer may finish while a shared scan is already returning older
+        // file sizes. Final validation must observe a scan started after finish.
+        if refresh { return try await Task.detached(priority: .utility) { try Self.scan(root) }.value }
         let key = root.path
         if let pending = inFlight[key] { return try await pending.value }
-        if !refresh, let cached = cached[key], milliseconds(from: cached.time) < 100 { return cached.usage }
+        if let cached = cached[key], milliseconds(from: cached.time) < 100 { return cached.usage }
         let task = Task.detached(priority: .utility) { try Self.scan(root) }
         inFlight[key] = task
         do {

@@ -72,6 +72,8 @@ python3 tests/skill_workflow.py
 
 取消等待 WebKit 确认停止后清理本项目未完成下载的 UUID 目录；清理失败通过条目的 `cleanupError` 返回。若 WebKit 已通知下载完成、宿主仍在做最终预算校验，取消等待该校验，返回 `completed` 或 `failed`，不再向已结束的 WebKit 下载发起取消。关闭/删除/退出也请求取消；Space 有下载时拒绝休眠。完成文件不会被限额或清理策略自动删除。
 
+累计预算是动态限制，不是瞬时硬限额：并发下载可能各自通过目的地检查，100 ms 周期、目录扫描和取消确认期间仍会增长；超额幅度与传输速率及扫描耗时有关，没有固定的字节或时间上界。最终校验独立扫描，不复用下载完成前已开始的扫描；超额或扫描失败均拒绝报告完成。`python3 tests/download_limit_cases.py` 同时覆盖同 Space 多 Tab、跨 Space、已知/未知长度、额度释放和真实目录权限错误；其中旧扫描竞争使用真实下载及测试副本中的扫描返回门控，未在产品中加入调试接口。
+
 默认最多 64 个 Space、每 Space 64 个 Tab、合计 1024 个 Tab、128 个活跃 WebView，每个 Space 最多 8 个活跃网页弹窗。daemon 环境变量 `BROWSER_MAX_SPACES`、`BROWSER_MAX_TABS_PER_SPACE`、`BROWSER_MAX_TOTAL_TABS`、`BROWSER_MAX_LIVE_WEBVIEWS`、`BROWSER_MAX_POPUPS_PER_SPACE` 可调整，`status.resourceLimits` 返回生效值。创建和恢复运行时超额返回 `resource_limit`；启动时容量不足的 Space 保持休眠并显示 `resourceBlockedReason`，标签页记录保留。
 
 手动 file input 使用 NSOpenPanel，仅在应用已激活且对应页面位于 key window 时打开；后台调用安全取消，`state.page.fileChooser` 返回 `requires_foreground` / `requiresForeground: true`，不主动激活。用户在原生窗口选取文件后可继续页面操作。目录选择不支持，关闭/导航/退出会结束待决面板。`python3 tests/reliability.py --downloads-only` 验证真实委托、同名、失败/取消/等待期限、Space/Tab 隔离、关闭/重启和后台选择限制。

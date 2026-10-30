@@ -45,6 +45,24 @@ def fixture_app(out):
             Thread.sleep(forTimeInterval: 2)
         }
 ''')
+            marker = '        if let failure { throw failure }\n        return result\n'
+            assert source.count(marker) == 1
+            source = source.replace(marker, '''        if let failure { throw failure }
+        if let gate = ProcessInfo.processInfo.environment["BROWSER_TEST_SCAN_GATE"],
+           result.total > 0, result.total <= 8192,
+           manager.fileExists(atPath: gate + "/armed"),
+           (try? manager.createDirectory(atPath: gate + "/claimed", withIntermediateDirectories: false)) != nil {
+            manager.createFile(atPath: gate + "/sampled", contents: nil)
+            let deadline = Date().addingTimeInterval(10)
+            while !manager.fileExists(atPath: gate + "/release"), Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.005)
+            }
+            guard manager.fileExists(atPath: gate + "/release") else {
+                throw BrowserError("test_scan_gate_timeout", "Test did not release the sampled scan")
+            }
+        }
+        return result
+''')
         copied.write_text(source)
         sources.append(str(copied))
     build = subprocess.run(['swiftc', '-g', *sources, '-o', str(binary)], capture_output=True, text=True, timeout=120)
@@ -281,6 +299,8 @@ def main():
              ('cancel', {}), ('responsive', {}), ('finish-cancel', {}),
              ('finish-over-budget', dict(MAX_FILE_BYTES=1536)), ('finish-timeout', {})]
     results = [run_case(case, settings, out, binary) for case, settings in cases]
+    from download_budget_cases import verify_concurrent_budgets
+    results.extend(verify_concurrent_budgets(out, binary))
     report = dict(passed=True, cases=results, completedFilesRetained=True,
                   restartAccounting=True, unknownLengthStreamBounded=True, cancellationAcknowledged=True)
     report['sharedBackgroundScanAndLateCancellation'] = True
