@@ -78,6 +78,12 @@ def verify_state_integrity(cli, base, out, start, stop, state):
             response = cli('evaluate', f'Promise.reject(new Error({quoted}))', '--await', *flags, error='javascript_error')
             assert message in response['error']['message'], response
         old_ref = next(element['ref'] for element in cli('snapshot', *flags)['value']['elements'] if element['tag'] == 'button')
+        # Exercise the product recovery route, retaining an actual pre-hang ref.
+        cli('evaluate', 'while(true) {}', '--timeout', '100', *flags, error='timeout')
+        assert cli('state', *flags)['page']['unresponsive']
+        cli('reload', '--timeout', '5000', *flags)
+        cli('click', old_ref, *flags, error='stale_ref')
+        old_ref = next(element['ref'] for element in cli('snapshot', *flags)['value']['elements'] if element['tag'] == 'button')
         cli('evaluate', 'document.querySelector("#save").remove();true', *flags)
         cli('click', old_ref, *flags, error='stale_ref')
 

@@ -86,7 +86,9 @@ enum DOM {
         return true;
       }
       function snapshot() {
-        for (const [ref, el] of nodes) if (!connected(el)) nodes.delete(ref);
+        // Keep strong references only for this bounded snapshot. WeakMap IDs
+        // stay stable for nodes that appear again, without retaining old nodes.
+        nodes.clear();
         const elements=[];
         const unsupported=[];
         const outputBudgetBytes=1024*1024, encoder=new TextEncoder();

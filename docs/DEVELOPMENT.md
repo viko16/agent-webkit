@@ -339,7 +339,7 @@ GUI 的 selectedSpace / selectedTabs 只决定观察哪一个 WebView，并按�
 
 复合命令为 `space.create` / `tab.new` 等，与 CLI 一一对应。Socket 默认位于 0700 的数据目录中，权限 0600，服务用 `getpeereid` 拒绝其他 UID。注册表和 Socket 各有 flock，重复 daemon 不覆盖活跃 Socket。单条消息上限 8 MiB，Socket 读写超时 75 秒，页面等待 1–60000 ms。不要把自定义 Socket 放在他人可替换的目录；同一 UID 内的进程具有相同控制权限。
 
-Snapshot 覆盖主 frame、同源 frame 与开放 Shadow Root 中的可见交互元素，最多 1000 个；文本摘要仅取主 frame，最多 20000 字，达到上限返回 `truncated`。引用在元素对象存续期间稳定，导航、刷新、frame 文档替换或元素被移除后失效；CSS selector 必须恰好命中一个元素，跨作用域使用 `>>>` 或完整引用，边界见下文。Snapshot 包含控件标签、checkbox/radio 状态、select 选项，并隐藏 password 值。`fill` 使用原生 value setter 和非 trusted input/change 事件；拒绝 disabled fieldset、只读字段、无效 select 值以及文件、checkbox、radio 的文字填写。`wait` 默认等待页面加载或唯一元素可见，也可显式等待 URL、文本或 DOM 状态；选择器错误不会被吞掉当成普通超时。
+Snapshot 覆盖主 frame、同源 frame 与开放 Shadow Root 中的可见交互元素，最多 1000 个；文本摘要仅取主 frame，最多 20000 字，达到上限返回 `truncated`。引用只保留最新 Snapshot 遍历登记的节点；同一节点再次出现时 ID 保持稳定，未在最新 Snapshot 登记、导航、刷新、frame 文档替换或元素被移除后的旧引用返回 `stale_ref`。CSS selector 必须恰好命中一个元素，跨作用域使用 `>>>` 或完整引用，边界见下文。Snapshot 包含控件标签、checkbox/radio 状态、select 选项，并隐藏 password 值。`fill` 使用原生 value setter 和非 trusted input/change 事件；拒绝 disabled fieldset、只读字段、无效 select 值以及文件、checkbox、radio 的文字填写。`wait` 默认等待页面加载或唯一元素可见，也可显式等待 URL、文本或 DOM 状态；选择器错误不会被吞掉当成普通超时。
 
 Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 等待表达式返回的 Promise（同样在 page world）。返回不能被 JSON 表示的值时明确失败。alert/confirm/prompt 通过上述 dialog list/respond 显式处理；网站新窗口转为同 Space Tab，不改变 CLI 默认 Tab 或自动抢前台。外部 URL scheme 被明确拒绝，不启动其他应用；弹窗、opener 和合成点击的边界见下文。
 
@@ -397,7 +397,7 @@ Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 
 
 `snapshot/click/fill/wait` 的脚本注入与调用统一使用命名 `WKContentWorld`（`AgentWebKit.DOM`），不注册跨 world 消息处理器。`evaluate` 和 `evaluate --await` 明确留在 `.page`，可读取网页全局变量；等待 readyState 也在隔离 world 执行。
 
-每个文档在 documentStart 初始化一次 bridge，刷新、导航、进程替换及重启均产生新的随机引用后缀；同文档 SPA 更新保持连接节点的引用，已移除节点返回 `stale_ref`。隔离只保护实现和命名空间，不阻止网页改变 DOM，也不提供原生可信事件。`tests/reliability.py` 用真实页面覆盖、删除和伪造同名对象，检查四项内部命令、页面 Promise、SPA、重载及重启。
+每个文档在 documentStart 初始化一次 bridge，刷新、导航、进程替换及重启均产生新的随机引用后缀；同文档 SPA 更新后，仍连接且在最新 Snapshot 登记的节点引用可继续使用。强引用表在每次 Snapshot 开始时清空，并随有界遍历重新登记，不长期保留隐藏或不再返回的历史节点；弱引用表只维护节点自身的稳定 ID，不把旧 ID 分配给其他节点。隔离只保护实现和命名空间，不阻止网页改变 DOM，也不提供原生可信事件。`tests/reliability.py` 用真实页面覆盖、删除和伪造同名对象，检查四项内部命令、页面 Promise、SPA、重载及重启。`python3 tests/dom_reference_cases.py` 另验证 4000 个仍连接的动态节点、引用数量、重复 Snapshot、click/fill、旧引用失效及 frame/shadow/多 Tab 隔离，证据保存在 `.artifacts/dom-references-*/`；计数只注入测试 bridge，不增加生产接口。
 
 ## iframe 与 Shadow DOM 定位
 
