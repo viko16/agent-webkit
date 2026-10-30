@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def cleanup_failure_app(out):
     """Instrument a generated source copy; ship no fault-injection hooks."""
     source = (ROOT / 'Sources/Browser/Browser.swift').read_text()
+    source += '\n@MainActor private var heldCleanupOperations: [PendingOperation<Void>] = []\n'
     removal = '    private func removeStoreOnce(_ id: UUID) async throws {\n'
     clearing = '            store.removeData(ofTypes: types, modifiedSince: .distantPast) {\n'
     assert source.count(removal) == source.count(clearing) == 1
@@ -26,7 +27,7 @@ def cleanup_failure_app(out):
     assert source.count(callback) == 1
     source = source.replace(callback, '''            if ProcessInfo.processInfo.environment["BROWSER_TEST_CLEANUP_ID"] == id.uuidString,
                ProcessInfo.processInfo.environment["BROWSER_TEST_CLEANUP_ERROR"] == "data_store_removal_timeout" {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 6) { operation.finish(.success(())) }
+                heldCleanupOperations.append(operation)
                 return
             }
 ''' + callback)
@@ -34,10 +35,11 @@ def cleanup_failure_app(out):
                 let code = ProcessInfo.processInfo.environment["BROWSER_TEST_CLEANUP_ERROR"]!
                 fputs("Injected cleanup failure: \\(code) \\(id)\\n", stderr)
                 if code == "data_removal_failed" {
+                    self.pendingStoreCallbacks.remove(id)
                     operation.finish(.failure(BrowserError(code, "Injected remaining website data")))
                 } else {
-                    // Model a delayed WebKit callback that retains the operation.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 6) { operation.finish(.success(())) }
+                    // Model a WebKit callback that never arrives in this process.
+                    heldCleanupOperations.append(operation)
                 }
                 // For data_removal_timeout, let the original five-second timer fire.
                 return
@@ -101,8 +103,8 @@ def verify_store_cleanup_failures(cli, start, stop, state, base, out):
         pending = [record for record in records if record.get('deleting')]
         assert [record['id'] for record in pending] == [failed['id']], records
         assert all(record['id'] != later['id'] for record in records), records
-        # Explicit deletion still reports the cleanup error instead of false success.
-        cli('space', 'delete', failed['id'], error=code)
+        # A timed-out callback is still in flight; repeating deletion must not restart it.
+        cli('space', 'delete', failed['id'], error='space_busy' if code.endswith('_timeout') else code)
         assert cli('status')['ready'] and cli('status')['pendingStoreCleanup'] == 1
         stop()
         assert any(record['id'] == failed['id'] and record['deleting']

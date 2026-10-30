@@ -762,6 +762,8 @@ final class BrowserModel {
     var shuttingDown = false
     private(set) var restoring = true
     private var storeCleanupErrors: [UUID: [String: Any]] = [:]
+    private var removingStores: Set<UUID> = []
+    private var pendingStoreCallbacks: Set<UUID> = []
     private let limits = BrowserLimits()
 
     init(directory: URL) throws {
@@ -918,6 +920,13 @@ final class BrowserModel {
     }
 
     private func removeStore(_ id: UUID) async throws -> Bool {
+        guard !removingStores.contains(id), !pendingStoreCallbacks.contains(id) else {
+            throw BrowserError("space_busy", "此 Store 仍在删除或等待 WebKit 清理回调；请稍后重试")
+        }
+        removingStores.insert(id)
+        defer { removingStores.remove(id) }
+        // Occupy this UUID before yielding, including the detached view release window.
+        try await Task.sleep(nanoseconds: 100_000_000)
         // All callers may run in a fresh process with no active Space stores.
         // Keep WebKit initialized throughout removal and fallback cleanup.
         let cleanupBootstrap = WKWebsiteDataStore.nonPersistent()
@@ -931,7 +940,10 @@ final class BrowserModel {
             try await clearStoreContents(id)
             for delay in [100, 200, 400] {
                 try await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000)
-                do { try await removeStoreOnce(id); return true } catch { continue }
+                do { try await removeStoreOnce(id); return true }
+                catch {
+                    if (error as? BrowserError)?.code == "data_store_removal_timeout" { throw error }
+                }
             }
             return false
         }
@@ -940,11 +952,13 @@ final class BrowserModel {
     private func clearStoreContents(_ id: UUID) async throws {
         let store = WKWebsiteDataStore(forIdentifier: id)
         let types = WKWebsiteDataStore.allWebsiteDataTypes()
+        pendingStoreCallbacks.insert(id)
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let operation = PendingOperation(continuation)
             operation.arm(milliseconds: 5000, error: BrowserError("data_removal_timeout", "网站数据清理超时；已保留删除标记，下次启动会重试"), onTimeout: {})
             store.removeData(ofTypes: types, modifiedSince: .distantPast) {
                 store.fetchDataRecords(ofTypes: types) { records in
+                    self.pendingStoreCallbacks.remove(id)
                     if records.isEmpty { operation.finish(.success(())) }
                     else { operation.finish(.failure(BrowserError("data_removal_failed", "网站数据仍存在；已保留删除标记，下次启动会重试"))) }
                 }
@@ -953,10 +967,13 @@ final class BrowserModel {
     }
 
     private func removeStoreOnce(_ id: UUID) async throws {
+        pendingStoreCallbacks.insert(id)
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let operation = PendingOperation(continuation)
             operation.arm(milliseconds: 5000, error: BrowserError("data_store_removal_timeout", "Store 删除超时；已保留删除标记，下次启动会重试"), onTimeout: {})
             WKWebsiteDataStore.remove(forIdentifier: id) { error in
+                // The caller timing out does not mean WebKit has stopped this operation.
+                self.pendingStoreCallbacks.remove(id)
                 if let error { operation.finish(.failure(error)) } else { operation.finish(.success(())) }
             }
         }
@@ -1068,8 +1085,6 @@ final class BrowserModel {
             var candidate = records
             if let index = candidate.firstIndex(where: { $0.id == id }) { candidate[index].deleting = true }
             try commitRecords(candidate); detach(id); changed?()
-            // Let AppKit's autorelease pool release the detached WKWebViews before removing their store.
-            try await Task.sleep(nanoseconds: 100_000_000)
             let removed = try await removeStore(id)
             if removed { try commitRecords(records.filter { $0.id != id }); storeCleanupErrors[id] = nil }
             return ["deleted": true, "spaceId": id.uuidString, "websiteDataRemoved": true,

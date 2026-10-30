@@ -18,6 +18,7 @@ from form_cases import framework_site, verify_forms
 from diagnostic_cases import verify_diagnostics
 from detailed_diagnostic_cases import verify_detailed_diagnostics
 from store_cleanup_cases import verify_pending_store_only, verify_store_cleanup_failures, verify_delete_persistence_failure, verify_delete_without_active_stores
+from store_deletion_race_cases import verify_concurrent_store_deletion
 from contract_cases import verify_offline, verify_live_contract
 from dialog_cases import verify_dialogs
 from lifecycle_cases import verify_lifecycle
@@ -147,6 +148,7 @@ def main():
         checks.append(verify_store_cleanup_failures(cli, start, stop, state, base, out))
         checks.append(verify_delete_persistence_failure(cli, start, stop, state, base))
         checks.append(verify_delete_without_active_stores(cli, start, stop, state, base))
+        checks.append(verify_concurrent_store_deletion(cli, start, stop, state, base, out))
         if args.cleanup_only:
             report = dict(ok=True, checks=checks, artifacts=str(out))
             return
