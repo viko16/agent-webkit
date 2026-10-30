@@ -359,6 +359,8 @@ Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 
 
 导航等待超时不会停止网络加载，可继续 `wait` 或打开其他 URL。被新导航取消的旧请求不会把迟到的错误写入当前页面。URL 在请求开始时保留，避免重启恢复过程中把尚未加载的标签页覆盖成 about:blank；SPA URL 变化也会保存。恢复仅保证持久化状态和 URL，页面 JS 内存、未提交表单和完整后退历史不在恢复范围内。后台页面定时器仍受 WebKit 节流。
 
+导航计时弱引用 WebKit token，并在查询 Span 时核对对象身份，避免地址复用误认旧导航。WebKit 释放 token 却未发终结回调时，下次跟踪或完成导航会回收该 Span 并结束计时；关闭 Tab 或 WebContent 终止时清空。`python3 tests/navigation_span_cases.py` 用真实非持久 WKWebView 验证大量取消、地址复用、重复失败、超时替换、关闭及计时回收，另单独标注注入的 WebContent 终止回调。观测通过测试进程反射完成，不增加生产调试接口；证据保存在 `.artifacts/navigation-spans-*/`。
+
 重复加载证书失败的 URL 时，WebKit 可能没有返回可追踪的 `WKNavigation` 对象。加载请求仍保持 pending，直到终止回调；等待还直接检查证书拒绝，不能仅凭旧文档的 readyState 返回成功。TLS 回归对错误主机名和过期证书各重复三次导航，保留实际拒绝记录。
 
 ## 网站弹窗与回调

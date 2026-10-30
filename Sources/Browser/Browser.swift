@@ -94,9 +94,9 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     var certificateError: BrowserError?
     var operationTiming: RequestTiming?
     private struct NavigationSpan {
-        // ObjectIdentifier is unique only while its object is alive. WebKit can
-        // release a cancelled token without a terminal delegate callback.
-        let navigation: WKNavigation
+        // WebKit can release a cancelled token without a terminal callback.
+        // Weak identity lets us reclaim its span without aliasing a reused address.
+        weak var navigation: WKNavigation?
         let start: UInt64
         let timing: RequestTiming?
         let token: Int?
@@ -192,7 +192,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         statusChanged = nil
         networkCheck = nil
         createPopup = nil; closeRequested = nil
-        navigationSpans.removeAll()
+        clearNavigationSpans()
     }
 
     func disableDiagnosticDetails() {
@@ -307,16 +307,39 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
 
     private func trackNavigation(_ navigation: WKNavigation, start: UInt64) {
+        discardReleasedNavigations()
         let key = ObjectIdentifier(navigation)
-        guard navigationSpans[key] == nil else { return }
+        guard navigationSpan(navigation) == nil else { return }
         navigationSequence += 1
         navigationSpans[key] = NavigationSpan(navigation: navigation, start: start, timing: operationTiming,
             token: operationTiming?.begin("navigation", from: start), sequence: navigationSequence)
     }
 
+    private func navigationSpan(_ navigation: WKNavigation?) -> NavigationSpan? {
+        guard let navigation, let span = navigationSpans[ObjectIdentifier(navigation)],
+              span.navigation === navigation else { return nil }
+        return span
+    }
+
+    private func discardReleasedNavigations() {
+        for (key, span) in navigationSpans where span.navigation == nil {
+            if let token = span.token { span.timing?.finish(token) }
+            navigationSpans.removeValue(forKey: key)
+        }
+    }
+
+    private func clearNavigationSpans() {
+        for span in navigationSpans.values {
+            if let token = span.token { span.timing?.finish(token) }
+        }
+        navigationSpans.removeAll()
+    }
+
     @discardableResult
     private func finishNavigation(_ navigation: WKNavigation?) -> Bool {
-        let span = navigation.flatMap { navigationSpans.removeValue(forKey: ObjectIdentifier($0)) }
+        discardReleasedNavigations()
+        let span = navigationSpan(navigation)
+        if span != nil, let navigation { navigationSpans.removeValue(forKey: ObjectIdentifier(navigation)) }
         if let token = span?.token { span?.timing?.finish(token) }
         let latest = span.map { $0.sequence == navigationSequence } ?? navigationPending
         if latest {
@@ -530,7 +553,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
     private func failNavigation(_ navigation: WKNavigation?, error: Error) {
         // Unknown cancelled callbacks may belong to a superseded navigation.
-        if navigation.flatMap({ navigationSpans[ObjectIdentifier($0)] }) == nil,
+        if navigationSpan(navigation) == nil,
            (error as NSError).domain == NSURLErrorDomain, (error as NSError).code == NSURLErrorCancelled { return }
         recordNavigation("navigation-failed", navigation: navigation, error: error)
         let latest = finishNavigation(navigation)
@@ -538,7 +561,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         if latest { navigationError = certificateError ?? error; changed?() }
     }
     private func recordNavigation(_ kind: String, navigation: WKNavigation?, error: Error? = nil) {
-        let span = navigation.flatMap { navigationSpans[ObjectIdentifier($0)] }
+        let span = navigationSpan(navigation)
         let start = span?.start ?? navigationStartedAt
         let latest = span.map { $0.sequence == navigationSequence } ?? navigationPending
         let failedURL = (error as NSError?)?.userInfo[NSURLErrorFailingURLErrorKey] as? URL
@@ -605,6 +628,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         terminated = true
+        clearNavigationSpans()
         dialogs.stop(code: "web_content_terminated")
         downloads.stop(); fileChooser.stop()
         let error = BrowserError("web_content_terminated", "WebContent 进程已退出；reload 可恢复页面，未提交的表单不会保留")
