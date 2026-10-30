@@ -29,6 +29,15 @@ def fixture_app(out):
         copied = out / path.name
         source = path.read_text()
         if path.name == 'Files.swift':
+            marker = '        entries[index].finishing = true\n'
+            assert source.count(marker) == 1
+            source = source.replace(marker, marker + '        fputs("DOWNLOAD-FINISH\\\\n", stderr)\n')
+            marker = '                let error = try await limitError(id, refresh: true)\n'
+            assert source.count(marker) == 1
+            source = source.replace(marker, '''                if let raw = ProcessInfo.processInfo.environment["BROWSER_TEST_FINISH_DELAY"], let seconds = UInt64(raw) {
+                    try await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+                }
+''' + marker)
             marker = '    private static func scan(_ root: URL) throws -> Usage {\n'
             assert source.count(marker) == 1
             source = source.replace(marker, marker + '''        if ProcessInfo.processInfo.environment["BROWSER_TEST_SLOW_BUDGET_SCAN"] == "1" {
@@ -89,15 +98,20 @@ def run_case(case, configured, out, binary):
                **{'BROWSER_DOWNLOAD_' + key: str(value) for key, value in settings.items()})
     if case == 'responsive':
         env['BROWSER_TEST_SLOW_BUDGET_SCAN'] = '1'
+    if case in ('finish-cancel', 'finish-over-budget', 'finish-timeout'):
+        env['BROWSER_TEST_FINISH_DELAY'] = '6' if case == 'finish-timeout' else '2'
     site = download_site()
     base = f'http://127.0.0.1:{site.server_port}/'
     daemon = None
     created = []
 
-    def cli(*args):
+    def cli(*args, error=None):
         process = subprocess.run([str(binary), *args], env=env, capture_output=True, text=True, timeout=15)
         response = json.loads(process.stdout)
-        assert process.returncode == 0 and response['ok'], (args, response, process.stderr)
+        assert process.returncode == (1 if error else 0) and response['ok'] == (error is None), (args, response, process.stderr)
+        if error:
+            assert response['error']['code'] == error, response
+            return response
         return response['result']
 
     with (out / (case + '-daemon.log')).open('w') as log:
@@ -181,6 +195,43 @@ def run_case(case, configured, out, binary):
                 completed = wait(first)
                 time.sleep(.15)
                 assert not folder.exists(), 'A late scan recreated the cancelled destination'
+            elif case in ('finish-cancel', 'finish-over-budget', 'finish-timeout'):
+                download = begin('#small')
+                log_path = out / (case + '-daemon.log')
+                for _ in range(100):
+                    if 'DOWNLOAD-FINISH' in log_path.read_text():
+                        break
+                    time.sleep(.02)
+                assert 'DOWNLOAD-FINISH' in log_path.read_text(), 'No real WebKit finish callback'
+                assert cli('download', 'list', '--space', 'limit-a')['value']['downloads'][0]['status'] == 'running'
+                if case == 'finish-timeout':
+                    cli('download', 'cancel', download, '--space', 'limit-a', error='download_cancel_timeout')
+                    item = cli('download', 'list', '--space', 'limit-a')['value']['downloads'][0]
+                    assert item['status'] == 'running' and item['path'] is None, item
+                    files = list((state / 'downloads').glob('*/*/*/*'))
+                    assert len(files) == 1 and files[0].read_bytes() == b'x' * 1024
+                if case == 'finish-over-budget':
+                    # Fault injection after the real finish delegate: make the final
+                    # file exceed the limit while its asynchronous check is delayed.
+                    files = list((state / 'downloads').glob('*/*/*/*'))
+                    assert len(files) == 1 and files[0].read_bytes() == b'x' * 1024
+                    with files[0].open('ab') as stream:
+                        stream.write(b'y' * 1024)
+                with ThreadPoolExecutor(2) as pool:
+                    pending = pool.submit(cli, 'download', 'cancel', download, '--space', 'limit-a')
+                    waiting = pool.submit(wait, download)
+                    assert cli('evaluate', 'document.querySelector("#small").textContent', '--space', 'limit-b')['value'] == 'small'
+                    completed = pending.result()['value']
+                    assert waiting.result() == completed
+                assert cli('download', 'cancel', download, '--space', 'limit-a')['value'] == completed
+                assert cli('download', 'list', '--space', 'limit-a')['value']['downloads'] == [completed]
+                if case == 'finish-over-budget':
+                    assert_failed(completed, 'download_file_limit')
+                    assert completed['bytesReceived'] == 2048
+                    completed = None
+                else:
+                    assert completed['status'] == 'completed', completed
+                    assert list((state / 'downloads').glob('*/*/*/*')) == [Path(completed['path'])]
             elif case == 'cancel':
                 completed = wait(begin('#small'))
                 download = begin('#stream')
@@ -227,7 +278,8 @@ def main():
              ('space', dict(MAX_SPACE_BYTES=1536)),
              ('total', dict(MAX_TOTAL_BYTES=1536)),
              ('disk', dict(MIN_FREE_BYTES=9223372036854775807)),
-             ('cancel', {}), ('responsive', {})]
+             ('cancel', {}), ('responsive', {}), ('finish-cancel', {}),
+             ('finish-over-budget', dict(MAX_FILE_BYTES=1536)), ('finish-timeout', {})]
     results = [run_case(case, settings, out, binary) for case, settings in cases]
     report = dict(passed=True, cases=results, completedFilesRetained=True,
                   restartAccounting=True, unknownLengthStreamBounded=True, cancellationAcknowledged=True)

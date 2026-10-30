@@ -70,7 +70,7 @@ python3 tests/skill_workflow.py
 
 文件保存在 daemon 数据目录的 `downloads/SPACE_ID/TAB_ID/DOWNLOAD_ID/文件名`，各目录 0700，每次新 ID，不覆盖同名文件。每个 Tab 最多 8 个并行、64 条内存记录，每个下载最多 5 分钟。默认单文件 512 MiB、每 Space 累计 2 GiB、应用累计 8 GiB，并保留至少 512 MiB 磁盘余量；daemon 环境变量 `BROWSER_DOWNLOAD_MAX_FILE_BYTES`、`BROWSER_DOWNLOAD_MAX_SPACE_BYTES`、`BROWSER_DOWNLOAD_MAX_TOTAL_BYTES`、`BROWSER_DOWNLOAD_MIN_FREE_BYTES` 可调整，`download list` 返回生效限额。累计占用包含重启前文件；声明长度在分配目的地前检查，未知长度通过进度和磁盘占用周期检查，限制触发到确认取消之间仍可能接收数据。已完成文件保留，网站数据删除不删除下载文件；记录在关闭、休眠和重启后不恢复，文件路径仍可由此前结果使用。下载进度是 WebKit 宿主观测，不代表服务端业务成功。
 
-取消等待 WebKit 确认停止后清理本项目未完成下载的 UUID 目录；清理失败通过条目的 `cleanupError` 返回。关闭/删除/退出也请求取消；Space 有下载时拒绝休眠。完成文件不会被限额或清理策略自动删除。
+取消等待 WebKit 确认停止后清理本项目未完成下载的 UUID 目录；清理失败通过条目的 `cleanupError` 返回。若 WebKit 已通知下载完成、宿主仍在做最终预算校验，取消等待该校验，返回 `completed` 或 `failed`，不再向已结束的 WebKit 下载发起取消。关闭/删除/退出也请求取消；Space 有下载时拒绝休眠。完成文件不会被限额或清理策略自动删除。
 
 默认最多 64 个 Space、每 Space 64 个 Tab、合计 1024 个 Tab、128 个活跃 WebView，每个 Space 最多 8 个活跃网页弹窗。daemon 环境变量 `BROWSER_MAX_SPACES`、`BROWSER_MAX_TABS_PER_SPACE`、`BROWSER_MAX_TOTAL_TABS`、`BROWSER_MAX_LIVE_WEBVIEWS`、`BROWSER_MAX_POPUPS_PER_SPACE` 可调整，`status.resourceLimits` 返回生效值。创建和恢复运行时超额返回 `resource_limit`；启动时容量不足的 Space 保持休眠并显示 `resourceBlockedReason`，标签页记录保留。
 
