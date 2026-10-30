@@ -84,7 +84,8 @@ class ReliabilityCleanupTests(unittest.TestCase):
                          'verify_proxy_summary', 'verify_screenshots', 'verify_fullpage', 'verify_uploads',
                          'verify_downloads', 'verify_lifecycle', 'verify_dialogs', 'verify_diagnostics',
                          'verify_detailed_diagnostics', 'verify_pending_store_only', 'verify_store_cleanup_failures',
-                         'verify_delete_persistence_failure', 'verify_delete_without_active_stores'):
+                         'verify_delete_persistence_failure', 'verify_delete_without_active_stores',
+                         'verify_concurrent_store_deletion'):
                 check = stack.enter_context(patch.object(reliability, name, return_value={'check': name}))
                 if primary is not None and name == ('verify_uploads' if flag else 'verify_pending_store_only'):
                     check.side_effect = primary
