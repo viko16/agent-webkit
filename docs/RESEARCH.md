@@ -1,10 +1,10 @@
 # 实现依据
 
-检查时间：2026-10-23。两个项目均直接读取了源码与 LICENSE；以下结论针对固定提交，不把 README 的能力描述当作测试结果。
+以下参考项目的结论基于固定提交的源码与 LICENSE，API 选择和实验边界用于说明当前实现。
 
 | 项目 | 检查提交 | 许可 | 对本项目有用的部分 | 不直接 fork 的原因 |
 | --- | --- | --- | --- | --- |
-| [agent-safari](https://github.com/handlecusion/agent-safari/tree/2010ad84c95efb22399200ce5cd8f01d3441e1c9) | `2010ad84` | MIT，Hyun Yoon-sung | Swift/AppKit WKWebView、Socket CLI、WeakMap 元素引用、DOM click/fill、截图、异步等待 | `makeWebView()` 仍选择 `.default()` / `.nonPersistent()`；Profile 名称为 daemon 元数据，未对应命名持久化 DataStore。直接沿用其会话模型不能满足 Space 隔离。已有 MCP、媒体、上传、下载与原生输入超出本次范围 |
+| [agent-safari](https://github.com/handlecusion/agent-safari/tree/2010ad84c95efb22399200ce5cd8f01d3441e1c9) | `2010ad84` | MIT，Hyun Yoon-sung | Swift/AppKit WKWebView、Socket CLI、WeakMap 元素引用、DOM click/fill、截图、异步等待 | `makeWebView()` 选择 `.default()` / `.nonPersistent()`；Profile 名称为 daemon 元数据，未对应命名持久化 DataStore。直接沿用其会话模型不能满足 Space 隔离 |
 | [mcp-browser](https://github.com/brainfuel/mcp-browser/tree/90d9a05a463b4d3488ab570c85011db83dc314c3) | `90d9a05a` | MIT，Moosia LLC | 每 Tab 持有 WebView、SwiftUI Host 重挂载、页面委托与状态处理 | `BrowserTab.makeConfiguredWebView` 默认使用 `.default()`；MCP、书签、历史、录制和用户确认等功能增加了本次不需要的依赖关系 |
 
 最终独立实现 Swift Package + AppKit，借鉴 agent-safari 的自动化机制，不引入两个项目的产品层和 MCP。`DOM.swift` 保留其 WeakMap 稳定引用思路，改为带导航随机后缀的引用，并通过 Map 直接定位元素，防止刷新后同编号引用误操作。保留 MIT 许可文本。
@@ -15,7 +15,7 @@
 
 ## Apple API
 
-同时查阅官方 API 和本机 macOS 27 SDK 的头文件 / Swift interface，实际以真实进程验收验证隔离。
+实现依据为官方 API、SDK 头文件和 Swift interface；行为边界由独立测试验证。
 
 | API | macOS 最低版本 | 实际使用及边界 |
 | --- | --- | --- |
@@ -23,15 +23,15 @@
 | [proxyConfigurations](https://developer.apple.com/documentation/webkit/wkwebsitedatastore/proxyconfigurations) | 14.0 | 同一 Store 的全部 WebView 使用相同配置。创建后不提供热切换代理。空数组清除覆盖配置，不能证明绕过系统代理 |
 | [evaluateJavaScript](https://developer.apple.com/documentation/webkit/wkwebview/evaluatejavascript(_:completionhandler:)) | 10.10 | completionHandler 版本返回值或错误；`awb evaluate` 保留主 frame / page world 语义，内部 DOM bridge 使用独立的 `AgentWebKit.DOM` content world。并非真实输入。content world / frame 重载最低为 11.0 |
 | [takeSnapshot](https://developer.apple.com/documentation/webkit/wkwebview/takesnapshot(with:completionhandler:)) | 10.13 | 截取当前 WebView 视口，不依赖系统屏幕截图权限。后台 Tab 在未显示的非激活 Panel 中保留视图；已检查实际图像内容 |
-| [callAsyncJavaScript](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/API/Cocoa/WKWebView.h) | 11.0 | 0.2.0 的 `evaluate --await` 等待表达式返回的 Promise；宿主另设截止时间，不将超时解释为 JS 已取消 |
+| [callAsyncJavaScript](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/API/Cocoa/WKWebView.h) | 11.0 | `evaluate --await` 等待表达式返回的 Promise；宿主另设截止时间，不将超时解释为 JS 已取消 |
 
 SDK 的 `WKWebsiteDataStore.h` 明确要求先释放使用该 Store 的 WKWebView 再调用 `remove(forIdentifier:)`。删除流程先持久化 tombstone，解除 WebView/窗口引用，跨过一次 AppKit autorelease 周期，再调用公开删除 API；重启时重试未完成的删除。
 
-2026-10-24 的恢复测试发现，即使 Tab 与 Space 对象已经释放，WebKit 仍可能保留空网络会话。[WebKit 的容器删除实现](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/WebsiteData/Cocoa/WebsiteDataStoreCocoa.mm)会分别拒绝活动页面和仍有网络进程的 Store。0.2.0 因此区分网站数据清除与容器移除：先通过公开 removeData / fetchDataRecords 清除并核对，容器清理失败则返回 cleanupPending，保留 tombstone。只有数据确实清除才返回 websiteDataRemoved，只有公开容器删除成功才返回 dataStoreRemoved。
+即使 Tab 与 Space 对象已经释放，WebKit 仍可能保留空网络会话。[WebKit 的容器删除实现](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/WebsiteData/Cocoa/WebsiteDataStoreCocoa.mm)会分别拒绝活动页面和仍有网络进程的 Store。因此区分网站数据清除与容器移除：先通过公开 removeData / fetchDataRecords 清除并核对，容器清理失败则返回 cleanupPending，保留 tombstone。只有数据确实清除才返回 websiteDataRemoved，只有公开容器删除成功才返回 dataStoreRemoved。
 
 Apple 的 [WWDC23 Network Relay 介绍](https://developer.apple.com/videos/play/wwdc2023/10002/) 展示了同一个 `ProxyConfiguration` 用于 Network、URLSession 与 WebKit。HTTP CONNECT 支持 TCP；`allowFailover=false` 禁止代理失败后改走直连。以上说明不能替代路径验证：本机的 loopback 流量没有采用该代理。
 
-## 跨源 iframe 可行性（2026-10-29，#9）
+## 跨源 iframe 可行性
 
 独立 spike 使用公开 `WKUserScript(forMainFrameOnly:false)`、隔离 `WKContentWorld` 的 `WKScriptMessage.frameInfo`，以及 `evaluateJavaScript(in:in:)`。复用当前 DOM.bootstrap，只在实验配置中注入所有 frame，两个 nonPersistent Store 代表 Space、三个 WKWebView 代表 Tab；同组两个 Tab 共享 Store。没有连接产品 daemon 或更改正式命令。
 
@@ -43,9 +43,9 @@ Apple 的 [WWDC23 Network Relay 介绍](https://developer.apple.com/videos/play/
 
 定向 `callAsyncJavaScript` 也能返回隔离文档代号；保留引用的挂起Promise验证150ms宿主超时，另一Store/Tab的异步调用仍可用。未保留引用的Promise曾返回“Completion handler for function call is no longer reachable”；SDK明确允许thenable被GC后报不可达错误，不能把任意不resolve表达式都假定会等到宿主期限。宿主超时不代表取消JS。
 
-结论：公开 API 足以支持受控的跨源定向 DOM bridge，可进入后续独立正式实现；本项完成可行性验证，当前 CLI 仍返回 unsupported_context。正式范围需先确定可寻址 frame/document 目标、父子路由与有界生命周期，不自动按 URL/深度拼接现有 >>>，不扩展到 closed Shadow Root。跨源可见性/坐标、截图/上传/对话框归属、sandbox/opaque origin、进程切换、CSP/跨站跟踪策略和任意网站均未由本 spike 验证，不宣称已支持。
+结论：公开 API 足以支持受控的跨源定向 DOM bridge，但当前 CLI 仍返回 unsupported_context。正式支持需先确定可寻址 frame/document 目标、父子路由与有界生命周期，不自动按 URL/深度拼接现有 >>>，不扩展到 closed Shadow Root。跨源可见性/坐标、截图/上传/对话框归属、sandbox/opaque origin、进程切换、CSP/跨站跟踪策略和任意网站均未由本实验验证。
 
-## 后台 Hover/键盘可行性（2026-10-29，#10）
+## 后台 Hover/键盘可行性
 
 独立实验延续隐藏 nonactivating Panel 的产品视图结构，两个 nonPersistent Store、三个 WKWebView。只创建定向 `NSEvent` 并调用公开 [NSResponder](https://developer.apple.com/documentation/appkit/nsresponder)、[NSWindow](https://developer.apple.com/documentation/appkit/nswindow) 事件/焦点入口；没有激活、Quartz 全局输入或私有 WebKit 调用。以下限本机 macOS 27.2（26B123）、固定 US 键码及受控主文档。
 
@@ -69,7 +69,7 @@ Apple 的 [WWDC23 Network Relay 介绍](https://developer.apple.com/videos/play/
 
 无域限制时，普通 HTTPS 域名实际产生了 CONNECT；本地代理故意返回 403，WebKit 导航失败，没有绕过此代理。另以 `agent-webkit.test` 作为仅由测试代理解析的域名，加载本地站点并比较 TCP 来源端口，证明普通域名的 HTTP 路径也经过了代理。这个附加实验没有替代 localhost 验收，也不能证明 HTTPS、WebSocket、Service Worker、媒体和全部子资源已全面隔离。
 
-上述是首轮 loopback 实验的结论。后续按用户要求，B 改为真实域名经本机 Whistle 映射到本地服务，loopback 路由暂不纳入验收；当前结果见 [VALIDATION.md](VALIDATION.md)。域名映射由 Whistle 完成，浏览器保留原 URL，没有修改系统代理或 hosts。
+代理路径回归使用真实域名经本机 Whistle 映射到本地服务，loopback 路由不作保证；复现方法见[域名代理回归](DEVELOPMENT.md#复现域名代理路径)。域名映射由 Whistle 完成，浏览器保留原 URL，不修改系统代理或 hosts。
 
 ## HTTPS 证书策略
 

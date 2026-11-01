@@ -2,6 +2,8 @@
 
 构建需要 macOS 14+、Command Line Tools / Swift 5.10+；运行应用需已登录的桌面会话。自动验收使用 Python 3，代理与 TLS 验收另需 OpenSSL 和本机已安装的 Whistle；框架页面的 Node.js 依赖见对应回归章节。
 
+测试报告、截图和日志默认写入 Git 已忽略的 `.artifacts/`，不随源码发布。
+
 ```sh
 zsh scripts/build.sh          # debug + 本地 ad-hoc 签名 .app
 zsh scripts/build.sh release  # release + .app
@@ -68,7 +70,7 @@ python3 tests/skill_workflow.py
 
 失败清理逐项尝试删除自有 Space，IPC 或删除错误不会跳过后续清理；daemon 优先正常退出，有界等待失败后仅终止自己的进程，HTTP 服务始终独立关闭。清理错误保存为 `cleanup-errors.json`，原测试异常继续上抛；若只有清理失败，整轮仍失败，不生成成功报告。此时数据删除可能未完成，不能把停止进程当作删除 Space。`python3 -m unittest discover -s tests -p test_skill_cleanup.py -v` 注入断连、删除/退出失败、有界终止及 HTTP 关闭错误，不调用模型或操作已有服务。
 
-显式路径调用不等于安装后的自动发现验证。2026-10-29 用户因本机没有 Pi，明确豁免 #7 的 Pi 调用与失败恢复实测；该项按豁免验收完成，不宣称 Pi 实测通过。普通可靠性、代理与公网回归不依赖 Codex 或 Pi。
+该测试覆盖 Codex CLI 的显式路径调用，不包含技能安装后的自动发现或 Pi 调用验证。普通可靠性、代理与公网回归不依赖 Codex 或 Pi。
 
 ## 下载与原生文件选择
 
@@ -141,7 +143,7 @@ React、Vue 和 Vite 的测试依赖版本由 `tests/forms/package.json` 和 `pa
 
 React fixture 使用 value/onChange，Vue 使用 v-model，分别验证 input/textarea/select/checkbox、中文/多行/空值、key 改变后的状态保留及旧引用失效、disabled/readOnly、服务端拒绝提交。成功必须同时满足框架渲染状态、真实 POST 数据和服务端随机 nonce；完整运行应只有 6 次提交，超时等待不能重放请求。该页还验证 contenteditable 整段纯文本替换、非可信 InputEvent 和 aria-readonly，并保存后台截图、核对前台 PID。表单写入沿用目标 realm 的原生 setter，文本 input 事件带 `inputType=insertReplacementText`，select 保持普通 input/change 事件；不模拟 beforeinput、输入法组合、选区或第三方富文本编辑器私有状态。
 
-表单模式只通过 Direct 加载本地 Vite 页面，**不是** Vite + Whistle 的域名/WSS/HMR 验收；后者使用下面的独立入口，真实第三方站点回归仍由 Issue #1 跟踪。框架用法依据 [React 受控输入](https://react.dev/reference/react-dom/components/input)与 [Vue 表单绑定](https://vuejs.org/guide/essentials/forms.html)，兼容性结论仅来自本仓库实际运行的这些用例。
+表单模式只通过 Direct 加载本地 Vite 页面；Vite + Whistle 的域名/WSS/HMR 和真实第三方站点回归使用下方的独立入口。框架用法依据 [React 受控输入](https://react.dev/reference/react-dom/components/input)与 [Vue 表单绑定](https://vuejs.org/guide/essentials/forms.html)，兼容性结论仅来自本仓库实际运行的这些用例。
 
 WebKit 在 DOM click 切换 checkbox 后，可能把派生的 input 事件标为 `isTrusted=true`；发起它的 click 仍是 false，也不证明有原生用户激活。测试分别记录 checkbox 的 click 与 input，以及 fill 主动派发的非可信 InputEvent，避免把这些事件混为一谈。
 
@@ -435,7 +437,7 @@ Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 
 
 输出 `.artifacts/input-probe-*/` 下的构建/运行日志、原生状态与事件、POST 记录和综合报告；只有进程退出、fixture 端口关闭、结果断言通过后才写成功报告。测试会改变独立页面的焦点和表单，前台 PID/应用激活通知同时监测。失败保留已有报告和日志；宿主超时不等于取消 JS，也不自动重放输入。
 
-结果和未测范围见 [RESEARCH](RESEARCH.md) 与 [VALIDATION](VALIDATION.md)。实验确认部分后台键盘默认行为，未确认隐藏 Panel 的 CSS hover 或 Command-A 全选；报告对 hover 标记 `requiresForeground=true`，表示需人工前台接管，未实测自动前台注入。正式 CLI 没有新增 hover/key/focus 命令。
+实验结论和未测范围见[实现依据](RESEARCH.md#后台-hover键盘可行性)。实验确认部分后台键盘默认行为，未确认隐藏 Panel 的 CSS hover 或 Command-A 全选；报告对 hover 标记 `requiresForeground=true`，表示需人工前台接管，未实测自动前台注入。正式 CLI 不提供 hover/key/focus 命令。
 
 ## 逐步计时
 

@@ -86,6 +86,5 @@ awb open https://example.com --space dev
 ## 更多文档
 
 - [开发说明](docs/DEVELOPMENT.md)：CLI 契约、代理与证书、诊断、存储、构建和测试。
-- [验收记录](docs/VALIDATION.md)：实际运行证据、失败和未测范围。
 - [实现依据](docs/RESEARCH.md)：参考项目与 API 选择。
 - [第三方许可](THIRD_PARTY_NOTICES.md)。
