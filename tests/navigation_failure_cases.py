@@ -57,6 +57,20 @@ def verify_navigation_failures(cli, base, out, events):
         assert result['page']['url'] == destination and result['page']['lastError'] is None, result
         assert requests(destination) == before + 1, 'Navigation action was replayed'
 
+        # A previous open can time out before its failure callback arrives.
+        # That failure belongs to the older sequence even though it is received after click.
+        pending_destination = base + '?navigation=after-pending-failure'
+        js(f'const b=document.createElement("button");b.id="pending-retry";b.onclick=()=>setTimeout(()=>location.href={json.dumps(pending_destination)},1000);document.body.append(b);true')
+        pending_failure = urljoin(base, '/download-redirect?' + urlencode(dict(
+            to='http://127.0.0.1:1/late-old-failure', delay='0.6')))
+        command('open', pending_failure, '--timeout', '100', error='timeout')
+        before = requests(pending_destination)
+        started = time.monotonic()
+        result = command('click', '#pending-retry', '--wait-for-navigation', '--timeout', '4000')
+        assert time.monotonic() - started >= .9, 'A pending old failure terminated the new wait'
+        assert result['page']['url'] == pending_destination and result['page']['lastError'] is None, result
+        assert requests(pending_destination) == before + 1, 'Pending-navigation recovery replayed the click'
+
         js('const b=document.createElement("button");b.id="new-failure";b.onclick=()=>setTimeout(()=>location.href="http://127.0.0.1:7/new-failure",250);document.body.append(b);true')
         command('open', 'http://127.0.0.1:1/old-failure', error='operation_failed')
         started = time.monotonic()
@@ -94,6 +108,7 @@ def verify_navigation_failures(cli, base, out, events):
             assert js('({marker:unsavedMarker,draft:document.querySelector("#not-file").value})') == dict(marker='keep me', draft='unsaved draft')
             assert requests(attachment) == before_requests + 1, (kind, 'Download was replayed')
         report = dict(passed=True, historicalErrorPreserved=True, newClickWaitIgnoresOldError=True,
+                      pendingOldFailureDoesNotAbortNewClick=True,
                       newFailureReported=True, noNavigationTimesOut=True, noActionReplay=True,
                       downloadTransitions=['attribute', 'plain', 'redirect', 'open', 'navigation-wait', 'frame'],
                       intactDocumentAndDraftPreserved=True, evidence=evidence)

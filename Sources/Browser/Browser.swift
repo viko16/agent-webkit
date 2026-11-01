@@ -73,8 +73,13 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     var inputDocumentEpoch: String?
     var inputFocusConflict: (() -> Bool)?
     private(set) var navigationErrorRevision = 0
+    // Space/policy errors have no navigation token; callback failures carry their owning sequence.
+    private var navigationErrorSequence: Int?
     var navigationError: Error? {
-        didSet { if navigationError != nil { navigationErrorRevision += 1 } }
+        didSet {
+            navigationErrorSequence = nil
+            if navigationError != nil { navigationErrorRevision += 1 }
+        }
     }
     var changed: (() -> Void)?
     var statusChanged: (() -> Void)?
@@ -387,7 +392,9 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         let start = monotonicNow()
         repeat {
             if terminated { throw BrowserError("web_content_terminated", "WebContent 进程已退出，请 reload") }
-            if navigationErrorRevision > errorRevision, let navigationError { throw navigationError }
+            if navigationErrorRevision > errorRevision,
+               navigationErrorSequence.map({ $0 > sequence }) ?? true,
+               let navigationError { throw navigationError }
             if let lastNavigationRejection { throw lastNavigationRejection }
             if navigationSequence > sequence, !navigationPending, completedNavigationSequence == navigationSequence {
                 guard !completedNavigationWasDownload else {
@@ -610,9 +617,14 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
             return
         }
         recordNavigation("navigation-failed", navigation: navigation, error: error)
+        let failedSequence = navigationSpan(navigation)?.sequence ?? navigationSequence
         let latest = finishNavigation(navigation)
         // A replacement load cancels the previous request. Its late failure must not poison the new one.
-        if latest { navigationError = certificateError ?? error; changed?() }
+        if latest {
+            navigationError = certificateError ?? error
+            navigationErrorSequence = failedSequence
+            changed?()
+        }
     }
     private func recordNavigation(_ kind: String, navigation: WKNavigation?, error: Error? = nil) {
         let span = navigationSpan(navigation)
