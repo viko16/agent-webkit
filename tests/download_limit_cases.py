@@ -218,12 +218,22 @@ def run_case(case, configured, out, binary):
                 assert failed['status'] == 'failed' and failed['error'] == 'download_budget_timeout', failed
                 assert failed['path'] is None and folder.exists(), failed
                 assert files[0].read_bytes() == b'x' * 1024, 'Unfinished scan lost access to its file'
+                assert cli('state', '--space', 'limit-a')['page']['activeDownloads']
+                cli('space', 'suspend', 'limit-a', error='space_busy')
+                active = cli('space', 'info', 'limit-a')
+                assert active['lifecycle'] == 'active' and active['liveWebViews'] == 1, active
+                assert active['defaultTabId'] == created[0]['defaultTabId']
                 assert wait(begin('#small', 'limit-b'), 'limit-b')['status'] == 'completed'
                 (final_gate / 'release').touch()
                 wait_until(lambda: (final_gate / 'retained').exists(), 'File was deleted before the scan returned')
                 wait_until(lambda: not folder.exists(), 'Late scan did not release failed data')
                 assert wait(download) == failed, 'Late scan changed the terminal result'
                 assert cli('download', 'cancel', download, '--space', 'limit-a')['value'] == failed
+                assert not cli('state', '--space', 'limit-a')['page']['activeDownloads']
+                cli('space', 'suspend', 'limit-a')
+                cli('space', 'resume', 'limit-a')
+                cli('wait', '#small', '--space', 'limit-a')
+                completed = wait(begin('#small'))
             elif case == 'file':
                 assert_failed(wait(begin('#large')), 'download_file_limit')
                 assert_failed(wait(begin('#stream')), 'download_file_limit')
@@ -349,9 +359,12 @@ def main():
     from download_budget_cases import verify_concurrent_budgets
     if not args.case:
         results.extend(verify_concurrent_budgets(out, binary))
-    report = dict(passed=True, cases=results, completedFilesRetained=True,
-                  restartAccounting=True, unknownLengthStreamBounded=True, cancellationAcknowledged=True)
-    report['sharedBackgroundScanAndLateCancellation'] = True
+    report = dict(passed=True, cases=results)
+    if args.case:
+        report['selectedCase'] = args.case
+    else:
+        report.update(completedFilesRetained=True, restartAccounting=True, unknownLengthStreamBounded=True,
+                      cancellationAcknowledged=True, sharedBackgroundScanAndLateCancellation=True)
     (out / 'report.json').write_text(json.dumps(report, indent=2))
     print(json.dumps(dict(report=str(out / 'report.json'), passed=True)))
 

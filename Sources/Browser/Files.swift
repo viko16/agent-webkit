@@ -162,7 +162,8 @@ final class DownloadStore: NSObject, WKDownloadDelegate {
     private let limits = Limits()
     private var monitor: Timer?
     private var monitorTask: Task<Void, Never>?
-    var hasActive: Bool { entries.contains { $0.status == "running" } }
+    // A timed-out validation still owns file access and its runtime capacity.
+    var hasActive: Bool { entries.contains { $0.status == "running" || $0.finishing } }
 
     func begin(_ download: WKDownload) {
         guard !stopped else {
@@ -284,7 +285,7 @@ final class DownloadStore: NSObject, WKDownloadDelegate {
         entries[index].download = nil
         // Completed downloads are user files; incomplete data is never reported as a result.
         if status != "completed", !entries[index].finishing { cleanup(index) }
-        if !hasActive { monitor?.invalidate(); monitor = nil }
+        if !entries.contains(where: { $0.status == "running" }) { monitor?.invalidate(); monitor = nil }
     }
     private func cleanup(_ index: Int) {
         if let directory {
