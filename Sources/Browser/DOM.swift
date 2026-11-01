@@ -83,7 +83,13 @@ enum DOM {
         for (let node=el; node; node=node.parentElement || node.getRootNode().host || node.ownerDocument.defaultView?.frameElement) {
           if(charge&&!charge()) return false;
           const style=node.ownerDocument.defaultView.getComputedStyle(node);
-          if (Number(style.opacity)===0 || style.display==='none' || style.visibility!=='visible' || node.hidden || node.inert) return false;
+          if (Number(style.opacity)===0 || style.display==='none' || node.hidden || node.inert) return false;
+          // Visibility inherits within a document (including shadow trees), but
+          // a hidden frame cannot be made visible by its document's descendants.
+          if(node.localName==='iframe'||node.localName==='frame') {
+            const bounds=node.getBoundingClientRect();
+            if(style.visibility!=='visible'||bounds.width<=0||bounds.height<=0) return false;
+          }
         }
         return true;
       }
@@ -124,10 +130,11 @@ enum DOM {
             if(!chargeScan()) return null;
             pending.push(node); node=node.parentElement;
           }
-          let info=node?textStyles.get(node):{shown:true,block:null,excluded:false};
+          let info=node?textStyles.get(node):{subtreeShown:true,block:null,excluded:false};
           for(const element of pending.reverse()) {
             const style=element.ownerDocument.defaultView.getComputedStyle(element);
-            info={shown:info.shown&&style.display!=='none'&&style.visibility==='visible'&&Number(style.opacity)!==0&&!element.hidden&&!element.inert,
+            const subtreeShown=info.subtreeShown&&style.display!=='none'&&Number(style.opacity)!==0&&!element.hidden&&!element.inert;
+            info={subtreeShown,shown:subtreeShown&&style.visibility==='visible',
                   block:blockDisplays.has(style.display)?element:info.block,
                   excluded:info.excluded||['script','style','noscript','template'].includes(element.localName)};
             textStyles.set(element,info);
@@ -244,7 +251,13 @@ enum DOM {
         const el=resolve(target);
         if (!visible(el) || el.matches(':disabled') || el.getAttribute('aria-disabled')==='true') throw new Error('element_not_actionable');
         el.scrollIntoView({block:'nearest'});
-        if(kind==='click') el.click();
+        if(kind==='click') {
+          if(typeof el.click==='function') el.click();
+          else {
+            const view=el.ownerDocument.defaultView;
+            el.dispatchEvent(new view.MouseEvent('click',{bubbles:true,cancelable:true,composed:true,view}));
+          }
+        }
         else {
           if (el.readOnly || el.getAttribute('aria-readonly')==='true') throw new Error('element_readonly');
           const view=el.ownerDocument.defaultView, tag=el.localName;

@@ -28,6 +28,7 @@ from download_cases import verify_downloads
 from upload_cases import verify_uploads
 from screenshot_cases import verify_screenshots, verify_fullpage
 from state_integrity_cases import verify_state_integrity
+from navigation_failure_cases import verify_navigation_failures
 from direct_conflict_cases import verify_proxy_summary
 from capacity_cases import verify_capacity
 from snapshot_budget_cases import verify_snapshot_budget
@@ -127,6 +128,7 @@ def main():
             return
         if args.integrity_only:
             checks.append(verify_state_integrity(cli, base, out, start, stop, state))
+            checks.append(verify_navigation_failures(cli, base, out, site_events))
             checks.append(verify_proxy_summary(cli, start, stop, out, base))
             report = dict(ok=True, checks=checks, artifacts=str(out))
             return
@@ -165,6 +167,7 @@ def main():
             report = dict(ok=True, checks=checks, artifacts=str(out))
             return
         checks.append(verify_state_integrity(cli, base, out, start, stop, state))
+        checks.append(verify_navigation_failures(cli, base, out, site_events))
         checks.append(verify_proxy_summary(cli, start, stop, out, base))
         checks.append(verify_capacity(cli, base, out, start, stop, state))
         checks.append(verify_snapshot_budget(cli, base, out))

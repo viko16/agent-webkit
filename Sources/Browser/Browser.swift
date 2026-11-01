@@ -72,7 +72,10 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     let frames = FrameStore()
     var inputDocumentEpoch: String?
     var inputFocusConflict: (() -> Bool)?
-    var navigationError: Error?
+    private(set) var navigationErrorRevision = 0
+    var navigationError: Error? {
+        didSet { if navigationError != nil { navigationErrorRevision += 1 } }
+    }
     var changed: (() -> Void)?
     var statusChanged: (() -> Void)?
     var networkCheck: (() throws -> Void)?
@@ -104,10 +107,13 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         let timing: RequestTiming?
         let token: Int?
         let sequence: Int
+        var becameDownload = false
     }
     private var navigationSpans: [ObjectIdentifier: NavigationSpan] = [:]
     private(set) var navigationSequence = 0
     private var completedNavigationSequence = 0
+    private var completedNavigationWasDownload = false
+    private weak var provisionalNavigation: WKNavigation?
     private(set) var navigationPending = false
     private var navigationStartedAt: UInt64?
 
@@ -362,7 +368,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
 
     @discardableResult
-    private func finishNavigation(_ navigation: WKNavigation?) -> Bool {
+    private func finishNavigation(_ navigation: WKNavigation?, becameDownload: Bool = false) -> Bool {
         discardReleasedNavigations()
         let span = navigationSpan(navigation)
         if span != nil, let navigation { navigationSpans.removeValue(forKey: ObjectIdentifier(navigation)) }
@@ -370,18 +376,25 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         let latest = span.map { $0.sequence == navigationSequence } ?? navigationPending
         if latest {
             completedNavigationSequence = navigationSequence
+            completedNavigationWasDownload = becameDownload
             navigationPending = false
         }
+        if provisionalNavigation === navigation { provisionalNavigation = nil }
         return latest
     }
 
-    func waitForNavigation(after sequence: Int, timeout: Int) async throws {
+    func waitForNavigation(after sequence: Int, errorRevision: Int, timeout: Int) async throws {
         let start = monotonicNow()
         repeat {
             if terminated { throw BrowserError("web_content_terminated", "WebContent 进程已退出，请 reload") }
-            if let navigationError { throw navigationError }
+            if navigationErrorRevision > errorRevision, let navigationError { throw navigationError }
             if let lastNavigationRejection { throw lastNavigationRejection }
-            if navigationSequence > sequence, !navigationPending, completedNavigationSequence == navigationSequence { return }
+            if navigationSequence > sequence, !navigationPending, completedNavigationSequence == navigationSequence {
+                guard !completedNavigationWasDownload else {
+                    throw BrowserError("unsupported_navigation", "点击已转为下载，没有产生新的页面文档；请查询 download list 核对下载，不要重复点击")
+                }
+                return
+            }
             try await Task.sleep(nanoseconds: 50_000_000)
         } while milliseconds(from: start) < Double(timeout) && (deadline.map { monotonicNow() < $0 } ?? true)
         throw BrowserError("timeout", "点击后等待新导航完成超时（\(timeout) ms）；同页锚点或 SPA 跳转不会触发完整导航")
@@ -566,6 +579,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         certificateError = nil
         if !navigationPending { navigationStartedAt = monotonicNow() }
         navigationPending = true
+        provisionalNavigation = navigation
         if let navigation { trackNavigation(navigation, start: monotonicNow()) }
         changed?()
     }
@@ -586,8 +600,15 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
     private func failNavigation(_ navigation: WKNavigation?, error: Error) {
         // Unknown cancelled callbacks may belong to a superseded navigation.
+        let native = error as NSError
         if navigationSpan(navigation) == nil,
-           (error as NSError).domain == NSURLErrorDomain, (error as NSError).code == NSURLErrorCancelled { return }
+           native.domain == NSURLErrorDomain, native.code == NSURLErrorCancelled { return }
+        if navigationSpan(navigation)?.becameDownload == true {
+            recordNavigation("navigation-download", navigation: navigation)
+            finishNavigation(navigation, becameDownload: true)
+            changed?()
+            return
+        }
         recordNavigation("navigation-failed", navigation: navigation, error: error)
         let latest = finishNavigation(navigation)
         // A replacement load cancels the previous request. Its late failure must not poison the new one.
@@ -609,6 +630,9 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
             diagnostics.native("navigation-response", url: response.url, status: response.statusCode)
         }
         if !navigationResponse.canShowMIMEType || (navigationResponse.response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Disposition")?.lowercased().contains("attachment") == true {
+            if navigationResponse.isForMainFrame, let navigation = provisionalNavigation, navigationSpan(navigation) != nil {
+                navigationSpans[ObjectIdentifier(navigation)]?.becameDownload = true
+            }
             decisionHandler(.download)
         } else { decisionHandler(.allow) }
     }
@@ -1364,10 +1388,11 @@ final class BrowserModel {
         case "evaluate": value = try await tab.runJS(arg(0), awaitPromise: r.options["await"] == "true")
         case "click", "fill":
             let before = tab.navigationSequence
+            let beforeError = tab.navigationErrorRevision
             let beforePopup = tab.popupSequence
             tab.lastNavigationRejection = nil
             value = try await tab.runJS("window.__agentWebKit.act(\(try quoteJS(command)),\(try quoteJS(arg(0))),\(try quoteJS(command == "fill" ? arg(1) : "")))", world: DOM.world, frameID: r.options["frame"])
-            if r.options["wait-for-navigation"] == "true" { try await tab.waitForNavigation(after: before, timeout: timeout) }
+            if r.options["wait-for-navigation"] == "true" { try await tab.waitForNavigation(after: before, errorRevision: beforeError, timeout: timeout) }
             if r.options["wait-for-popup"] == "true" {
                 let popupID = try await tab.waitForPopup(after: beforePopup, timeout: timeout)
                 var action = value as? [String: Any] ?? [:]

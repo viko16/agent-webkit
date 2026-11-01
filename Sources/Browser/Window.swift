@@ -481,7 +481,8 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         }
         window.toolbar?.items.first { $0.itemIdentifier == .newTab }?.isEnabled = canCreateTab
     }
-    private var canCreateTab: Bool { !model.restoring && !creatingTab && currentSpace?.busy != true }
+    private var newTabSpace: Space? { currentSpace ?? model.spaces.first { $0.record.name == "personal" } ?? model.spaces.first }
+    private var canCreateTab: Bool { !model.restoring && !creatingTab && newTabSpace?.busy != true }
     private var canReload: Bool { displayed != nil && currentSpace?.busy == false && !model.restoring }
     private func resizeTabs() {
         let available = host.bounds.width - 20 - CGFloat(max(0, tabWidths.count - 1)) * 6
@@ -514,7 +515,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     }
     @objc func newTab(_ sender: Any?) {
         guard canCreateTab else { NSSound.beep(); return }
-        let spaceID = currentSpace?.record.id
+        let spaceID = newTabSpace?.record.id
         creatingTab = true; updateStatus()
         Task { @MainActor in
             defer { creatingTab = false; refresh(); focusAddress(nil) }

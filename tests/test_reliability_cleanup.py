@@ -81,6 +81,7 @@ class ReliabilityCleanupTests(unittest.TestCase):
             stack.enter_context(patch.object(reliability.subprocess, 'Popen', side_effect=launch))
             verification = stack.enter_context(patch.object(reliability, 'verify_cleanup'))
             for name in ('verify_offline', 'verify_capacity', 'verify_snapshot_budget', 'verify_state_integrity',
+                         'verify_navigation_failures',
                          'verify_proxy_summary', 'verify_screenshots', 'verify_fullpage', 'verify_uploads',
                          'verify_downloads', 'verify_lifecycle', 'verify_dialogs', 'verify_diagnostics',
                          'verify_detailed_diagnostics', 'verify_pending_store_only', 'verify_store_cleanup_failures',

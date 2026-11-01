@@ -1,6 +1,7 @@
 import Foundation
 import Security
 import CryptoKit
+import Darwin
 
 struct TLSConfiguration: Codable {
     let certificateDER: Data?
@@ -15,8 +16,23 @@ struct TLSConfiguration: Codable {
 
     init(path: String) throws {
         ignoreCertificateErrors = false
-        let data = try Data(contentsOf: URL(fileURLWithPath: path))
-        guard data.count <= 1_048_576 else { throw BrowserError("invalid_certificate", "CA 文件超过 1 MiB") }
+        guard !path.utf8.contains(0) else { throw CocoaError(.fileReadInvalidFileName) }
+        // Nonblocking open also lets us reject FIFOs without waiting for a writer.
+        let descriptor = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
+        guard descriptor >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        defer { try? handle.close() }
+        var metadata = stat()
+        guard fstat(descriptor, &metadata) == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+        guard metadata.st_mode & S_IFMT == S_IFREG else { throw CocoaError(.fileReadUnknown) }
+        let limit = 1_048_576
+        var data = Data()
+        // Bound the reads themselves: the file can grow after fstat.
+        while data.count <= limit {
+            guard let chunk = try handle.read(upToCount: limit + 1 - data.count), !chunk.isEmpty else { break }
+            data.append(chunk)
+        }
+        guard data.count <= limit else { throw BrowserError("invalid_certificate", "CA 文件超过 1 MiB") }
         if let pem = String(data: data, encoding: .utf8), pem.contains("-----BEGIN CERTIFICATE-----") {
             let parts = pem.components(separatedBy: "-----BEGIN CERTIFICATE-----")
             guard parts.count == 2, let body = parts.last?.components(separatedBy: "-----END CERTIFICATE-----").first,
