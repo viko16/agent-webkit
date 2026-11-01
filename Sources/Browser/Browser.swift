@@ -1133,18 +1133,27 @@ final class BrowserModel {
         if command == "capabilities" { return CLIContract.capabilities }
         if command == "version" { return ["version": productVersion] }
         if command == "status" {
+            let liveWebViews = spaces.reduce(0) { $0 + $1.tabs.count }
+            let pendingStores: [[String: String]] = records.filter(\.deleting).map {
+                ["spaceId": $0.id.uuidString, "name": $0.name]
+            }
+            let cleanupErrors: [[String: Any]] = storeCleanupErrors.map {
+                ["spaceId": $0.key.uuidString, "error": $0.value]
+            }
+            let blockedSpaceIDs = spaces.filter { $0.networkError != nil }.map { $0.record.id.uuidString }
+            let capabilities: [String: Any] = ["input":"dom-synthetic", "keyboard":"explicit focus/key; limited directed AppKit events, main document/open shadow only", "snapshot":"same-origin-frames-and-open-shadow-roots", "crossOriginDOM":"frame list + explicit --tab/--frame for snapshot/click/fill/wait", "screenshot":"viewport", "screenshotModes":["viewport", "element", "full-page"], "foregroundRequired":false]
             return ["version": productVersion, "pid": ProcessInfo.processInfo.processIdentifier, "spaces": spaces.count,
                     "ready": !restoring,
                     "shutdownImpact": shutdownImpact,
-                    "liveWebViews": spaces.reduce(0) { $0 + $1.tabs.count },
+                    "liveWebViews": liveWebViews,
                     "resourceLimits": limits.summary,
                     "observer": observerState?() ?? [:],
-                    "pendingStoreCleanup": records.filter(\.deleting).count,
-                    "pendingStores": records.filter(\.deleting).map { ["spaceId": $0.id.uuidString, "name": $0.name] },
-                    "storeCleanupErrors": storeCleanupErrors.map { ["spaceId": $0.key.uuidString, "error": $0.value] as [String: Any] },
-                    "blockedSpaces": spaces.filter { $0.networkError != nil }.map { $0.record.id.uuidString },
+                    "pendingStoreCleanup": pendingStores.count,
+                    "pendingStores": pendingStores,
+                    "storeCleanupErrors": cleanupErrors,
+                    "blockedSpaces": blockedSpaceIDs,
                     "systemProxy": systemProxySummary(), "frontmostPid": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1,
-                    "capabilities": ["input":"dom-synthetic", "keyboard":"explicit focus/key; limited directed AppKit events, main document/open shadow only", "snapshot":"same-origin-frames-and-open-shadow-roots", "crossOriginDOM":"frame list + explicit --tab/--frame for snapshot/click/fill/wait", "screenshot":"viewport", "screenshotModes":["viewport", "element", "full-page"], "foregroundRequired":false],
+                    "capabilities": capabilities,
                     "directPolicy":"reject-enabled-system-proxy; no VPN/content-filter bypass guarantee"] as [String: Any]
         }
         if command == "shutdown" {
