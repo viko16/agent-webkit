@@ -168,9 +168,9 @@ final class DownloadStore: NSObject, WKDownloadDelegate {
         guard !stopped else {
             download.cancel(nil); return
         }
-        if entries.count >= 64, let index = entries.firstIndex(where: { $0.status != "running" }) { entries.remove(at: index) }
+        if entries.count >= 64, let index = entries.firstIndex(where: { $0.status != "running" && !$0.finishing }) { entries.remove(at: index) }
         let id = UUID().uuidString
-        guard entries.filter({ $0.status == "running" }).count < 8 else {
+        guard entries.filter({ $0.status == "running" || $0.finishing }).count < 8 else {
             entries.append(Entry(id: id, status: "failed", error: "download_capacity"))
             download.cancel(nil); return
         }
@@ -227,18 +227,35 @@ final class DownloadStore: NSObject, WKDownloadDelegate {
     }
 
     func downloadDidFinish(_ download: WKDownload) {
-        guard let index = index(download), entries[index].status == "running", !entries[index].cancelling else { return }
+        guard let index = index(download), entries[index].status == "running", !entries[index].cancelling, !entries[index].finishing else { return }
         entries[index].finishing = true
         let id = entries[index].id
+        entries[index].timer?.cancel()
+        let timer = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, let index = self.entries.firstIndex(where: { $0.id == id }), self.entries[index].finishing else { return }
+                // A deadline bounds the result, not the detached file-system work.
+                self.finish(index, status: "failed", error: "download_budget_timeout")
+            }
+        }
+        entries[index].timer = timer
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: timer)
         Task {
+            let validationError: String?
             do {
                 let error = try await limitError(id, refresh: true)
-                guard let index = entries.firstIndex(where: { $0.id == id }), entries[index].status == "running", !entries[index].cancelling else { return }
-                finish(index, status: error == nil ? "completed" : "failed", error: error?.code)
+                validationError = error?.code
             } catch {
-                if let index = entries.firstIndex(where: { $0.id == id }), entries[index].status == "running", !entries[index].cancelling {
-                    finish(index, status: "failed", error: "download_budget_unavailable")
-                }
+                validationError = "download_budget_unavailable"
+            }
+            guard let index = entries.firstIndex(where: { $0.id == id }) else { return }
+            if entries[index].status == "running" {
+                finish(index, status: validationError == nil ? "completed" : "failed", error: validationError)
+            }
+            entries[index].finishing = false
+            if entries[index].status != "completed" {
+                // Only the returning scan releases file access. Never revive a timed-out result.
+                cleanup(index)
             }
         }
     }
@@ -266,13 +283,16 @@ final class DownloadStore: NSObject, WKDownloadDelegate {
         entries[index].timer?.cancel(); entries[index].timer = nil
         entries[index].download = nil
         // Completed downloads are user files; incomplete data is never reported as a result.
-        if status != "completed", let directory {
+        if status != "completed", !entries[index].finishing { cleanup(index) }
+        if !hasActive { monitor?.invalidate(); monitor = nil }
+    }
+    private func cleanup(_ index: Int) {
+        if let directory {
             let folder = directory.appendingPathComponent(entries[index].id, isDirectory: true)
             do {
                 if FileManager.default.fileExists(atPath: folder.path) { try FileManager.default.removeItem(at: folder) }
             } catch { entries[index].cleanupError = error.localizedDescription }
         }
-        if !hasActive { monitor?.invalidate(); monitor = nil }
     }
     private func requestCancel(_ id: String, reason: String = "download_cancelled", status: String = "cancelled") {
         guard let index = entries.firstIndex(where: { $0.id.lowercased() == id.lowercased() }),
@@ -303,8 +323,11 @@ final class DownloadStore: NSObject, WKDownloadDelegate {
         for id in entries.filter({ $0.status == "running" }).map(\.id) { requestCancel(id) }
     }
     private func received(_ entry: Entry) -> Int64 {
-        max(entry.bytesReceived, max(entry.download?.progress.completedUnitCount ?? 0,
-            entry.path.flatMap { try? $0.resourceValues(forKeys: [.fileSizeKey]).fileSize }.map(Int64.init) ?? 0))
+        // Final validation may be stuck in file-system I/O. Its deadline and
+        // ordinary state queries must not repeat metadata reads on the main actor.
+        let inspectFile = entry.status == "running" && !entry.finishing
+        return max(entry.bytesReceived, max(entry.download?.progress.completedUnitCount ?? 0,
+            inspectFile ? entry.path.flatMap { try? $0.resourceValues(forKeys: [.fileSizeKey]).fileSize }.map(Int64.init) ?? 0 : 0))
     }
     private func limitError(_ id: String, expected: Int64 = 0, refresh: Bool = false) async throws -> BrowserError? {
         guard let directory else { return BrowserError("download_failed", "下载目录不可用") }
@@ -313,10 +336,11 @@ final class DownloadStore: NSObject, WKDownloadDelegate {
         let root = directory.deletingLastPathComponent().deletingLastPathComponent()
         let usage = try await DownloadBudget.shared.usage(root, refresh: refresh)
         guard let index = entries.firstIndex(where: { $0.id == id }), entries[index].status == "running", !entries[index].cancelling else { return nil }
-        let bytes = received(entries[index])
+        let accounted = entries[index].path.flatMap { usage.files[$0.resolvingSymlinksInPath().path] } ?? 0
+        let bytes = max(received(entries[index]), accounted)
+        entries[index].bytesReceived = bytes
         let expected = max(0, expected)
         if max(bytes, expected) > limits.file { return BrowserError("download_file_limit", "下载超过单文件字节限额") }
-        let accounted = entries[index].path.flatMap { usage.files[$0.resolvingSymlinksInPath().path] } ?? 0
         let reservation = max(0, max(bytes, expected) - accounted)
         let spaceBytes = usage.spaces[directory.deletingLastPathComponent().lastPathComponent] ?? 0
         if spaceBytes > limits.space || reservation > limits.space - spaceBytes { return BrowserError("download_space_limit", "下载超过 Space 累计字节限额") }

@@ -220,6 +220,16 @@ def verify_frames(cli, out, restart):
                 descendant = next(f['frameId'] for f in documents() if f['frameId'] in leaves)
                 command('click', '#navigate', frame=children[1])
                 command('fill', '#same', 'WRONG', frame=descendant, error='stale_frame')
+                old_documents = {f['frameId'] for f in documents() if not f['mainFrame']}
+                js('document.querySelectorAll("iframe").forEach(el=>el.replaceWith(el.cloneNode()));true')
+                replacements = loaded()
+                assert not old_documents & {f['frameId'] for f in replacements}
+                for old_id in old_documents:
+                    command('fill', '#same', 'WRONG', frame=old_id, error='stale_frame')
+                for item in replacements:
+                    if not item['mainFrame']:
+                        snapshot = command('snapshot', frame=item['frameId'])['value']
+                        assert next(e['value'] for e in snapshot['elements'] if e['tag'] == 'input') == ''
                 # Registration order does not identify #one versus #two.
                 before_remove = [f['frameId'] for f in documents() if not f['mainFrame']]
                 js('document.querySelectorAll("iframe").forEach(el=>el.remove());true')

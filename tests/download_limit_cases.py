@@ -1,5 +1,6 @@
 """Real native download limits, restart accounting and acknowledged cancellation."""
 import http.server
+import argparse
 from concurrent.futures import ThreadPoolExecutor
 import json
 import os
@@ -29,6 +30,22 @@ def fixture_app(out):
         copied = out / path.name
         source = path.read_text()
         if path.name == 'Files.swift':
+            marker = 'if refresh { return try await Task.detached(priority: .utility) { try Self.scan(root) }.value }'
+            assert source.count(marker) == 1
+            source = source.replace(marker, '''if refresh { return try await Task.detached(priority: .utility) {
+            let result = try Self.scan(root)
+            if let gate = ProcessInfo.processInfo.environment["BROWSER_TEST_FINAL_SCAN_GATE"],
+               (try? FileManager.default.createDirectory(atPath: gate + "/claimed", withIntermediateDirectories: false)) != nil {
+                FileManager.default.createFile(atPath: gate + "/sampled", contents: nil)
+                while !FileManager.default.fileExists(atPath: gate + "/release") {
+                    Thread.sleep(forTimeInterval: 0.005)
+                }
+                // The underlying scan still has access to its files after the caller's deadline.
+                let retained = result.files.keys.allSatisfy { FileManager.default.fileExists(atPath: $0) }
+                FileManager.default.createFile(atPath: gate + (retained ? "/retained" : "/deleted-early"), contents: nil)
+            }
+            return result
+        }.value }''')
             marker = '        entries[index].finishing = true\n'
             assert source.count(marker) == 1
             source = source.replace(marker, marker + '        fputs("DOWNLOAD-FINISH\\\\n", stderr)\n')
@@ -116,8 +133,12 @@ def run_case(case, configured, out, binary):
                **{'BROWSER_DOWNLOAD_' + key: str(value) for key, value in settings.items()})
     if case == 'responsive':
         env['BROWSER_TEST_SLOW_BUDGET_SCAN'] = '1'
-    if case in ('finish-cancel', 'finish-over-budget', 'finish-timeout'):
-        env['BROWSER_TEST_FINISH_DELAY'] = '6' if case == 'finish-timeout' else '2'
+    if case in ('finish-cancel', 'finish-over-budget'):
+        env['BROWSER_TEST_FINISH_DELAY'] = '2'
+    final_gate = out / 'final-scan-gate'
+    if case == 'final-scan-timeout':
+        final_gate.mkdir()
+        env['BROWSER_TEST_FINAL_SCAN_GATE'] = str(final_gate)
     site = download_site()
     base = f'http://127.0.0.1:{site.server_port}/'
     daemon = None
@@ -179,7 +200,31 @@ def run_case(case, configured, out, binary):
             assert limits == dict(fileBytes=settings['MAX_FILE_BYTES'], spaceBytes=settings['MAX_SPACE_BYTES'],
                                   totalBytes=settings['MAX_TOTAL_BYTES'], minFreeBytes=settings['MIN_FREE_BYTES'])
             completed = None
-            if case == 'file':
+            if case == 'final-scan-timeout':
+                from download_budget_cases import wait_until
+                download = begin('#small')
+                wait_until(lambda: (final_gate / 'sampled').exists(), 'Final scan did not reach gate')
+                folder = state / 'downloads' / created[0]['id'] / created[0]['defaultTabId'] / download
+                files = list(folder.iterdir())
+                assert len(files) == 1 and files[0].read_bytes() == b'x' * 1024
+                cli('download', 'wait', download, '--space', 'limit-a', '--timeout', '80', error='timeout')
+                with ThreadPoolExecutor(1) as pool:
+                    pending = pool.submit(cli, 'download', 'cancel', download, '--space', 'limit-a')
+                    for space in ('limit-a', 'limit-b'):
+                        started = time.monotonic()
+                        assert cli('evaluate', 'document.querySelector("#small").textContent', '--space', space)['value'] == 'small'
+                        assert time.monotonic() - started < 1
+                    failed = pending.result()['value']
+                assert failed['status'] == 'failed' and failed['error'] == 'download_budget_timeout', failed
+                assert failed['path'] is None and folder.exists(), failed
+                assert files[0].read_bytes() == b'x' * 1024, 'Unfinished scan lost access to its file'
+                assert wait(begin('#small', 'limit-b'), 'limit-b')['status'] == 'completed'
+                (final_gate / 'release').touch()
+                wait_until(lambda: (final_gate / 'retained').exists(), 'File was deleted before the scan returned')
+                wait_until(lambda: not folder.exists(), 'Late scan did not release failed data')
+                assert wait(download) == failed, 'Late scan changed the terminal result'
+                assert cli('download', 'cancel', download, '--space', 'limit-a')['value'] == failed
+            elif case == 'file':
                 assert_failed(wait(begin('#large')), 'download_file_limit')
                 assert_failed(wait(begin('#stream')), 'download_file_limit')
                 completed = wait(begin('#small'))
@@ -213,7 +258,7 @@ def run_case(case, configured, out, binary):
                 completed = wait(first)
                 time.sleep(.15)
                 assert not folder.exists(), 'A late scan recreated the cancelled destination'
-            elif case in ('finish-cancel', 'finish-over-budget', 'finish-timeout'):
+            elif case in ('finish-cancel', 'finish-over-budget'):
                 download = begin('#small')
                 log_path = out / (case + '-daemon.log')
                 for _ in range(100):
@@ -222,12 +267,6 @@ def run_case(case, configured, out, binary):
                     time.sleep(.02)
                 assert 'DOWNLOAD-FINISH' in log_path.read_text(), 'No real WebKit finish callback'
                 assert cli('download', 'list', '--space', 'limit-a')['value']['downloads'][0]['status'] == 'running'
-                if case == 'finish-timeout':
-                    cli('download', 'cancel', download, '--space', 'limit-a', error='download_cancel_timeout')
-                    item = cli('download', 'list', '--space', 'limit-a')['value']['downloads'][0]
-                    assert item['status'] == 'running' and item['path'] is None, item
-                    files = list((state / 'downloads').glob('*/*/*/*'))
-                    assert len(files) == 1 and files[0].read_bytes() == b'x' * 1024
                 if case == 'finish-over-budget':
                     # Fault injection after the real finish delegate: make the final
                     # file exceed the limit while its asynchronous check is delayed.
@@ -274,6 +313,8 @@ def run_case(case, configured, out, binary):
             stop(); start()
             assert cli('status')['pendingStoreCleanup'] == 0
         finally:
+            if case == 'final-scan-timeout':
+                (final_gate / 'release').touch()
             failed = sys.exc_info()[0] is not None
             errors = cleanup_test_services(cli, daemon, site)
             if errors:
@@ -289,6 +330,9 @@ def run_case(case, configured, out, binary):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--case', help='Run one named download limit case')
+    args = parser.parse_args()
     out = ROOT / '.artifacts' / time.strftime('download-limits-%Y%m%d-%H%M%S')
     out.mkdir(parents=True)
     binary = fixture_app(out)
@@ -297,10 +341,14 @@ def main():
              ('total', dict(MAX_TOTAL_BYTES=1536)),
              ('disk', dict(MIN_FREE_BYTES=9223372036854775807)),
              ('cancel', {}), ('responsive', {}), ('finish-cancel', {}),
-             ('finish-over-budget', dict(MAX_FILE_BYTES=1536)), ('finish-timeout', {})]
+             ('finish-over-budget', dict(MAX_FILE_BYTES=1536)), ('final-scan-timeout', {})]
+    if args.case:
+        cases = [(name, settings) for name, settings in cases if name == args.case]
+        assert cases, 'Unknown case'
     results = [run_case(case, settings, out, binary) for case, settings in cases]
     from download_budget_cases import verify_concurrent_budgets
-    results.extend(verify_concurrent_budgets(out, binary))
+    if not args.case:
+        results.extend(verify_concurrent_budgets(out, binary))
     report = dict(passed=True, cases=results, completedFilesRetained=True,
                   restartAccounting=True, unknownLengthStreamBounded=True, cancellationAcknowledged=True)
     report['sharedBackgroundScanAndLateCancellation'] = True

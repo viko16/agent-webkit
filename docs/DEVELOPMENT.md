@@ -19,7 +19,7 @@ Swift Package 无第三方包。`scripts/build.sh` 生成 `.build/Agent WebKit.a
 
 版本号只在 `Sources/Browser/Protocol.swift` 的 `productVersion` 中维护，格式为 `MAJOR.MINOR.PATCH`。`scripts/build.sh` 将已有生成 App 移入废纸篓，重新打包，从构建好的 `awb version` 读取版本，写入 App 的 `CFBundleShortVersionString` 和 `CFBundleVersion`，再执行签名。
 
-发布时更新这一处版本号，将源码提交推送后，创建并推送同版本的 `vMAJOR.MINOR.PATCH` tag。`.github/workflows/release.yml` 在 Apple Silicon runner（`macos-15`）构建 release，检查架构、签名、版本一致性和离线 CLI，再用 `ditto` 打包并上传到 GitHub Release。tag 与 CLI 版本不一致会失败；发布使用自带的 `GITHUB_TOKEN`，无需额外配置 PAT 或 Apple 证书。
+发布时更新这一处版本号，将源码提交推送后，创建并推送同版本的 `vMAJOR.MINOR.PATCH` tag。`.github/workflows/release.yml` 在 Apple Silicon runner（`macos-15`）构建 release，运行 `python3 -m unittest discover -s tests -p 'test_*.py' -v` 及针对包内 Release 二进制的 `tests/contract_cases.py --binary` 离线契约检查，再检查架构、签名、版本一致性，用 `ditto` 打包并上传到 GitHub Release。任一步失败均阻止发布；这些检查不启动 AppKit/WebKit 会话，本地完整验收仍需已登录桌面。tag 与 CLI 版本不一致会失败；发布使用自带的 `GITHUB_TOKEN`，无需额外配置 PAT 或 Apple 证书。
 
 附件为 `AgentWebKit-v版本号-macos-arm64.zip`，包含 `Agent WebKit.app`。CLI 位于 `Contents/MacOS/awb`，最低系统版本为 macOS 14。真实 WebKit、GUI、代理回归仍在本机运行，发布任务只做构建与离线检查。
 
@@ -84,7 +84,7 @@ python3 tests/skill_workflow.py
 
 取消等待 WebKit 确认停止后清理本项目未完成下载的 UUID 目录；清理失败通过条目的 `cleanupError` 返回。若 WebKit 已通知下载完成、宿主仍在做最终预算校验，取消等待该校验，返回 `completed` 或 `failed`，不再向已结束的 WebKit 下载发起取消。关闭/删除/退出也请求取消；Space 有下载时拒绝休眠。完成文件不会被限额或清理策略自动删除。
 
-累计预算是动态限制，不是瞬时硬限额：并发下载可能各自通过目的地检查，100 ms 周期、目录扫描和取消确认期间仍会增长；超额幅度与传输速率及扫描耗时有关，没有固定的字节或时间上界。最终校验独立扫描，不复用下载完成前已开始的扫描；超额或扫描失败均拒绝报告完成。`python3 tests/download_limit_cases.py` 同时覆盖同 Space 多 Tab、跨 Space、已知/未知长度、额度释放和真实目录权限错误；其中旧扫描竞争使用真实下载及测试副本中的扫描返回门控，未在产品中加入调试接口。
+累计预算是动态限制，不是瞬时硬限额：并发下载可能各自通过目的地检查，100 ms 周期、目录扫描和取消确认期间仍会增长；超额幅度与传输速率及扫描耗时有关，没有固定的字节或时间上界。最终校验独立扫描，不复用下载完成前已开始的扫描；超额或扫描失败均拒绝报告完成。最终校验超过 5 秒以 `download_budget_timeout` 失败，不把超时当作扫描已停止；未验证文件不提供结果路径，保留到扫描返回后清理，挂起扫描仍占用下载容量。`python3 tests/download_limit_cases.py` 同时覆盖同 Space 多 Tab、跨 Space、已知/未知长度、额度释放和真实目录权限错误；旧扫描竞争及最终扫描挂起使用真实下载和测试副本中的可释放门控，未在产品中加入调试接口。
 
 默认最多 64 个 Space、每 Space 64 个 Tab、合计 1024 个 Tab、128 个活跃 WebView，每个 Space 最多 8 个活跃网页弹窗。daemon 环境变量 `BROWSER_MAX_SPACES`、`BROWSER_MAX_TABS_PER_SPACE`、`BROWSER_MAX_TOTAL_TABS`、`BROWSER_MAX_LIVE_WEBVIEWS`、`BROWSER_MAX_POPUPS_PER_SPACE` 可调整，`status.resourceLimits` 返回生效值。创建和恢复运行时超额返回 `resource_limit`；启动时容量不足的 Space 保持休眠并显示 `resourceBlockedReason`，标签页记录保留。
 
@@ -365,7 +365,7 @@ Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 
 
 故障恢复后立即删除 Space，实测 WebKit 可能仍持有没有活动页面的网络会话，`remove(forIdentifier:)` 返回 `Data store is in use (by network process)`。流程先调用 `removeData` 清理全部公开网站数据类型，再用 `fetchDataRecords` 验证为空，并有限重试容器删除。容器未释放时返回 `websiteDataRemoved: true`、`dataStoreRemoved: false`、`cleanupPending: true`，保留 tombstone；不会把容器删除当成成功。重启后会再次清理，可通过 `status.pendingStoreCleanup` 查询。同名重建使用新 UUID，测试验证它读不到旧 LocalStorage，并验证重启后旧容器和 tombstone 清除。
 
-删除按 Store UUID 独立占用，同一 Store 的重复请求返回 `space_busy`，其他 Store 可以继续使用或删除。删除或清理验证超时后仍保留 tombstone 和尚未完成的回调占用；实际回调结束前不允许重试，回调一直未到时需重启恢复。客户端提前断连不会取消已经开始的删除。`--cleanup-only` 同时运行真实并发删除及生成源码中的回调闸门/故障注入，覆盖失败、删除/清理/回退重试超时、迟到回调和断连；测试钩子不进入生产构建。
+删除按 Store UUID 独立占用，同一 Store 的重复请求返回 `space_busy`，其他 Store 可以继续使用或删除。同名 tombstone 与新 Space 并存时，按名称删除返回 `space_ambiguous`，须明确 UUID；同名重建仍可用，旧 Store 重试不会选择新 Space。删除或清理验证超时后仍保留 tombstone 和尚未完成的回调占用；实际回调结束前不允许重试，回调一直未到时需重启恢复。客户端提前断连不会取消已经开始的删除。`--cleanup-only` 同时运行真实并发删除及生成源码中的回调闸门/故障注入，覆盖失败、同名重建/UUID 重试/重启隔离、删除/清理/回退重试超时、迟到回调和断连；测试钩子不进入生产构建。
 
 所有 Store 删除入口先初始化一个临时 `WKWebsiteDataStore.nonPersistent()`，并持有到删除及回退清理完成，避免在尚未初始化 Store 的进程中首次静态删除触发本机 WebKit 的 WebsiteDataStoreIO 崩溃。该保护同时覆盖启动 tombstone 清理，以及全部 Space 休眠或配置异常时的普通删除。没有打开用户默认 Store、创建额外 WebView 或发起导航。`python3 tests/reliability.py --cleanup-only` 用真实 Store 和测试自产注册表验证这些路径，包括“删除标记已写入、清理前进程退出”；完整可靠性套件也包含它。这里只模拟中断位置，不宣称执行过真实断电或强杀删除过程。
 
@@ -465,13 +465,13 @@ python3 tests/reliability.py --keyboard-only
 
 首版按键白名单为 `Enter`、`Tab`、`Escape`、`ArrowLeft`、`Shift+ArrowLeft`、`Option+ArrowLeft`、`Control+B`、`Shift+X`，键名区分大小写，使用固定 US 键码。未支持的组合（包括已知未实现全选的 Command+A）在发送前返回 `unsupported_key`。文字整段填写继续使用 fill，不把本接口当作通用打字、快捷键或 IME API。
 
-key 要求该 Tab 已成功 focus，并在发送前核对文档代号和当前主文档焦点；Tab 移焦后跟随同文档的新焦点。导航、历史缓存恢复后的代号变化返回 `input_target_changed`，新建/重建、休眠或重启后返回 `input_focus_required`，均需重新观察并 focus。发出后再次读取状态，若期间发生导航可能返回错误；输入可能已经生效，超时或错误后先查 state/业务结果，绝不自动重放。
+key 要求该 Tab 已成功 focus，并在发送前核对文档代号和当前主文档焦点；Tab 移焦后跟随同文档的新焦点。focus 失败会清除此前的输入资格。导航进行中、异步检查期间宿主窗口变更或历史缓存恢复后的代号变化返回 `input_target_changed`，新建/重建、休眠或重启后返回 `input_focus_required`，均需重新观察并 focus。发出后再次读取状态，若期间发生导航可能返回错误；输入可能已经生效，超时或错误后先查 state/业务结果，绝不自动重放。
 
-公开 NSEvent 只经目标 WebView 的 keyDown/keyUp 入口定向发送一次，不投递全局事件，不调用 activate/makeKey，不使用 Quartz、私有 API 或权限授权。WebView 被 GUI 重挂载后使用实际所属窗口，不固定向隐藏 Panel 发送。显式 focus 会改变目标页面及其宿主 responder；观察窗口存在地址栏草稿或前台正在编辑其他控件时返回 `input_focus_conflict`，不夺走编辑焦点。未激活窗口中，AppKit 自动给空闲搜索框设置的初始 responder 不作为用户编辑。
+公开 NSEvent 只经目标 WebView 的 keyDown/keyUp 入口定向发送一次，不投递全局事件，不调用 activate/makeKey，不使用 Quartz、私有 API 或权限授权。WebView 被 GUI 重挂载后使用实际所属窗口，不固定向隐藏 Panel 发送。观察窗口存在地址栏草稿、前台正在编辑其他控件，或焦点位于侧边栏等非文本控件时返回 `input_focus_conflict`。focus 在异步 DOM 检查后再次核对原生冲突；空闲观察窗口中临时借用的 responder 会恢复。未激活窗口中，AppKit 自动给空闲搜索框设置的初始 responder 不作为用户编辑。
 
 key 返回 `method: appkit-directed`、`dispatched: true` 只说明宿主调用了定向事件入口；`nativeVerified`、`physicalInput`、`eventDeliveryVerified`、`defaultBehaviorVerified`、`businessOutcomeVerified` 均不因此为 true。WebKit 在受控页面把这些宿主构造事件标记为 isTrusted，不证明物理输入或所有用户激活门控 API 可用；正式命令包含 JS 焦点/状态读取，也不能用它来单独归因用户激活。需用 wait、页面状态或服务端回执独立验证默认行为和业务结果。
 
-hover 保留 `backgroundVerified: false, requiresForeground: true` 的人工接管边界，不新增 hover 或自动前台注入。`--keyboard-only` 验证主文档/open shadow、默认行为与 preventDefault、实际 POST、Space/Tab、重载/休眠/重启、卡死有界恢复及前台不变；额外编译独立原生宿主检查真实 GUI 重挂载和地址栏草稿保护，结果保存在 `.artifacts/reliability-*/`。不将本机用例扩大为任意 OS/布局/编辑器兼容性。
+hover 保留 `backgroundVerified: false, requiresForeground: true` 的人工接管边界，不新增 hover 或自动前台注入。`--keyboard-only` 验证主文档/open shadow、默认行为与 preventDefault、实际 POST、Space/Tab、失败 focus、受控未完成导航、重载/休眠/重启、卡死有界恢复及前台不变；额外编译独立原生宿主检查真实 GUI 重挂载、侧边栏 firstResponder、异步地址栏/Tab 切换及超时后真实 WebKit 回调。`BROWSER_TEST_FOREGROUND=1 python3 tests/reliability.py --keyboard-only` 另在已解锁桌面临时激活测试窗口，验证侧边栏方向键并恢复原前台应用；产品输入不执行激活。结果保存在 `.artifacts/reliability-*/`。不将本机用例扩大为任意 OS/布局/编辑器兼容性。
 
 ## 后台 Hover/键盘独立实验
 

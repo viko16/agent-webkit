@@ -1,10 +1,43 @@
 """Real production focus/key effects, explicit targets and lifecycle boundaries."""
 import json
+from contextlib import contextmanager
+import http.server
+import os
 from pathlib import Path
 import plistlib
 import subprocess
+import threading
 import time
 from urllib.parse import urljoin
+
+
+@contextmanager
+def pending_navigation_site():
+    requested, release = threading.Event(), threading.Event()
+    page = (Path(__file__).parent / 'site/keyboard.html').read_bytes()
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            pass
+
+        def do_GET(self):
+            if self.path == '/pending':
+                requested.set()
+                assert release.wait(15), 'Navigation gate was not released'
+            body = page if self.path == '/keyboard' else b'<input id="first" value="new-document">'
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    site = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    threading.Thread(target=site.serve_forever, daemon=True).start()
+    try:
+        yield f'http://127.0.0.1:{site.server_port}/', requested, release
+    finally:
+        release.set()
+        site.shutdown(); site.server_close()
 
 
 def verify_keyboard(cli, base, out, restart, site_events, nonce):
@@ -72,6 +105,11 @@ def verify_keyboard(cli, base, out, restart, site_events, nonce):
             evidence.append(dict(key=key, result=result, observed=actual))
         command('reload')
         prepare()
+        before_failed_focus = read()
+        command('focus', '#plain', error='input_focus_failed')
+        command('key', 'Shift+X', error='input_focus_required')
+        assert read() == before_failed_focus, 'A rejected focus/key changed the page'
+        prepare()
         command('key', 'Tab')
         assert read()['active'] == 'second'
         command('open', page + '?mode=cancel-tab')
@@ -103,7 +141,7 @@ def verify_keyboard(cli, base, out, restart, site_events, nonce):
         ref = next(e['ref'] for e in command('snapshot')['value']['elements'] if e['tag'] == 'input')
         command('reload')
         command('focus', ref, error='stale_ref')
-        command('key', 'Shift+X', error='input_target_changed')
+        command('key', 'Shift+X', error='input_focus_required')
         prepare()
         restart()
         command('key', 'Shift+X', error='input_focus_required')
@@ -124,6 +162,18 @@ def verify_keyboard(cli, base, out, restart, site_events, nonce):
         command('key', 'ArrowLeft', target=peer_tab, space='keyboard-peer')
         command('reload')
         command('key', 'Enter', error='input_focus_required')
+        with pending_navigation_site() as (pending_base, requested, release):
+            command('open', pending_base + 'keyboard')
+            prepare()
+            command('evaluate', f'location.href={json.dumps(pending_base + "pending")};true')
+            assert requested.wait(5), 'No pending navigation request'
+            command('key', 'Shift+X', error='input_target_changed')
+            command('focus', '#first', error='input_target_changed')
+            release.set()
+            command('wait', '#first')
+            assert js('document.querySelector("#first").value') == 'new-document'
+            command('key', 'Shift+X', error='input_focus_required')
+        command('open', page)
         cli('tab', 'close', other, '--space', 'keyboard-work')
         command('key', 'Enter', target=other, error='tab_not_found')
         after = cli('status')
@@ -139,6 +189,21 @@ def verify_keyboard(cli, base, out, restart, site_events, nonce):
             CFBundleIdentifier='local.agent-webkit.input-host-probe', CFBundleExecutable='input-host',
             CFBundlePackageType='APPL', NSAppTransportSecurity=dict(NSAllowsArbitraryLoadsInWebContent=True))))
         sources = sorted(p for p in (root / 'Sources/Browser').glob('*.swift') if p.name != 'main.swift')
+        input_source = (root / 'Sources/Browser/Input.swift').read_text()
+        marker = '        let result = try await inputObservation(epoch: epoch, target: target)\n'
+        assert input_source.count(marker) == 1
+        generated = out / 'Input.swift'
+        input_source = input_source.replace(marker, '        await inputHostAfterDOM?()\n' + marker)
+        marker = '        guard sequence == navigationSequence, webView.window === window else { throw BrowserError'
+        assert input_source.count(marker) == 1
+        generated.write_text(input_source.replace(marker, '        await inputHostAfterKeyState?()\n' + marker))
+        sources = [generated if p.name == 'Input.swift' else p for p in sources]
+        browser_source = (root / 'Sources/Browser/Browser.swift').read_text()
+        marker = '                call.finish(result)\n'
+        assert browser_source.count(marker) == 1
+        generated_browser = out / 'Browser.swift'
+        generated_browser.write_text(browser_source.replace(marker, marker + '                inputHostLateCallback?()\n'))
+        sources = [generated_browser if p.name == 'Browser.swift' else p for p in sources]
         build = subprocess.run(['swiftc', '-parse-as-library', *map(str, sources), str(root / 'tests/input_host_probe.swift'),
                                 '-o', str(executable)], capture_output=True, text=True, timeout=90)
         (out / 'input-host-build.log').write_text(build.stdout + build.stderr)
@@ -146,7 +211,13 @@ def verify_keyboard(cli, base, out, restart, site_events, nonce):
         subprocess.run(['codesign', '--force', '--sign', '-', str(app)], check=True, capture_output=True)
         host_report = out / 'input-host.json'
         with (out / 'input-host.log').open('w') as log:
-            host = subprocess.run([str(executable), page, str(host_report)], stdout=log, stderr=log, timeout=30)
+            try:
+                host = subprocess.run([str(executable), page, str(host_report)], stdout=log, stderr=log, timeout=30)
+            finally:
+                cleanup_report = out / 'input-host-cleanup.json'
+                cleanup = subprocess.run([str(executable), page, str(cleanup_report), '--cleanup-only'],
+                                         env=dict(os.environ, BROWSER_TEST_FOREGROUND='0'), stdout=log, stderr=log, timeout=30)
+                assert cleanup.returncode == 0 and json.loads(cleanup_report.read_text())['ok'], cleanup_report
         assert host.returncode == 0 and json.loads(host_report.read_text())['ok'], host_report
         (out / 'keyboard.json').write_text(json.dumps(evidence, indent=2))
     finally:

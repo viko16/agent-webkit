@@ -20,14 +20,15 @@ extension Tab {
         guard !closed else { throw BrowserError("tab_closed", "标签页已关闭") }
         guard !terminated else { throw BrowserError("web_content_terminated", "请重新加载页面并 focus") }
         guard !unresponsive else { throw BrowserError("web_content_unresponsive", "请重新加载页面并 focus") }
+        guard !navigationPending, !webView.isLoading else { throw BrowserError("input_target_changed", "导航尚未结束，请先观察页面并重新 focus") }
         guard deadline.map({ monotonicNow() < $0 }) ?? true else { throw BrowserError("timeout", "尚未发送原生输入，命令已超时") }
         guard let window = webView.window else { throw BrowserError("input_unavailable", "目标 WebView 尚未挂载到窗口") }
         let responder = window.firstResponder as? NSView
         let inPage = responder.map { $0 === webView || $0.isDescendant(of: webView) } ?? false
         let editing = responder is NSTextView || (responder as? NSTextField)?.currentEditor() != nil
         if window !== backingWindow, !inPage,
-           inputFocusConflict?() == true || (editing && (window.isKeyWindow || NSApp.isActive)) {
-            throw BrowserError("input_focus_conflict", "观察窗口正在编辑其他控件；请先结束编辑，后台输入不会抢走其焦点")
+           inputFocusConflict?() == true || (responder != nil && (!editing || window.isKeyWindow || NSApp.isActive)) {
+            throw BrowserError("input_focus_conflict", "观察窗口的焦点位于其他控件；请先结束操作，后台输入不会抢走其焦点")
         }
         return window
     }
@@ -38,18 +39,25 @@ extension Tab {
         let view = previous as? NSView
         let inPage = view.map { $0 === webView || $0.isDescendant(of: webView) } ?? false
         guard inPage || window.makeFirstResponder(webView) else { throw BrowserError("input_focus_failed", "目标窗口拒绝 WebView responder") }
+        defer {
+            if window !== backingWindow, !inPage { window.makeFirstResponder(previous) }
+        }
         try body()
     }
 
     func focus(target: String) async throws -> [String: Any] {
-        _ = try inputWindow()
+        inputDocumentEpoch = nil
+        let window = try inputWindow()
         let sequence = navigationSequence
         guard let state = try await runJS("window.__agentWebKit.focus(\(try quoteJS(target)))", world: DOM.world) as? [String: Any],
               let epoch = state["epoch"] as? String, sequence == navigationSequence else {
             throw BrowserError("input_target_changed", "聚焦期间文档已改变，请重新确认目标")
         }
-        try withInputResponder({})
         let result = try await inputObservation(epoch: epoch, target: target)
+        guard sequence == navigationSequence, webView.window === window else {
+            throw BrowserError("input_target_changed", "聚焦期间文档或宿主窗口已改变，请重新确认目标")
+        }
+        try withInputResponder({})
         inputDocumentEpoch = epoch
         return result.merging(["method": "dom-focus-and-appkit-responder", "focused": true, "responderAccepted": true]) { _, new in new }
     }
@@ -69,10 +77,11 @@ extension Tab {
 
     func key(_ key: BackgroundKey) async throws -> [String: Any] {
         guard let epoch = inputDocumentEpoch else { throw BrowserError("input_focus_required", "请先对该 Tab 显式 focus；加载、休眠或重启后需重新聚焦") }
+        let window = try inputWindow()
         let sequence = navigationSequence
         guard let state = try await runJS("window.__agentWebKit.inputState(\(try quoteJS(epoch)))", world: DOM.world) as? [String: Any],
               state["actionable"] as? Bool == true else { throw BrowserError("input_focus_required", "当前主文档没有可操作焦点，请先 focus") }
-        guard sequence == navigationSequence else { throw BrowserError("input_target_changed", "发送前文档已改变；未重试输入") }
+        guard sequence == navigationSequence, webView.window === window else { throw BrowserError("input_target_changed", "发送前文档或宿主窗口已改变；未重试输入") }
         let spec = key.event
         try withInputResponder {
             for type in [NSEvent.EventType.keyDown, .keyUp] {

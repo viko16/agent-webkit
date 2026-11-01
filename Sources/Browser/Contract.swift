@@ -189,14 +189,14 @@ enum CLIContract {
     private static let errorCodes = [
         "input_focus_required", "input_focus_failed", "input_focus_conflict", "input_target_changed", "input_unavailable", "unsupported_key",
         "already_running", "certificate_rejected", "data_removal_failed", "data_removal_timeout", "data_store_removal_timeout", "download_not_found", "download_failed",
-        "download_cancel_timeout", "download_file_limit", "download_space_limit", "download_total_limit", "download_disk_limit", "download_budget_unavailable",
+        "download_cancel_timeout", "download_file_limit", "download_space_limit", "download_total_limit", "download_disk_limit", "download_budget_unavailable", "download_budget_timeout",
         "file_unreadable", "upload_too_large", "unsupported_upload_target", "upload_multiple_not_allowed", "upload_unavailable", "unsupported_screenshot_geometry", "screenshot_changed", "screenshot_too_large",
         "direct_system_proxy_conflict", "diagnostics_unavailable", "dialog_not_found", "dialog_already_handled", "dialog_expired", "dialog_cancelled", "dialog_capacity", "element_not_actionable", "element_not_editable", "element_readonly",
         "invalid_arguments", "invalid_certificate", "invalid_json_result", "invalid_name", "invalid_option",
         "invalid_proxy", "invalid_response", "invalid_selector", "invalid_timeout", "invalid_url", "ipc_error",
         "javascript_error", "last_tab", "message_too_large", "not_ready", "operation_failed", "persistence_failed", "png_failed", "resource_limit", "server_busy",
         "popup_failed", "popup_not_opened", "popup_store_mismatch", "proxy_required", "selector_count",
-        "shutting_down", "snapshot_failed", "socket_path_too_long", "space_busy", "space_exists", "space_not_found", "space_suspended",
+        "shutting_down", "snapshot_failed", "socket_path_too_long", "space_busy", "space_exists", "space_ambiguous", "space_not_found", "space_suspended",
         "space_required", "stale_frame", "stale_ref", "tab_closed", "tab_not_found", "timeout", "unknown_command",
         "unsafe_socket_path", "unsupported_context", "unsupported_fill_type", "unsupported_navigation",
         "web_content_terminated", "web_content_unresponsive"

@@ -1,5 +1,6 @@
 """Offline discovery and live CLI/IPC contract compatibility; standard library only."""
 import json
+import argparse
 import os
 from pathlib import Path
 import re
@@ -123,12 +124,15 @@ def verify_live_contract(cli, socket_path):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--binary', type=Path, default=ROOT / '.build/debug/awb')
+    binary = parser.parse_args().binary.resolve()
     with tempfile.TemporaryDirectory(prefix='aw-contract-') as directory:
         data = Path(directory) / 'unused'
         env = dict(os.environ, BROWSER_DATA_DIR=str(data), BROWSER_SOCKET=str(data / 'missing.sock'))
 
         def cli(*args, error=None):
-            process = subprocess.run([str(ROOT / '.build/debug/awb'), *args], env=env,
+            process = subprocess.run([str(binary), *args], env=env,
                                      capture_output=True, text=True, timeout=10)
             response = json.loads(process.stdout)
             assert process.returncode == (1 if error else 0), (args, response, process.stderr)

@@ -20,7 +20,7 @@ def gated_cleanup_app(out):
             testRemovalAttempts += 1
             testStoreEvent("attempt:\\(testRemovalAttempts)")
             let mode = ProcessInfo.processInfo.environment["BROWSER_TEST_STORE_MODE"]!
-            if testRemovalAttempts == 1 && ["failure", "clear-timeout", "retry-timeout"].contains(mode) {
+            if mode == "failure" || (testRemovalAttempts == 1 && ["clear-timeout", "retry-timeout"].contains(mode)) {
                 throw BrowserError("injected_store_in_use", "Exercise the public clear/fetch fallback")
             }
         }
@@ -175,8 +175,27 @@ def verify_concurrent_store_deletion(cli, start, stop, state, base, out):
             elif mode == 'failure':
                 assert any(r['id'] == target['id'] and r['deleting']
                            for r in json.loads((state / 'spaces.json').read_text()))
+                replacement = cli('space', 'create', 'delete-race', '--proxy', 'direct')
+                cli('open', base, '--space', replacement['id'])
+                cli('evaluate', 'document.cookie="sameName=new; Max-Age=3600; Path=/";localStorage.sameName="new";true',
+                    '--space', replacement['id'])
+                extra_tab = cli('tab', 'new', base, '--space', replacement['id'])['tabId']
+                before = cli('tab', 'list', '--space', replacement['id'])
+                cli('space', 'delete', 'delete-race', error='space_ambiguous')
+                cli('space', 'delete', target['id'].lower(), error='data_removal_failed')
+                assert cli('tab', 'list', '--space', replacement['id']) == before
+                assert cli('evaluate', '[document.cookie,localStorage.sameName]',
+                           '--space', replacement['id'])['value'] == ['sameName=new', 'new']
         stop(); start()
         assert cli('status')['pendingStoreCleanup'] == 0
+        if mode == 'failure':
+            restored = cli('space', 'info', 'delete-race')
+            assert restored['id'] == replacement['id'] and restored['defaultTabId'] == replacement['defaultTabId']
+            assert {t['tabId'] for t in cli('tab', 'list', '--space', replacement['id'])} == {extra_tab, replacement['defaultTabId']}
+            cli('wait', '#message', '--space', replacement['id'])
+            assert cli('evaluate', '[document.cookie,localStorage.sameName]',
+                       '--space', replacement['id'])['value'] == ['sameName=new', 'new']
+            assert cli('space', 'delete', replacement['id'].lower())['spaceId'] == replacement['id']
         cli('wait', '#message', '--space', 'delete-healthy')
         assert cli('evaluate', 'localStorage.deleteRace', '--space', 'delete-healthy')['value'] == 'preserved'
         cli('space', 'delete', 'delete-healthy')

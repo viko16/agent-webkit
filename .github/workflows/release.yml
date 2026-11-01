@@ -20,6 +20,11 @@ jobs:
       - name: Build
         run: zsh scripts/build.sh release
 
+      - name: Offline regressions
+        run: |
+          python3 -m unittest discover -s tests -p 'test_*.py' -v
+          python3 tests/contract_cases.py --binary '.build/Agent WebKit.app/Contents/MacOS/awb'
+
       - name: Verify and package
         id: package
         shell: bash

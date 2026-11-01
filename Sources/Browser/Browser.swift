@@ -108,7 +108,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     private var navigationSpans: [ObjectIdentifier: NavigationSpan] = [:]
     private(set) var navigationSequence = 0
     private var completedNavigationSequence = 0
-    private var navigationPending = false
+    private(set) var navigationPending = false
     private var navigationStartedAt: UInt64?
 
     init(record: TabRecord, store: WKWebsiteDataStore, tls: TLSConfiguration?, configuration supplied: WKWebViewConfiguration? = nil, diagnostics: DiagnosticLog? = nil) {
@@ -1133,8 +1133,19 @@ final class BrowserModel {
         }
         let target = command.hasPrefix("space.") ? try arg(0) : r.options["space"]
         guard let target else { throw BrowserError("space_required", "所有页面操作必须指定 --space") }
-        let pendingID = command == "space.delete" ? records.first(where: { $0.deleting && ($0.name == target || $0.id.uuidString.lowercased() == target.lowercased()) })?.id : nil
-        guard let id = spaces.first(where: { $0.record.name == target || $0.record.id.uuidString.lowercased() == target.lowercased() })?.record.id ?? pendingID else {
+        var deletionID: UUID?
+        if command == "space.delete" {
+            if let uuid = UUID(uuidString: target), records.contains(where: { $0.id == uuid }) {
+                deletionID = uuid
+            } else {
+                let matches = records.filter { $0.name == target }
+                guard matches.count <= 1 else {
+                    throw BrowserError("space_ambiguous", "同名 Space 包含待清理记录；请从 space list 和 status.storeCleanupErrors 确认 UUID 后按 UUID 删除")
+                }
+                deletionID = matches.first?.id
+            }
+        }
+        guard let id = deletionID ?? spaces.first(where: { $0.record.name == target || $0.record.id.uuidString.lowercased() == target.lowercased() })?.record.id else {
             throw BrowserError("space_not_found", "Space 不存在：\(target)")
         }
         if command == "space.delete" {
