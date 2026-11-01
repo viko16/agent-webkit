@@ -763,7 +763,7 @@ final class Space {
          "error": error.map { failure($0)["error"]! } ?? NSNull(),
          "limitation": record.proxy == "direct"
             ? "System proxy checked on restore, commands and navigation; already running page requests may follow changed system settings. Cannot bypass VPN/content filters. Disable system proxy then reload to resume."
-            : "On tested macOS 27.0.1 loopback requests bypass this proxy, including localhost and 127.0.0.1. Configuration success is not route verification."]
+            : "Loopback requests, including localhost and 127.0.0.1, may bypass this proxy. Configuration success is not route verification."]
     }
     var networkError: BrowserError? {
         if let configurationError { return configurationError }

@@ -154,7 +154,7 @@ def origin(port=0, events=None, tls_context=None):
     return server, events
 
 
-def proxy(port=8899, events=None):
+def proxy(port=0, events=None):
     events = events or Events()
 
     class Handler(socketserver.BaseRequestHandler):

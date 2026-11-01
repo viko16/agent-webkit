@@ -137,7 +137,7 @@ npm ci --prefix tests/forms
 python3 tests/reliability.py --forms
 ```
 
-测试使用锁文件固定的 React 19.3.1、Vue 3.5.44 和 Vite 8.3.5，需 Node.js 20.19+ 或 22.12+。这些依赖仅用于测试页面，不进入 Swift 应用或普通可靠性套件。临时 Vite 服务绑定 loopback 随机端口，只写该次 `.artifacts/reliability-*/submissions.jsonl`，退出时停止自己的进程；不改变系统代理，也不占用用户的 5173。
+React、Vue 和 Vite 的测试依赖版本由 `tests/forms/package.json` 和 `package-lock.json` 固定，需 Node.js 20.19+ 或 22.12+。这些依赖仅用于测试页面，不进入 Swift 应用或普通可靠性套件。临时 Vite 服务绑定 loopback 随机端口，只写该次 `.artifacts/reliability-*/submissions.jsonl`，退出时停止自己的进程；不改变系统代理，也不占用用户的 5173。
 
 React fixture 使用 value/onChange，Vue 使用 v-model，分别验证 input/textarea/select/checkbox、中文/多行/空值、key 改变后的状态保留及旧引用失效、disabled/readOnly、服务端拒绝提交。成功必须同时满足框架渲染状态、真实 POST 数据和服务端随机 nonce；完整运行应只有 6 次提交，超时等待不能重放请求。该页还验证 contenteditable 整段纯文本替换、非可信 InputEvent 和 aria-readonly，并保存后台截图、核对前台 PID。表单写入沿用目标 realm 的原生 setter，文本 input 事件带 `inputType=insertReplacementText`，select 保持普通 input/change 事件；不模拟 beforeinput、输入法组合、选区或第三方富文本编辑器私有状态。
 
@@ -295,7 +295,7 @@ B 的两个 Space 访问同一个含随机 nonce 的 HTTPS URL。代理端必须
 
 `network_cases.py` 在两个 Space 内分别执行同 URL 的 fetch 与 WSS。代理 Space 必须收到本地服务返回的随机 nonce 和 WebSocket echo，Whistle 必须有对应会话；direct 不能新增这些 Whistle 会话或命中本地服务。example.com 不提供测试用 WebSocket，因此 direct 的 WSS 超时只用于排除错误代理路径，不代表公网上存在可用的 WebSocket 服务。媒体、Service Worker 和其他资源类型尚未全面测试。
 
-`tests/fixtures.py proxy` 与 `tests/proxy_probe.py` 保留为此前的 CONNECT / loopback 诊断工具，不再参与 B。localhost / 127.0.0.1 代理路径暂不纳入验收。
+`tests/fixtures.py proxy` 与 `tests/proxy_probe.py` 保留为此前的 CONNECT / loopback 诊断工具，不再参与 B。代理默认绑定随机空闲端口，诊断脚本使用实际分配的地址。localhost / 127.0.0.1 代理路径暂不纳入验收。
 
 ## Direct 冲突回归
 
@@ -383,7 +383,7 @@ Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 
 
 `tests/popup_cases.py` 由 reliability（Direct）和 acceptance（真实 Whistle + insecure TLS）调用；`tests/tls_cases.py` 另验证弹窗 custom-ca 的接受、错误主机名及过期证书拒绝。fixture 覆盖重定向、opener/postMessage、父页回调导航、命名窗口复用、关闭最后一个窗口、双 Space、重启和可信事件拒绝。
 
-手动 GUI 回归可运行 `python3 tests/ui_fixture.py --conflict`。它复制生成的应用并使用独立测试 Bundle ID、数据目录和本地页面，不干扰已打开的用户应用；输出 `fixture.json` 标明 socket、代理设置文件和 URL。解除测试设置（将该文件写为 `{}`）后点击重新加载，检查 Direct 恢复；在页面点击 Require trusted click、切换新 Tab 并点击 Send result and close，检查回调和关闭。终端按 Enter 清理测试 Space 并退出。这个人工测试工具不会操作系统代理。
+手动 GUI 回归可运行 `python3 tests/ui_fixture.py --conflict`。它复制生成的应用并使用独立测试 Bundle ID、数据目录、本地页面和随机端口代理，不干扰已打开的用户应用；输出 `fixture.json` 标明 socket、代理设置文件、页面 URL 和代理地址。解除测试设置（将该文件写为 `{}`）后点击重新加载，检查 Direct 恢复；在页面点击 Require trusted click、切换新 Tab 并点击 Send result and close，检查回调和关闭。终端按 Enter 清理测试 Space 并退出。这个人工测试工具不会操作系统代理。
 
 ## 元素截图
 

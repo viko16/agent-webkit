@@ -67,7 +67,9 @@ def verify_forms(cli, base, nonce, out):
         command('wait', '#react-text')
         command('wait', '#vue-text')
         versions = js('window.frameworkVersions')
-        assert versions == {'react': '19.3.1', 'vue': '3.5.44'}, versions
+        packages = json.loads((ROOT / 'tests/forms/package-lock.json').read_text())['packages']
+        expected_versions = {name: packages[f'node_modules/{name}']['version'] for name in ('react', 'vue')}
+        assert versions == expected_versions, (versions, expected_versions)
         for framework in ['react', 'vue']:
             prefix = '#' + framework
             command('wait', prefix + '-submit', '--state', 'disabled')

@@ -9,7 +9,7 @@ from fixtures import origin, proxy
 
 root = Path(__file__).resolve().parents[1]
 state = tempfile.mkdtemp(prefix='awk-probe-')
-env = dict(os.environ, BROWSER_DATA_DIR=state)
+env = dict(os.environ, BROWSER_DATA_DIR=state, BROWSER_SOCKET=str(Path(state, 'browser.sock')))
 server, origin_events = origin()
 relay, events = proxy()
 binary = str(root / '.build/debug/awb')
@@ -24,7 +24,8 @@ try:
         if Path(state, 'browser.sock').exists():
             break
         time.sleep(.1)
-    print(cli('space','create','probe','--proxy','http://127.0.0.1:8899'), flush=True)
+    proxy_url = f'http://127.0.0.1:{relay.server_address[1]}'
+    print(cli('space','create','probe','--proxy',proxy_url), flush=True)
     port = server.server_address[1]
     for url in [f'http://127.0.0.1:{port}',f'http://localhost:{port}',f'https://127.0.0.1:{port}',f'https://localhost:{port}', 'https://example.com']:
         before = len(events.items)
