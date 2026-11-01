@@ -7,11 +7,13 @@ enum DOM {
     static let bootstrap = #"""
     (() => {
       if (window.__agentWebKit) return;
-      const refs = new WeakMap();
+      let refs = new WeakMap();
       const nodes = new Map();
       let next = 1;
       // getRandomValues also works on plain HTTP; randomUUID requires a secure context.
-      const epoch = Array.from(crypto.getRandomValues(new Uint8Array(6)), n=>n.toString(16).padStart(2,'0')).join('');
+      const newEpoch = ()=>Array.from(crypto.getRandomValues(new Uint8Array(6)), n=>n.toString(16).padStart(2,'0')).join('');
+      let epoch = newEpoch();
+      addEventListener('pagehide',()=>{nodes.clear();refs=new WeakMap();next=1;epoch=newEpoch()});
       function refFor(el) {
         if (!refs.has(el)) refs.set(el, `@e${next++}-${epoch}`);
         const ref = refs.get(el); nodes.set(ref, el); return ref;

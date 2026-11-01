@@ -17,6 +17,7 @@ enum CLIContract {
         "data-dir": ["type": "string", "description": "Registry directory; overrides BROWSER_DATA_DIR"],
         "space": ["type": "string", "description": "Explicit Space name or UUID"],
         "tab": ["type": "string", "description": "Tab UUID in this Space; omitted uses fixed CLI default, never GUI selection"],
+        "frame": ["type": "string", "description": "Document ID from frame list in this Space/Tab; requires explicit --tab; snapshot/click/fill/wait only; stale_frame after navigation/removal/eviction; >>> remains same-origin; visibility is document-local"],
         "timeout": ["type": "integer", "unit": "ms", "minimum": 1, "maximum": 60000, "default": 15000],
         "proxy": ["type": "string", "description": "direct or http://127.0.0.1:PORT (1–65535); required at creation"],
         "ca-cert": ["type": "string", "description": "Single PEM/DER CA path; preserves system trust checks"],
@@ -120,6 +121,7 @@ enum CLIContract {
             "schemaVersion": 1, "version": productVersion,
             "commands": Request.arities.keys.sorted().map(command),
             "constraints": [
+                "frame": ["requires": ["tab"], "commands": ["snapshot", "click", "fill", "wait"]],
                 "click": ["mutuallyExclusive": [["wait-for-navigation", "wait-for-popup"]]],
                 "screenshot": ["mutuallyExclusive": [["element", "full-page"]]],
                 "space.create": ["mutuallyExclusive": [["ca-cert", "ignore-certificate-errors"]]],
@@ -166,7 +168,8 @@ enum CLIContract {
                 "shutdown": "requires explicit --all; status.shutdownImpact previews all affected Spaces/Tab IDs; successful reply reports the affected scope; busy rejects exit; website data retained, page memory lost",
                 "lifecycle": "space suspend releases WebViews, retaining its data-store coordinator and IDs/URLs/website data/proxy/TLS; suspended Spaces restart without WebViews; resume starts loading; page actions resume on demand; state/list/info never wake; JS memory is lost",
                 "input": "DOM synthetic; nativeVerified=false; businessOutcomeVerified=false",
-                "snapshot": "same-origin frames and open shadow roots; cross-origin frames and closed roots unsupported",
+                "snapshot": "same-origin frames and open shadow roots; frame list + explicit --tab/--frame selects cross-origin or nested documents for snapshot/click/fill/wait; >>> does not cross origins; closed roots unsupported",
+                "frames": "128 most recently registered documents per Tab; opaque host-issued document IDs, epoch checked in the same JS turn as each operation; list validates live targets; no inferred parent routing; frame coordinates/visibility stay document-local; no --frame for evaluate/screenshots/upload",
                 "screenshot": "viewport, --element or bounded --full-page PNG; mode/range and pixel dimensions; scroll restoration; full-page uses viewport tiles, reports best-effort consistency and fixed/lazy/virtualized/nested-scroll limits; no foreground activation",
                 "recovery": "never automatically replay actions after timeout; inspect state/diagnostics; explicit reload/open can replace unresponsive view retaining Tab ID and Space data",
                 "proxy": "direct rejects enabled system proxy; no VPN/content-filter bypass; loopback routing unverified; routeVerified=false",
@@ -189,7 +192,7 @@ enum CLIContract {
         "javascript_error", "last_tab", "message_too_large", "not_ready", "operation_failed", "persistence_failed", "png_failed", "resource_limit", "server_busy",
         "popup_failed", "popup_not_opened", "popup_store_mismatch", "proxy_required", "selector_count",
         "shutting_down", "snapshot_failed", "socket_path_too_long", "space_busy", "space_exists", "space_not_found", "space_suspended",
-        "space_required", "stale_ref", "tab_closed", "tab_not_found", "timeout", "unknown_command",
+        "space_required", "stale_frame", "stale_ref", "tab_closed", "tab_not_found", "timeout", "unknown_command",
         "unsafe_socket_path", "unsupported_context", "unsupported_fill_type", "unsupported_navigation",
         "web_content_terminated", "web_content_unresponsive"
     ]

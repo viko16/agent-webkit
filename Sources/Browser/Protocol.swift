@@ -20,7 +20,7 @@ struct Request: Codable {
             "snapshot":0...0, "state":0...0, "evaluate":1...1, "click":1...1,
             "fill":2...2, "screenshot":0...0, "wait":0...1, "diagnostics":0...0,
             "dialog.list":0...0, "dialog.respond":2...2, "space.suspend":1...1, "space.resume":1...1,
-            "download.list":0...0, "download.wait":1...1, "download.cancel":1...1, "upload":2...17]
+            "download.list":0...0, "download.wait":1...1, "download.cancel":1...1, "upload":2...17, "frame.list":0...0]
 
     static let clientOptions: Set<String> = ["socket", "data-dir"]
 
@@ -30,7 +30,8 @@ struct Request: Codable {
             allowed.insert("space")
             if !command.hasPrefix("tab.") { allowed.insert("tab") }
         }
-        if ["open", "reload", "tab.new", "snapshot", "evaluate", "click", "fill", "screenshot", "wait"].contains(command) { allowed.insert("timeout") }
+        if ["open", "reload", "tab.new", "snapshot", "evaluate", "click", "fill", "screenshot", "wait", "frame.list"].contains(command) { allowed.insert("timeout") }
+        if ["snapshot", "click", "fill", "wait"].contains(command) { allowed.insert("frame") }
         if command == "space.create" { allowed.formUnion(["proxy", "ca-cert", "ignore-certificate-errors"]) }
         if command == "click" { allowed.formUnion(["wait-for-navigation", "wait-for-popup"]) }
         if command == "evaluate" { allowed.insert("await") }
@@ -49,6 +50,9 @@ struct Request: Codable {
             throw BrowserError("invalid_arguments", "未知命令或参数数量不正确：\(command)；awb help 查看用法")
         }
         let allowed = Self.allowedOptions(for: command)
+        if let frame = options["frame"], frame.isEmpty || options["tab"] == nil {
+            throw BrowserError("invalid_arguments", "--frame 需要非空文档 ID 和显式 --tab；先用 frame list 确认目标")
+        }
         if options["element"] != nil && options["full-page"] != nil { throw BrowserError("invalid_arguments", "--element 与 --full-page 互斥") }
         if command == "shutdown", options["all"] != "true" {
             throw BrowserError("invalid_arguments", "shutdown 会退出全部 Space；先用 status 查看 shutdownImpact，确认全局退出意图后使用 shutdown --all")
@@ -119,7 +123,7 @@ struct Options {
         var options: [String: String] = [:]
         var i = 0
         var literal = false
-        let allowed = Set(["space", "tab", "proxy", "ca-cert", "out", "timeout", "socket", "data-dir", "url", "text", "state", "detail", "inspectable", "element"])
+        let allowed = Set(["space", "tab", "frame", "proxy", "ca-cert", "out", "timeout", "socket", "data-dir", "url", "text", "state", "detail", "inspectable", "element"])
         while i < arguments.count {
             let arg = arguments[i]
             if arg == "--", !literal { literal = true; i += 1; continue }
@@ -139,7 +143,7 @@ struct Options {
             i += 1
         }
         var command = positionals.isEmpty ? "help" : positionals.removeFirst()
-        if ["space", "tab", "dialog", "download"].contains(command) {
+        if ["space", "tab", "frame", "dialog", "download"].contains(command) {
             guard !positionals.isEmpty else { throw BrowserError("invalid_arguments", "需要子命令") }
             command += "." + positionals.removeFirst()
         }
@@ -168,6 +172,8 @@ awb tab close ID --space NAME_OR_ID
 awb tab default ID --space NAME_OR_ID
 awb reload --space NAME_OR_ID [--tab ID] [--timeout 15000]
 awb snapshot|state --space NAME_OR_ID [--tab ID]
+awb frame list --space NAME_OR_ID [--tab ID] [--timeout 15000]
+awb snapshot|click|fill|wait ... --space NAME_OR_ID --tab ID --frame FRAME_DOCUMENT_ID
 awb diagnostics --space NAME_OR_ID [--tab ID] [--clear] [--detail on|off | --inspectable on|off]
 awb dialog list --space NAME_OR_ID [--tab ID]
 awb dialog respond ID accept|dismiss --space NAME_OR_ID [--tab ID] [--text PROMPT_VALUE]

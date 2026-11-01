@@ -43,7 +43,7 @@ Apple 的 [WWDC23 Network Relay 介绍](https://developer.apple.com/videos/play/
 
 定向 `callAsyncJavaScript` 也能返回隔离文档代号；保留引用的挂起Promise验证150ms宿主超时，另一Store/Tab的异步调用仍可用。未保留引用的Promise曾返回“Completion handler for function call is no longer reachable”；SDK明确允许thenable被GC后报不可达错误，不能把任意不resolve表达式都假定会等到宿主期限。宿主超时不代表取消JS。
 
-结论：公开 API 足以支持受控的跨源定向 DOM bridge，但当前 CLI 仍返回 unsupported_context。正式支持需先确定可寻址 frame/document 目标、父子路由与有界生命周期，不自动按 URL/深度拼接现有 >>>，不扩展到 closed Shadow Root。跨源可见性/坐标、截图/上传/对话框归属、sandbox/opaque origin、进程切换、CSP/跨站跟踪策略和任意网站均未由本实验验证。
+结论：公开 API 足以支持受控的跨源定向 DOM bridge。正式 CLI 据此提供 `frame list` 与 snapshot/click/fill/wait 的显式 `--frame` 文档目标，使用宿主文档 ID、同回合代号检查及有界注册表；不提供推断父子路径，现有 `>>>` 仍限同源。见[跨源 frame DOM 操作](DEVELOPMENT.md#跨源-frame-dom-操作)。不扩展到 closed Shadow Root。跨源外层可见性/坐标、截图/上传/对话框定向、sandbox/opaque origin、进程切换、CSP/跨站跟踪策略和任意网站兼容性均未由该独立实验验证。
 
 ## 后台 Hover/键盘可行性
 

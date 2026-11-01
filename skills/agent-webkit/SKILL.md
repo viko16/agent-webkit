@@ -18,7 +18,9 @@ metadata:
 
 ## 快照、动作与验证
 
-从 `snapshot` 读取当前完整引用，再对指定目标执行一次 `click` / `fill`，最后用 `wait`、新 snapshot 或页面业务状态核对结果。导航、重载、节点替换后旧引用可能失效；遇 `stale_ref` 重新快照并重新确认目标。选择器必须唯一，可用 `>>>` 进入同源 frame / open Shadow Root；跨源 frame 和 closed root 不受支持。
+从 `snapshot` 读取当前完整引用，再对指定目标执行一次 `click` / `fill`，最后用 `wait`、新 snapshot 或页面业务状态核对结果。导航、重载、节点替换后旧引用可能失效；遇 `stale_ref` 重新快照并重新确认目标。选择器必须唯一，可用 `>>>` 进入同源 frame / open Shadow Root；closed root 不受支持。
+
+跨源或嵌套文档先用 `frame list --space SPACE_ID --tab TAB_ID` 获取文档 ID，再对 snapshot/click/fill/wait 同时带 `--frame FRAME_ID` 和原 Space/Tab。列表平铺、parentFrameId 为 null，不按 URL、顺序或深度猜父子关系；同 URL 可对应多个文档，应通过 snapshot 确认。遇 `stale_frame` 重新列出并确认，旧 ID 不能跨导航、休眠、重启或 Tab 使用。检查列表 truncated；显式 frame 的坐标和可见性只在文档内成立，不能证明跨源外层可见或可原生点击。evaluate、截图、上传不支持 --frame，DOM 合成和业务验证规则不变。
 
 下面的 `SPACE_ID`、`TAB_ID`、引用和结果文本均替换为当前返回值，不直接照抄：
 

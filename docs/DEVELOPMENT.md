@@ -413,7 +413,7 @@ Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 
 
 ## iframe 与 Shadow DOM 定位
 
-内部 bridge 仍只从主 frame 的隔离 world 发起，通过同源 DOM 访问 frame、开放的 `shadowRoot`，不注入 page-world shim，不绕过同源策略。`snapshot.elements[].context` 用 boundary 的稳定引用标明 frame/shadow 路径，所有元素引用属于同一 Tab 文档的随机 epoch。引用解析除 `isConnected` 外，还验证所属 Document 仍是各层 frame 当前的 `contentDocument`，防止 frame 导航后仍连接旧 Document 的节点被误用。
+内部 bridge 在各 frame 的隔离 world 注入；默认操作从主文档发起，通过同源 DOM 访问 frame、开放的 `shadowRoot`，跨源文档通过下节的显式 `--frame` 选择。不注入 page-world shim，不改变网页的同源策略。`snapshot.elements[].context` 用 boundary 的稳定引用标明所选文档内的 frame/shadow 路径，元素引用属于该 bridge 的随机 epoch。引用解析除 `isConnected` 外，还验证所属 Document 仍是各层同源 frame 当前的 `contentDocument`，防止 frame 导航后仍连接旧 Document 的节点被误用。
 
 `#frame >>> #host >>> input` 逐层进入唯一 frame 或开放 Shadow Root；`>>>` 是本工具的作用域分隔符，不是 CSS 标准组合器，不能用于选择器中的字面值。普通 CSS 不自动穿透；snapshot 返回的完整 `@e…` 引用则可直接操作跨作用域元素。frame 内 fill 使用该文档的原型 setter 和 Event 构造器，仍是非可信 DOM 事件。
 
@@ -421,13 +421,36 @@ Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 
 
 遍历上限为 1000 个控件、16 层边界；元素、文本、正文、可见性祖先与未缓存文本样式祖先共用 10000 次访问预算，重复读取也计费，耗尽后停止正文扫描。正文最多 20000 字符，控件字段最多 200 字符，select 最多 100 个选项。可见 `<br>` 在正文中保留换行，在控件名称中归一为空格。快照采用 1 MiB 总输出预算，达到任一限制返回部分结果并标记 `truncated`。`tests/context_cases.py` 随 reliability 执行，覆盖嵌套作用域、同名 ID 不串用、frame 的输入事件、隐藏祖先、display:contents 宿主、跨源/closed 错误、frame 导航及宿主替换后的旧引用拒绝。`--resources-only` 追加巨大 DOM、选项、空元素、深层控件、换行和输出预算回归。尚未覆盖全部 slot/富文本组件或跨源 frame 内容。
 
+## 跨源 frame DOM 操作
+
+```sh
+awb frame list --space work --tab TAB_ID
+awb snapshot --space work --tab TAB_ID --frame FRAME_ID
+awb fill '@e1-当前文档后缀' '内容' --space work --tab TAB_ID --frame FRAME_ID
+awb click '#save' --space work --tab TAB_ID --frame FRAME_ID
+awb wait '#ack' --text '已保存' --space work --tab TAB_ID --frame FRAME_ID
+python3 tests/reliability.py --frames-only
+```
+
+`frame list` 的 `value.frames` 平铺返回当前 Tab 可定向访问的文档，包含 `frameId`、`mainFrame`、有限 URL/title。ID 由宿主生成，标识某一文档，绑定当前 Space/Tab，不是 URL、WKFrameInfo 对象身份或永久 iframe 节点 ID。同 URL 兄弟和跨源嵌套文档分别列出。公开 WKFrameInfo 不提供父身份，故 `parentFrameId` 为 null、`parentRouting` 为 false；列表顺序不表示 DOM 顺序，不按 URL/深度猜测父子关系。可结合每个文档的 snapshot 确认目标。
+
+`--frame` 仅用于 snapshot/click/fill/wait，且必须显式提供 `--tab`；所有元素引用与选择器在所选文档中解析。`wait` 的 readyState、URL、文本和状态均属于该文档，旧引用仍报 `stale_ref`。每次定向调用都在隔离 world 的同一次 JS 回合内核对随机文档代号和 active 状态，再执行操作；导航后旧 WKFrameInfo 即使指向新文档也不会触及新 DOM。目标已导航、移除、被淘汰或不属于所选 Tab 时返回 `stale_frame`，应重新列出并确认，不能自动重放动作。SPA 同文档导航保持 ID；顶层导航失败且原文档仍存活时也保留其 ID，所选文档的等待不继承无关的主导航错误。文档实际离开后由 pagehide 辅助移除记录并轮换文档、元素代号及 WeakMap，列表和动作再检查代号、剔除失效目标，历史返回也不复活旧引用；安全性不依赖宿主收到 leave 消息。关闭、休眠、WebView 重建、进程终止和重启清空宿主记录。
+
+响应中的 `page` 保持原有 Tab 主页面状态，所选文档由外层 `frameId` 标识，其 URL/title 从 `frame list` 读取。`click --wait-for-navigation` 仍等待 Tab 顶层导航，不等待子 frame 自身导航；子文档导航后应重新 `frame list` 确认新目标。`--wait-for-popup` 则沿用同 Space 新 Tab 语义。
+
+每 Tab 最多保留最近注册的 128 个文档；超出时淘汰最早记录，列表返回 `truncated` 和 `evictedDocuments`，不能当作完整 frame 枚举。列表逐项验证文档代号并剔除失效目标，沿用整条命令的 1–60000 ms 截止时间、Space 锁和关闭/超时规则；超时不表示 WebKit 已取消执行。记录不持久化，popup 按实际 WebView 路由，不能继承另一 Tab 的目标。
+
+显式 snapshot 返回 `frameId`、`textScope: selected-frame` 与文档内的 `frame-viewport` 坐标。可见性只在所选文档及其可访问的同源祖先中检查，无法据此保证跨源外层 iframe 可见、无遮挡或可原生点击；结果带 `visibilityScope`。DOM fill/click 仍返回非可信合成语义，提交成功需另外核对业务回执。`>>>` 仍只穿透同源 frame/open Shadow Root；主 snapshot 的跨源 unsupported 项继续保留。evaluate 保持主文档/page world 语义，截图、文件与对话框不新增 `--frame`。不支持 closed Shadow Root，不承诺 sandbox/opaque origin、CSP、进程切换和第三方存储的完整兼容性。
+
+`--frames-only` 使用正式打包应用和 CLI，覆盖两种跨源拓扑、同 URL 兄弟、嵌套、真实服务端 POST、所选文档等待、跨 Space/Tab 拒绝、旧元素/文档、导航/移除/休眠/重启、容量截断和前台不变；完整 reliability 同时运行它。报告和命令日志位于 `.artifacts/reliability-*/`。
+
 ## 跨源 frame 独立实验
 
 `python3 tests/cross_origin_probe.py` 编译并签名独立测试应用，运行两个受控 HTTP origin，分别检查端口差异和 127.0.0.1/localhost 主机差异。只使用两个临时 nonPersistent Store，禁止激活窗口；不连接既有 Socket、不创建产品 Space、不修改系统代理、hosts 或 Agent 设置。需要现有 Swift/WebKit/已登录桌面会话，无新依赖。
 
 测试复用 DOM.bootstrap，原生通过 frameInfo 定向到隔离 world，核查重复 URL/嵌套、页内消息隔离、实际服务端提交、同/跨 Store 与 Tab 归属、同文档导航/节点移除、完整导航/父导航/顶层 reload/移除/关闭的旧引用拒绝；定向异步JS另验证有界Promise等待与另一Store可用。输出 `.artifacts/cross-origin-*/` 中的原生分组报告、宿主 POST 记录、构建/运行日志与综合报告；两个 fixture 服务关闭且端口不再监听后才生成成功报告。
 
-可行性结论和正式功能边界见 [RESEARCH](RESEARCH.md)。当前 CLI 的 >>> 仍限同源 frame，跨源操作仍报 unsupported_context；实验没有把 WKFrameInfo 的临时对象或 URL 当成稳定 frame ID。
+可行性结论见 [RESEARCH](RESEARCH.md)。该实验保留为独立 API 证据；正式 CLI 通过上节的 `frame list` / `--frame` 操作跨源文档，`>>>` 仍限同源 frame。实验没有把 WKFrameInfo 的临时对象或 URL 当成稳定 frame ID。
 
 ## 后台 Hover/键盘独立实验
 

@@ -69,6 +69,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     let dialogs = DialogStore()
     let downloads = DownloadStore()
     let fileChooser = FileChooser()
+    let frames = FrameStore()
     var navigationError: Error?
     var changed: (() -> Void)?
     var statusChanged: (() -> Void)?
@@ -118,7 +119,11 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         if supplied == nil { configuration.websiteDataStore = store }
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         if !configuration.userContentController.userScripts.contains(where: { $0.source == DOM.bootstrap }) {
-            configuration.userContentController.addUserScript(WKUserScript(source: DOM.bootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: DOM.world))
+            configuration.userContentController.addUserScript(WKUserScript(source: DOM.bootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: DOM.world))
+        }
+        if !configuration.userContentController.userScripts.contains(where: { $0.source == FrameRouter.script }) {
+            configuration.userContentController.add(FrameRouter.shared, contentWorld: DOM.world, name: FrameRouter.name)
+            configuration.userContentController.addUserScript(WKUserScript(source: FrameRouter.script, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: DOM.world))
         }
         if !configuration.userContentController.userScripts.contains(where: { $0.source == DiagnosticScript.source }) {
             configuration.userContentController.add(DiagnosticRouter.shared, contentWorld: .page, name: DiagnosticScript.name)
@@ -130,6 +135,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         super.init()
         dialogs.automaticallyDismissed = { [weak self] in self?.suppressedDialogs += 1 }
         DiagnosticRouter.shared.logs.setObject(self.diagnostics, forKey: webView)
+        FrameRouter.shared.stores.setObject(frames, forKey: webView)
         backingWindow.isReleasedWhenClosed = false
         backingWindow.contentView = webView
         webView.navigationDelegate = self; webView.uiDelegate = self
@@ -184,6 +190,8 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         webView.isInspectable = false
         diagnostics.setDetail(false)
         DiagnosticRouter.shared.logs.removeObject(forKey: webView)
+        FrameRouter.shared.stores.removeObject(forKey: webView)
+        frames.reset()
         failPending(BrowserError("tab_closed", "标签页已关闭"))
         observations.removeAll()
         webView.stopLoading(); webView.navigationDelegate = nil; webView.uiDelegate = nil
@@ -251,36 +259,51 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         }
     }
 
-    func runJS(_ script: String, awaitPromise: Bool = false, world: WKContentWorld? = nil) async throws -> Any {
+    func runJS(_ script: String, awaitPromise: Bool = false, world: WKContentWorld? = nil, frameID: String? = nil) async throws -> Any {
         let world = world ?? .page
         let internalDOM = world == DOM.world
-        let source = internalDOM ? "(()=>{try{return (0,eval)(\(try quoteJS(script)))}catch(error){throw new Error('__agent_webkit_dom__:'+String(error?.message||error))}})()" : script
+        var target: FrameDocument?
+        if let frameID {
+            guard internalDOM else { throw BrowserError("invalid_arguments", "--frame 仅支持内部 DOM 操作") }
+            guard let document = frames.documents.first(where: { $0.id == frameID }), document.info.webView === webView else {
+                throw BrowserError("stale_frame", "frame 文档已失效或不属于此 Tab；重新 frame list 并确认目标")
+            }
+            target = document
+        }
+        let guardScript = try target.map { "if(!globalThis.__agentWebKitFrame?.active||globalThis.__agentWebKitFrame.epoch!==\(try quoteJS($0.epoch)))throw new Error('stale_frame: frame document changed');" } ?? ""
+        let source = internalDOM ? "(()=>{try{\(guardScript)return (0,eval)(\(try quoteJS(script)))}catch(error){throw new Error('__agent_webkit_dom__:'+String(error?.message||error))}})()" : script
         return try await perform(awaitPromise ? "callAsyncJavaScript" : "evaluateJavaScript") { complete in
-            let callback: (Any?, Error?) -> Void = { result, error in
+            let callback: (Any?, Error?) -> Void = { [weak self] result, error in
                 if let error {
                     let nsError = error as NSError
+                    if let target, nsError.domain == WKErrorDomain, nsError.code == WKError.Code.javaScriptInvalidFrameTarget.rawValue {
+                        self?.frames.remove(target.id)
+                        complete(.failure(BrowserError("stale_frame", "frame 已移除或文档已失效；重新 frame list")))
+                        return
+                    }
                     if let message = nsError.userInfo["WKJavaScriptExceptionMessage"] as? String {
-                        let codes = ["stale_ref", "selector_count", "invalid_selector", "unsupported_context", "element_not_actionable", "element_readonly", "unsupported_fill_type", "element_not_editable", "invalid_option", "unsupported_upload_target", "upload_multiple_not_allowed", "upload_unavailable", "unsupported_screenshot_geometry"]
+                        let codes = ["stale_frame", "stale_ref", "selector_count", "invalid_selector", "unsupported_context", "element_not_actionable", "element_readonly", "unsupported_fill_type", "element_not_editable", "invalid_option", "unsupported_upload_target", "upload_multiple_not_allowed", "upload_unavailable", "unsupported_screenshot_geometry"]
                         let prefix = "__agent_webkit_dom__:"
                         let exception = message.hasPrefix("Error: ") ? String(message.dropFirst(7)) : message
                         let tagged = internalDOM && exception.hasPrefix(prefix)
                         let detail = tagged ? String(exception.dropFirst(prefix.count)) : message
                         let candidate = String(detail.split(separator: ":", maxSplits: 1).first ?? "")
                         let code = tagged && codes.contains(candidate) ? candidate : "javascript_error"
+                        if code == "stale_frame", let target { self?.frames.remove(target.id) }
                         complete(.failure(BrowserError(code, String(detail.prefix(2000)))))
                     } else { complete(.failure(error)) }
                 }
                 else { complete(.success(result ?? NSNull())) }
             }
             if awaitPromise {
-                webView.callAsyncJavaScript("return await (0, eval)(source)", arguments: ["source": source], in: nil, in: world) { result in
+                webView.callAsyncJavaScript("return await (0, eval)(source)", arguments: ["source": source], in: target?.info, in: world) { result in
                     switch result {
                     case .success(let value): callback(value, nil)
                     case .failure(let error): callback(nil, error)
                     }
                 }
             } else {
-                webView.evaluateJavaScript(source, in: nil, in: world) { result in
+                webView.evaluateJavaScript(source, in: target?.info, in: world) { result in
                     switch result {
                     case .success(let value): callback(value, nil)
                     case .failure(let error): callback(nil, error)
@@ -372,18 +395,22 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         throw BrowserError("popup_not_opened", "期限内未观察到新 Tab；DOM 合成点击不是可信用户激活，网站或 WebKit 可能拒绝弹窗。请核对页面状态，必要时手动点击；不会自动重试")
     }
 
-    func wait(selector: String?, timeout: Int, state: String = "visible", text: String? = nil, url: String? = nil) async throws {
+    func wait(selector: String?, timeout: Int, state: String = "visible", text: String? = nil, url: String? = nil, frameID: String? = nil) async throws {
         let start = monotonicNow()
         repeat {
-            if let navigationError { throw navigationError }
-            if let certificateError { throw certificateError }
+            if frameID == nil {
+                if let navigationError { throw navigationError }
+                if let certificateError { throw certificateError }
+            }
             if let url {
-                if (try await runJS("location.href === \(try quoteJS(url))", world: DOM.world) as? Bool) == true { return }
+                if (try await runJS("location.href === \(try quoteJS(url))", world: DOM.world, frameID: frameID) as? Bool) == true { return }
             } else if selector != nil || text != nil {
                 let target = try selector.map { try quoteJS($0) } ?? "null"
                 let expected = try text.map { try quoteJS($0) } ?? "null"
                 let script = "Boolean(window.__agentWebKit && window.__agentWebKit.matchesCondition(\(target),\(try quoteJS(state)),\(expected)))"
-                if (try await runJS(script, world: DOM.world) as? Bool) == true { return }
+                if (try await runJS(script, world: DOM.world, frameID: frameID) as? Bool) == true { return }
+            } else if frameID != nil {
+                if (try await runJS("document.readyState", world: DOM.world, frameID: frameID) as? String) == "complete" { return }
             } else if !webView.isLoading, !navigationPending, navigationSequence == completedNavigationSequence,
                       (try await runJS("document.readyState", world: DOM.world) as? String) == "complete" {
                 if let navigationError { throw navigationError }
@@ -527,6 +554,8 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        // A failed provisional load can retain the current document and all its frames.
+        // Live document epochs, not navigation attempts, govern frame validity.
         dialogs.cancelAll(code: "dialog_cancelled")
         fileChooser.stop()
         diagnostics.beginNavigation()
@@ -629,6 +658,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         terminated = true
+        frames.reset()
         clearNavigationSpans()
         dialogs.stop(code: "web_content_terminated")
         downloads.stop(); fileChooser.stop()
@@ -1066,7 +1096,7 @@ final class BrowserModel {
                     "storeCleanupErrors": storeCleanupErrors.map { ["spaceId": $0.key.uuidString, "error": $0.value] as [String: Any] },
                     "blockedSpaces": spaces.filter { $0.networkError != nil }.map { $0.record.id.uuidString },
                     "systemProxy": systemProxySummary(), "frontmostPid": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1,
-                    "capabilities": ["input":"dom-synthetic", "snapshot":"same-origin-frames-and-open-shadow-roots", "screenshot":"viewport", "screenshotModes":["viewport", "element", "full-page"], "foregroundRequired":false],
+                    "capabilities": ["input":"dom-synthetic", "snapshot":"same-origin-frames-and-open-shadow-roots", "crossOriginDOM":"frame list + explicit --tab/--frame for snapshot/click/fill/wait", "screenshot":"viewport", "screenshotModes":["viewport", "element", "full-page"], "foregroundRequired":false],
                     "directPolicy":"reject-enabled-system-proxy; no VPN/content-filter bypass guarantee"] as [String: Any]
         }
         if command == "shutdown" {
@@ -1288,13 +1318,28 @@ final class BrowserModel {
             tab.load(try validateURL(tab.persistedURL))
             try await tab.wait(selector: nil, timeout: timeout); try save(space)
         case "state": break
-        case "snapshot": value = try await tab.runJS("window.__agentWebKit.snapshot()", world: DOM.world)
+        case "frame.list": value = try await tab.frameList()
+        case "snapshot":
+            value = try await tab.runJS("window.__agentWebKit.snapshot()", world: DOM.world, frameID: r.options["frame"])
+            if let frameID = r.options["frame"], var snapshot = value as? [String: Any] {
+                snapshot["frameId"] = frameID
+                snapshot["textScope"] = "selected-frame"
+                snapshot["visibilityScope"] = "selected-document; cross-origin embedding ancestors not checked"
+                snapshot["elements"] = (snapshot["elements"] as? [[String: Any]] ?? []).map { element in
+                    var element = element
+                    if var bounds = element["bounds"] as? [String: Any] {
+                        bounds["coordinateSpace"] = "frame-viewport"; element["bounds"] = bounds
+                    }
+                    return element
+                }
+                value = snapshot
+            }
         case "evaluate": value = try await tab.runJS(arg(0), awaitPromise: r.options["await"] == "true")
         case "click", "fill":
             let before = tab.navigationSequence
             let beforePopup = tab.popupSequence
             tab.lastNavigationRejection = nil
-            value = try await tab.runJS("window.__agentWebKit.act(\(try quoteJS(command)),\(try quoteJS(arg(0))),\(try quoteJS(command == "fill" ? arg(1) : "")))", world: DOM.world)
+            value = try await tab.runJS("window.__agentWebKit.act(\(try quoteJS(command)),\(try quoteJS(arg(0))),\(try quoteJS(command == "fill" ? arg(1) : "")))", world: DOM.world, frameID: r.options["frame"])
             if r.options["wait-for-navigation"] == "true" { try await tab.waitForNavigation(after: before, timeout: timeout) }
             if r.options["wait-for-popup"] == "true" {
                 let popupID = try await tab.waitForPopup(after: beforePopup, timeout: timeout)
@@ -1302,14 +1347,19 @@ final class BrowserModel {
                 action["newTabId"] = popupID; value = action
             }
         case "wait":
-            try await tab.wait(selector: r.args.first, timeout: timeout, state: r.options["state"] ?? "visible", text: r.options["text"], url: r.options["url"])
+            try await tab.wait(selector: r.args.first, timeout: timeout, state: r.options["state"] ?? "visible", text: r.options["text"], url: r.options["url"], frameID: r.options["frame"])
         case "screenshot":
             guard let path = r.options["out"] else { throw BrowserError("invalid_arguments", "截图需要 --out PATH") }
             value = try await tab.screenshot(path: path, element: r.options["element"], fullPage: r.options["full-page"] == "true")
         case "upload": value = try await tab.upload(target: arg(0), paths: Array(r.args.dropFirst()))
         default: throw BrowserError("unknown_command", "未知命令")
         }
-        return ["spaceId": id.uuidString, "space": space.record.name, "proxy": space.record.proxy, "network": space.networkState, "page": tab.state, "value": value]
+        var result: [String: Any] = ["spaceId": id.uuidString, "space": space.record.name, "proxy": space.record.proxy, "network": space.networkState, "page": tab.state, "value": value]
+        if let frameID = r.options["frame"] {
+            result["frameId"] = frameID
+            result["visibilityScope"] = "selected-document; cross-origin embedding ancestors not checked"
+        }
+        return result
     }
 
     private func validateURL(_ raw: String) throws -> URL {

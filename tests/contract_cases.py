@@ -26,7 +26,7 @@ def verify_offline(cli):
         assert command['resultSchema'] in definitions
         assert cli('help', *name.split('.'))['commands'] == [command]
         assert command['args']['maximum'] == len(command['args']['names'])
-    for group in ('space', 'tab', 'dialog'):
+    for group in ('space', 'tab', 'dialog', 'frame'):
         assert {item['command'] for item in cli('help', group)['commands']} == {
             name for name in commands if name.startswith(group + '.')}
     timeout = next(option for option in commands['open']['options'] if option['name'] == 'timeout')
@@ -50,6 +50,8 @@ def verify_offline(cli):
     assert next(option for option in commands['screenshot']['options'] if option['name'] == 'element')['type'] == 'string'
     assert next(option for option in commands['screenshot']['options'] if option['name'] == 'full-page')['type'] == 'flag'
     assert contract['constraints']['screenshot']['mutuallyExclusive'] == [['element', 'full-page']]
+    assert contract['constraints']['frame']['requires'] == ['tab']
+    assert 'frame.list' in commands and 'stale_frame' in contract['errors']
     assert {'stale_ref', 'timeout', 'space_busy', 'tab_not_found', 'operation_failed'} <= set(contract['errors'])
     for args in [('help', 'missing'), ('help', 'space', 'missing'), ('help', 'open', 'extra'),
                  ('capabilities', 'extra'), ('capabilities', '--space', 'work'), ('help', '--tab', 'id'),
@@ -84,6 +86,9 @@ def verify_live_contract(cli, socket_path):
     assert raw('dialog.respond', ['unknown', 'yes'], {'space': 'work'})['error']['code'] == 'invalid_arguments'
     assert raw('dialog.list', options={'space': 'work', 'text': 'wrong'})['error']['code'] == 'invalid_arguments'
     assert raw('snapshot', options={'space': 'work', 'element': '#message'})['error']['code'] == 'invalid_arguments'
+    assert raw('snapshot', options={'space': 'work', 'frame': 'unknown'})['error']['code'] == 'invalid_arguments'
+    assert raw('snapshot', options={'space': 'work', 'tab': spaces[0]['defaultTabId'], 'frame': ''})['error']['code'] == 'invalid_arguments'
+    assert raw('evaluate', ['true'], {'space': 'work', 'tab': spaces[0]['defaultTabId'], 'frame': 'unknown'})['error']['code'] == 'invalid_arguments'
     assert raw('screenshot', options={'space': 'work', 'full-page': 'false', 'out': '/tmp/unused.png'})['error']['code'] == 'invalid_arguments'
     assert raw('screenshot', options={'space': 'work', 'full-page': 'true', 'element': '#message', 'out': '/tmp/unused.png'})['error']['code'] == 'invalid_arguments'
     for options in ({}, {'all': 'false'}, {'all': 'yes'}, {'all': 'true', 'tab': 'wrong'}):
