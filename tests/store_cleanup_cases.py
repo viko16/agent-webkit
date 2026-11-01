@@ -48,7 +48,7 @@ def cleanup_failure_app(out):
     generated = out / 'Browser.swift'
     generated.write_text(source)
     app = out / 'Cleanup Failure.app'
-    binary = app / 'Contents/MacOS/browser'
+    binary = app / 'Contents/MacOS/awb'
     binary.parent.mkdir(parents=True)
     # Keep the product Bundle ID: the fixture must use the same real WebKit stores.
     (app / 'Contents/Info.plist').write_bytes(plistlib.dumps(

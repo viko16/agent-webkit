@@ -56,7 +56,7 @@ enum CLIContract {
         let arity = Request.arities[name]!
         let args = (arguments[name] ?? []).enumerated().map { i, arg in i < arity.lowerBound ? arg : "[\(arg)]" }
         let flags = requiredOptions(name).map { optionDetails[$0]?["type"] as? String == "flag" ? "--\($0)" : "--\($0) VALUE" }
-        return (["browser", name.replacingOccurrences(of: ".", with: " ")] + args + flags).joined(separator: " ")
+        return (["awb", name.replacingOccurrences(of: ".", with: " ")] + args + flags).joined(separator: " ")
     }
 
     private static func command(_ name: String) -> [String: Any] {
@@ -127,7 +127,7 @@ enum CLIContract {
                 "dialog.respond": ["actions": ["accept", "dismiss"], "textRequires": ["type": "prompt", "action": "accept"]],
                 "wait": ["mutuallyExclusive": [["url", "text", "state"]],
                          "urlRequiresNoSelector": true, "stateRequiresSelector": true],
-                "cli": ["literalSeparator": "--", "duplicateOptions": "rejected", "help": "browser help [COMMAND [SUBCOMMAND]]"]
+                "cli": ["literalSeparator": "--", "duplicateOptions": "rejected", "help": "awb help [COMMAND [SUBCOMMAND]]"]
             ],
             "schemas": [
                 "$schema": "https://json-schema.org/draft/2020-12/schema",

@@ -104,8 +104,8 @@ def main():
     out.mkdir(parents=True)
     state = Path(tempfile.mkdtemp(prefix='aw-skill-'))
     env = dict(os.environ, BROWSER_DATA_DIR=str(state), BROWSER_SOCKET=str(state / 'browser.sock'))
-    binary = ROOT / '.build/debug/browser'
-    app = ROOT / '.build/Agent WebKit.app/Contents/MacOS/browser'
+    binary = ROOT / '.build/debug/awb'
+    app = ROOT / '.build/Agent WebKit.app/Contents/MacOS/awb'
     site, _ = origin()
     url = f'http://127.0.0.1:{site.server_address[1]}/index.html'
 

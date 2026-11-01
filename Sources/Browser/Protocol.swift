@@ -46,7 +46,7 @@ struct Request: Codable {
 
     func validate() throws {
         guard let arity = Self.arities[command], arity.contains(args.count) else {
-            throw BrowserError("invalid_arguments", "未知命令或参数数量不正确：\(command)；browser help 查看用法")
+            throw BrowserError("invalid_arguments", "未知命令或参数数量不正确：\(command)；awb help 查看用法")
         }
         let allowed = Self.allowedOptions(for: command)
         if options["element"] != nil && options["full-page"] != nil { throw BrowserError("invalid_arguments", "--element 与 --full-page 互斥") }
@@ -152,38 +152,38 @@ struct Options {
 }
 
 let usage = """
-browser help [COMMAND [SUBCOMMAND]] | capabilities
-browser daemon [--data-dir PATH] [--socket PATH]
-browser status | shutdown --all
-browser space create NAME --proxy direct|http://127.0.0.1:<PORT> [--ca-cert PATH | --ignore-certificate-errors]
+awb help [COMMAND [SUBCOMMAND]] | capabilities
+awb daemon [--data-dir PATH] [--socket PATH]
+awb status | shutdown --all
+awb space create NAME --proxy direct|http://127.0.0.1:<PORT> [--ca-cert PATH | --ignore-certificate-errors]
   PORT: 1–65535; each Space retains its own proxy across restarts (e.g. 8899).
-browser space list
-browser space info|delete NAME_OR_ID
-browser space suspend|resume NAME_OR_ID
-browser open URL --space NAME_OR_ID [--tab ID]
-browser tab new [URL] --space NAME_OR_ID
-browser tab list --space NAME_OR_ID
-browser tab close ID --space NAME_OR_ID
-browser tab default ID --space NAME_OR_ID
-browser reload --space NAME_OR_ID [--tab ID] [--timeout 15000]
-browser snapshot|state --space NAME_OR_ID [--tab ID]
-browser diagnostics --space NAME_OR_ID [--tab ID] [--clear] [--detail on|off | --inspectable on|off]
-browser dialog list --space NAME_OR_ID [--tab ID]
-browser dialog respond ID accept|dismiss --space NAME_OR_ID [--tab ID] [--text PROMPT_VALUE]
-browser download list --space NAME_OR_ID [--tab ID]
-browser download wait|cancel ID --space NAME_OR_ID [--tab ID]
-browser upload SELECTOR_OR_REF FILE_PATH [FILE_PATH ...] --space NAME_OR_ID [--tab ID]
-browser click SELECTOR_OR_REF --space NAME_OR_ID [--tab ID] [--wait-for-navigation | --wait-for-popup] [--timeout 15000]
-browser fill SELECTOR_OR_REF VALUE --space NAME_OR_ID [--tab ID]
-browser evaluate JAVASCRIPT --space NAME_OR_ID [--tab ID] [--await] [--timeout 15000]
-browser screenshot --space NAME_OR_ID [--tab ID] --out PATH [--element SELECTOR_OR_REF | --full-page]
-browser wait [SELECTOR_OR_REF] --space NAME_OR_ID [--tab ID] [--timeout 15000]
-browser wait --url EXACT_URL --space NAME_OR_ID
-browser wait [SELECTOR_OR_REF] --text TEXT --space NAME_OR_ID
-browser wait SELECTOR_OR_REF --state visible|hidden|attached|detached|enabled|disabled --space NAME_OR_ID
+awb space list
+awb space info|delete NAME_OR_ID
+awb space suspend|resume NAME_OR_ID
+awb open URL --space NAME_OR_ID [--tab ID]
+awb tab new [URL] --space NAME_OR_ID
+awb tab list --space NAME_OR_ID
+awb tab close ID --space NAME_OR_ID
+awb tab default ID --space NAME_OR_ID
+awb reload --space NAME_OR_ID [--tab ID] [--timeout 15000]
+awb snapshot|state --space NAME_OR_ID [--tab ID]
+awb diagnostics --space NAME_OR_ID [--tab ID] [--clear] [--detail on|off | --inspectable on|off]
+awb dialog list --space NAME_OR_ID [--tab ID]
+awb dialog respond ID accept|dismiss --space NAME_OR_ID [--tab ID] [--text PROMPT_VALUE]
+awb download list --space NAME_OR_ID [--tab ID]
+awb download wait|cancel ID --space NAME_OR_ID [--tab ID]
+awb upload SELECTOR_OR_REF FILE_PATH [FILE_PATH ...] --space NAME_OR_ID [--tab ID]
+awb click SELECTOR_OR_REF --space NAME_OR_ID [--tab ID] [--wait-for-navigation | --wait-for-popup] [--timeout 15000]
+awb fill SELECTOR_OR_REF VALUE --space NAME_OR_ID [--tab ID]
+awb evaluate JAVASCRIPT --space NAME_OR_ID [--tab ID] [--await] [--timeout 15000]
+awb screenshot --space NAME_OR_ID [--tab ID] --out PATH [--element SELECTOR_OR_REF | --full-page]
+awb wait [SELECTOR_OR_REF] --space NAME_OR_ID [--tab ID] [--timeout 15000]
+awb wait --url EXACT_URL --space NAME_OR_ID
+awb wait [SELECTOR_OR_REF] --text TEXT --space NAME_OR_ID
+awb wait SELECTOR_OR_REF --state visible|hidden|attached|detached|enabled|disabled --space NAME_OR_ID
 所有命令支持 --socket PATH。页面命令必须指定 Space；默认标签页固定，与 GUI 无关。
 WebKit 操作支持 --timeout 1–60000；--await 等待 Promise；-- 后的参数按字面值处理。
-browser --help | --version 无需启动服务。reload 恢复异常页面，保留 Tab ID 和 Space 网站数据。
+awb --help | --version 无需启动服务。reload 恢复异常页面，保留 Tab ID 和 Space 网站数据。
 --wait-for-popup 等待同 Space 新 Tab 并返回 newTabId；DOM 点击不保证可信用户激活或业务成功。
 响应 timing 包含 cliMs、ipcRoundTripMs、serverMs、webkitMs；完整 CLI 进程耗时需由调用方测量。
 """

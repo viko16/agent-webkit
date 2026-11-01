@@ -42,7 +42,7 @@ def verify_offline(cli):
     assert set(contract['exitCodes']) == {'0', '1'}
     shutdown_flag = next(option for option in commands['shutdown']['options'] if option['name'] == 'all')
     assert shutdown_flag['required'] and shutdown_flag['type'] == 'flag' and shutdown_flag['ipcValue'] == 'true'
-    assert commands['shutdown']['usage'] == 'browser shutdown --all'
+    assert commands['shutdown']['usage'] == 'awb shutdown --all'
     assert next(option for option in commands['screenshot']['options'] if option['name'] == 'element')['type'] == 'string'
     assert next(option for option in commands['screenshot']['options'] if option['name'] == 'full-page')['type'] == 'flag'
     assert contract['constraints']['screenshot']['mutuallyExclusive'] == [['element', 'full-page']]
@@ -111,7 +111,7 @@ def main():
         env = dict(os.environ, BROWSER_DATA_DIR=str(data), BROWSER_SOCKET=str(data / 'missing.sock'))
 
         def cli(*args, error=None):
-            process = subprocess.run([str(ROOT / '.build/debug/browser'), *args], env=env,
+            process = subprocess.run([str(ROOT / '.build/debug/awb'), *args], env=env,
                                      capture_output=True, text=True, timeout=10)
             response = json.loads(process.stdout)
             assert process.returncode == (1 if error else 0), (args, response, process.stderr)

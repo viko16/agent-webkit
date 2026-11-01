@@ -90,7 +90,7 @@ def gated_cleanup_app(out):
     generated = out / 'Browser.swift'
     generated.write_text(source)
     app = out / 'Store Callback Gates.app'
-    binary = app / 'Contents/MacOS/browser'
+    binary = app / 'Contents/MacOS/awb'
     binary.parent.mkdir(parents=True)
     (app / 'Contents/Info.plist').write_bytes(plistlib.dumps(
         plistlib.loads((ROOT / 'packaging/Info.plist').read_bytes())))

@@ -24,7 +24,7 @@ def main():
 
     def cli(*arguments, ok=True):
         nonlocal count
-        command = [str(ROOT / '.build/debug/browser'), *arguments]
+        command = [str(ROOT / '.build/debug/awb'), *arguments]
         if args.socket:
             command += ['--socket', args.socket]
         start = time.perf_counter_ns()

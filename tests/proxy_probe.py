@@ -12,8 +12,8 @@ state = tempfile.mkdtemp(prefix='awk-probe-')
 env = dict(os.environ, BROWSER_DATA_DIR=state)
 server, origin_events = origin()
 relay, events = proxy()
-binary = str(root / '.build/debug/browser')
-daemon = subprocess.Popen([str(root / '.build/Agent WebKit.app/Contents/MacOS/browser'), 'daemon'], env=env, stdout=subprocess.DEVNULL)
+binary = str(root / '.build/debug/awb')
+daemon = subprocess.Popen([str(root / '.build/Agent WebKit.app/Contents/MacOS/awb'), 'daemon'], env=env, stdout=subprocess.DEVNULL)
 
 def cli(*args):
     result = subprocess.run([binary, *args], env=env, text=True, capture_output=True, timeout=70)

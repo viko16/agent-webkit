@@ -1048,7 +1048,7 @@ final class BrowserModel {
             throw BrowserError("invalid_arguments", "证书策略只能在 space create 时配置")
         }
         func arg(_ index: Int) throws -> String {
-            guard r.args.indices.contains(index) else { throw BrowserError("invalid_arguments", "缺少参数；browser help 查看用法") }
+            guard r.args.indices.contains(index) else { throw BrowserError("invalid_arguments", "缺少参数；awb help 查看用法") }
             return r.args[index]
         }
         if command == "help" { return try CLIContract.help(r.args) }

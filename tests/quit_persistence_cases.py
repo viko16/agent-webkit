@@ -38,7 +38,7 @@ def quit_fixture(out):
     generated_browser = out / 'Browser.swift'
     generated_browser.write_text(browser)
     app = out / 'Quit Persistence.app'
-    binary = app / 'Contents/MacOS/browser'
+    binary = app / 'Contents/MacOS/awb'
     binary.parent.mkdir(parents=True)
     info = plistlib.loads((ROOT / 'packaging/Info.plist').read_bytes())
     (app / 'Contents/Info.plist').write_bytes(plistlib.dumps(info))

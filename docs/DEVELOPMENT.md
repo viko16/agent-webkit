@@ -9,17 +9,17 @@ python3 tests/acceptance.py --out .artifacts/acceptance
 python3 tests/reliability.py  # 独立应用、本地页面、超时恢复和计时回归
 ```
 
-Swift Package 无第三方包。`scripts/build.sh` 生成 `.build/Agent WebKit.app`，包含固定 Bundle ID、原生绘制的图标和允许 Web 内容联网的 ATS 配置。签名仅供本机开发，不包含公证或分发证书。测试使用 `.build/debug/browser` 作客户端，使用应用包中的 `browser daemon` 启动服务；测试前至少构建一次 debug，并确保客户端与应用包来自相同源码。`scripts/make_icon.swift` 以 AppKit 绘制各尺寸图标，再由系统 iconutil 打包，不需要图片生成服务或外部依赖。
+Swift Package 无第三方包。`scripts/build.sh` 生成 `.build/Agent WebKit.app`，包含固定 Bundle ID、原生绘制的图标和允许 Web 内容联网的 ATS 配置。签名仅供本机开发，不包含公证或分发证书。测试使用 `.build/debug/awb` 作客户端，使用应用包中的 `awb daemon` 启动服务；测试前至少构建一次 debug，并确保客户端与应用包来自相同源码。`scripts/make_icon.swift` 以 AppKit 绘制各尺寸图标，再由系统 iconutil 打包，不需要图片生成服务或外部依赖。
 
-服务应始终由打包应用启动，保持 Bundle ID 一致；直接运行未打包的 `.build/debug/browser daemon` 会改变 WebKit 的存储归属，不能与应用包混用。该二进制仍可作 CLI 客户端。
+服务应始终由打包应用启动，保持 Bundle ID 一致；直接运行未打包的 `.build/debug/awb daemon` 会改变 WebKit 的存储归属，不能与应用包混用。该二进制仍可作 CLI 客户端。
 
 ## 离线帮助与机器可读契约
 
 ```sh
-browser help                    # 保留 result.usage
-browser help space              # 命令组
-browser help space create       # 或 browser help open
-browser capabilities
+awb help                    # 保留 result.usage
+awb help space              # 命令组
+awb help space create       # 或 awb help open
+awb capabilities
 python3 tests/contract_cases.py  # 不存在的 Socket / 数据目录，验证纯离线查询
 python3 tests/reliability.py --forms  # 含真实 CLI / IPC 对照和原有可靠性回归
 ```
@@ -40,7 +40,7 @@ python3 tests/reliability.py --forms  # 含真实 CLI / IPC 对照和原有可�
 
 每条 CLI 命令返回一行 JSON：成功为 `{"ok":true,"result":...}`，失败为 `{"ok":false,"error":{"code":...,"message":...}}`，退出码分别为 0/1。页面结果包含 Space/Tab ID、URL、加载状态和代理限制；click/fill 标明 `method: "dom"`、`nativeVerified: false`，动作成功仍需核对业务结果。
 
-WebKit 操作默认超时 15000 ms，`--timeout` 接受 1–60000 ms；`evaluate --await` 等待 Promise。`browser --help`、`browser --version`、按命令帮助和 capabilities 均可离线查询。值以 `--` 开头时，将选项放在前面，再以 `--` 分隔位置参数，例如 `browser fill --space work -- '#message' '--hello'`。
+WebKit 操作默认超时 15000 ms，`--timeout` 接受 1–60000 ms；`evaluate --await` 等待 Promise。`awb --help`、`awb --version`、按命令帮助和 capabilities 均可离线查询。值以 `--` 开头时，将选项放在前面，再以 `--` 分隔位置参数，例如 `awb fill --space work -- '#message' '--hello'`。
 
 ## Codex / Pi Skill
 
@@ -48,7 +48,7 @@ WebKit 操作默认超时 15000 ms，`--timeout` 接受 1–60000 ms；`evaluate
 
 用户确认安装后，可将整个 `skills/agent-webkit` 目录复制或链接到 `~/.agents/skills/agent-webkit`（个人范围）或使用项目的 `.agents/skills/agent-webkit`（项目范围）。这两种位置由 [Codex 官方文档](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills)和 [Pi 官方文档](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/skills.md#add-it-to-pi)说明；同一位置可能被两个 Agent 发现。已有同名目录时先核对，不覆盖既有内容。仓库中的 `skills/` 只是发布源，构建/测试不会自动安装到发现目录或改动用户配置。
 
-Codex 可显式调用 `$agent-webkit`，Pi 使用 `/skill:agent-webkit`；也可在单次任务里提供本仓库 SKILL.md 的绝对路径，让 Agent 读取后执行，不做持久安装。先把打包应用的 `browser` 加入 PATH，或在任务里提供绝对可执行文件路径与既有 Socket；Skill 不擅自安装 CLI 或启动/停止共享 daemon。
+Codex 可显式调用 `$agent-webkit`，Pi 使用 `/skill:agent-webkit`；也可在单次任务里提供本仓库 SKILL.md 的绝对路径，让 Agent 读取后执行，不做持久安装。先把打包应用的 `awb` 加入 PATH，或在任务里提供绝对可执行文件路径与既有 Socket；Skill 不擅自安装 CLI 或启动/停止共享 daemon。
 
 ```sh
 python3 tests/skill_workflow.py
@@ -98,15 +98,15 @@ busy 时拒绝休眠/恢复；自主对话框随页面关闭安全结束，原 I
 
 ```sh
 # 触发动作保持运行；另一个 CLI 查询并回应，不要再次触发动作
-browser click '#confirm' --space work --tab TAB_ID --timeout 30000 > action.json &
+awb click '#confirm' --space work --tab TAB_ID --timeout 30000 > action.json &
 dialog_action_pid=$!
-browser dialog list --space work --tab TAB_ID
-browser dialog respond DIALOG_ID accept --space work --tab TAB_ID
+awb dialog list --space work --tab TAB_ID
+awb dialog respond DIALOG_ID accept --space work --tab TAB_ID
 wait "$dialog_action_pid"
-browser wait '#result' --text '完成' --space work --tab TAB_ID
+awb wait '#result' --text '完成' --space work --tab TAB_ID
 
-browser dialog respond DIALOG_ID dismiss --space work --tab TAB_ID
-browser dialog respond DIALOG_ID accept --text '输入值' --space work --tab TAB_ID
+awb dialog respond DIALOG_ID dismiss --space work --tab TAB_ID
+awb dialog respond DIALOG_ID accept --text '输入值' --space work --tab TAB_ID
 python3 tests/reliability.py --dialogs-only
 ```
 
@@ -192,9 +192,9 @@ GUI 模式复制一个独立 Bundle ID 的测试应用，打印原生操作检�
 后台清理定时任务之外，宿主也会在接收事件及生成快照前检查绝对/单调期限，先抹除过期详情，再接受或输出数据，不依赖后台定时器准时唤醒。
 
 ```sh
-browser diagnostics --space work --tab TAB_ID --detail on
-browser diagnostics --space work --tab TAB_ID
-browser diagnostics --space work --tab TAB_ID --detail off
+awb diagnostics --space work --tab TAB_ID --detail on
+awb diagnostics --space work --tab TAB_ID
+awb diagnostics --space work --tab TAB_ID --detail off
 python3 tests/reliability.py --diagnostics-only  # 含真实 5 分钟自然到期检查
 ```
 
@@ -213,9 +213,9 @@ XHR 按启用期间的每次 `send()` 分配当前代号和请求 ID，不要求
 ## Safari 手动 Inspector
 
 ```sh
-browser diagnostics --space work --tab TAB_ID --inspectable on
-browser diagnostics --space work --tab TAB_ID   # value.inspectable
-browser diagnostics --space work --tab TAB_ID --inspectable off
+awb diagnostics --space work --tab TAB_ID --inspectable on
+awb diagnostics --space work --tab TAB_ID   # value.inspectable
+awb diagnostics --space work --tab TAB_ID --inspectable off
 ```
 
 直接设置公开 `WKWebView.isInspectable`，默认 false，只影响指定 Tab 的当前 WebView；另一 Space、同 Space 其他 Tab 及新 popup 不继承。不启动 Safari、打开调试窗口、激活应用、改 Safari 设置或使用私有 WebKit 方法。此开关不依赖页面 JS 或 Space 操作锁，忙碌、暂停或卡死时也能设置/读取；true 只表示宿主允许检查，不能当成 Inspector 已连接或页面正常。
@@ -227,8 +227,8 @@ browser diagnostics --space work --tab TAB_ID --inspectable off
 ## Console 与网络诊断
 
 ```sh
-browser diagnostics --space work [--tab ID]
-browser diagnostics --space work --clear
+awb diagnostics --space work [--tab ID]
+awb diagnostics --space work --clear
 python3 tests/reliability.py --diagnostics-only
 python3 tests/reliability.py --forms  # 含诊断、原有可靠性和框架回归
 ```
@@ -303,10 +303,10 @@ Direct 冲突不在 `Space.init` 抛出；恢复跳过受阻导航，数据容�
 
 ```sh
 curl --noproxy '*' 'http://127.0.0.1:8899/cgi-bin/rootca?type=pem' -o /tmp/whistle-ca.pem
-browser space create trusted --proxy http://127.0.0.1:8899 --ca-cert /tmp/whistle-ca.pem
+awb space create trusted --proxy http://127.0.0.1:8899 --ca-cert /tmp/whistle-ca.pem
 
 # 仅用于显式选择的受控开发环境
-browser space create dev --proxy http://127.0.0.1:8899 --ignore-certificate-errors
+awb space create dev --proxy http://127.0.0.1:8899 --ignore-certificate-errors
 ```
 
 实现通过 WKNavigationDelegate 的 server-trust challenge，仅对当前 `SecTrust` 加入 Anchor，并保留原有 SSL / hostname 策略，允许系统 Anchor。异步评估在主队列发起并回到主队列，符合 Security API 的队列要求；仅在评估成功时使用 credential。错误域名、过期证书、无关 CA 和缺少用途的证书仍会拒绝。
@@ -434,7 +434,7 @@ Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 
 ```sh
 python3 tests/timing.py
 python3 scripts/google_demo.py --space google-demo
-# 可选：--browser PATH、--socket PATH、--out 新目录
+# 可选：--awb PATH、--socket PATH、--out 新目录
 ```
 
 脚本连接已经启动的应用，不自行构建或重启。它使用 direct 和默认系统证书校验，逐条启动独立 CLI 进程，保留演示 Space 与最终页面。每次运行生成一个新目录，内有 `report.json`、各条命令的完整 JSON、首页 / 搜索结果 / 滚动后 / 目标页截图。遇到网络错误、验证码或页面结构变化会失败并保存已完成步骤，不使用本地假页面代替 Google。

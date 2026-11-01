@@ -69,7 +69,7 @@ func sendRequest(_ request: Request, path: String) throws -> Data {
     defer { close(fd) }
     configure(fd)
     var addr = try address(path)
-    guard withAddress(&addr, { Darwin.connect(fd, $0, $1) }) == 0 else { throw socketError("connect; 请先启动 browser daemon") }
+    guard withAddress(&addr, { Darwin.connect(fd, $0, $1) }) == 0 else { throw socketError("connect; 请先启动 awb daemon") }
     try writeMessage(fd, JSONEncoder().encode(request))
     return try readMessage(fd)
 }

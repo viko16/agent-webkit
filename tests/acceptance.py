@@ -72,8 +72,8 @@ def main():
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
     state = Path(tempfile.mkdtemp(prefix='awk-'))
-    binary = ROOT / '.build/debug/browser'
-    app_binary = ROOT / '.build/Agent WebKit.app/Contents/MacOS/browser'
+    binary = ROOT / '.build/debug/awb'
+    app_binary = ROOT / '.build/Agent WebKit.app/Contents/MacOS/awb'
     site_observer = None
     if args.real_sites_gui:
         app_binary, site_observer = prepare_site_gui(out, ROOT / '.build/Agent WebKit.app')

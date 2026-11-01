@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--browser', default=str(ROOT / '.build/debug/browser'))
+    parser.add_argument('--awb', '--browser', dest='awb', default=str(ROOT / '.build/debug/awb'))
     parser.add_argument('--space', default='google-demo')
     parser.add_argument('--socket', help='Connect to an already running app; otherwise use CLI defaults')
     parser.add_argument('--out', default=str(ROOT / '.artifacts' / time.strftime('google-timing-%Y%m%d-%H%M%S')))
@@ -41,7 +41,7 @@ def main():
 
     def run(label, *command, phase='demo', allow_error=False):
         number = len(steps) + 1
-        argv = [args.browser, *command]
+        argv = [args.awb, *command]
         if args.socket:
             argv += ['--socket', args.socket]
         start = time.perf_counter_ns()

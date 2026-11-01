@@ -4,6 +4,6 @@ import PackageDescription
 let package = Package(
     name: "AgentWebKit",
     platforms: [.macOS(.v14)],
-    products: [.executable(name: "browser", targets: ["Browser"])],
+    products: [.executable(name: "awb", targets: ["Browser"])],
     targets: [.executableTarget(name: "Browser")]
 )

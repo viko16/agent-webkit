@@ -50,7 +50,7 @@ def search_fixture(out):
     generated = out / 'Window.swift'
     generated.write_text(source)
     app = out / 'Search Selection.app'
-    binary = app / 'Contents/MacOS/browser'
+    binary = app / 'Contents/MacOS/awb'
     binary.parent.mkdir(parents=True)
     info = plistlib.loads((ROOT / 'packaging/Info.plist').read_bytes())
     info['CFBundleIdentifier'] = 'local.agent-webkit.search-test'

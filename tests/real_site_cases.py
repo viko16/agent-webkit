@@ -32,7 +32,7 @@ def prepare_site_gui(out, app):
         with (out / 'gui-checkpoints.jsonl').open('a') as log:
             log.write(json.dumps(dict(checkpoint, operatorConfirmed=True)) + '\n')
 
-    return copied / 'Contents/MacOS/browser', observe
+    return copied / 'Contents/MacOS/awb', observe
 
 
 def site_gui_checks(cli, created, report, observe):

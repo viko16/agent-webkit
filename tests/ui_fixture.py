@@ -33,7 +33,7 @@ def main():
     import tempfile
     state = Path(tempfile.mkdtemp(prefix='aw-ui-'))
     env = dict(os.environ, BROWSER_DATA_DIR=str(state), BROWSER_SOCKET=str(state / 'browser.sock'))
-    binary = ROOT / '.build/debug/browser'
+    binary = ROOT / '.build/debug/awb'
     site, _ = origin()
     url = f'http://127.0.0.1:{site.server_address[1]}/popups'
     daemon = None
@@ -47,7 +47,7 @@ def main():
 
     def start():
         nonlocal daemon
-        daemon = subprocess.Popen([str(app / 'Contents/MacOS/browser'), 'daemon'],
+        daemon = subprocess.Popen([str(app / 'Contents/MacOS/awb'), 'daemon'],
                                   env=dict(env, **injection), stdout=log, stderr=log)
         for _ in range(100):
             assert daemon.poll() is None
