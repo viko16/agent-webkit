@@ -8,6 +8,13 @@ struct BrowserError: LocalizedError {
     init(_ code: String, _ message: String) { self.code = code; self.message = message }
 }
 
+// A finite set of public-AppKit key behaviors; not a general shortcut or text-input API.
+enum BackgroundKey: String, CaseIterable {
+    case enter = "Enter", tab = "Tab", escape = "Escape", left = "ArrowLeft"
+    case shiftLeft = "Shift+ArrowLeft", optionLeft = "Option+ArrowLeft"
+    case controlB = "Control+B", shiftX = "Shift+X"
+}
+
 struct Request: Codable {
     var command: String
     var args: [String]
@@ -20,7 +27,8 @@ struct Request: Codable {
             "snapshot":0...0, "state":0...0, "evaluate":1...1, "click":1...1,
             "fill":2...2, "screenshot":0...0, "wait":0...1, "diagnostics":0...0,
             "dialog.list":0...0, "dialog.respond":2...2, "space.suspend":1...1, "space.resume":1...1,
-            "download.list":0...0, "download.wait":1...1, "download.cancel":1...1, "upload":2...17, "frame.list":0...0]
+            "download.list":0...0, "download.wait":1...1, "download.cancel":1...1, "upload":2...17, "frame.list":0...0,
+            "focus":1...1, "key":1...1]
 
     static let clientOptions: Set<String> = ["socket", "data-dir"]
 
@@ -30,7 +38,7 @@ struct Request: Codable {
             allowed.insert("space")
             if !command.hasPrefix("tab.") { allowed.insert("tab") }
         }
-        if ["open", "reload", "tab.new", "snapshot", "evaluate", "click", "fill", "screenshot", "wait", "frame.list"].contains(command) { allowed.insert("timeout") }
+        if ["open", "reload", "tab.new", "snapshot", "evaluate", "click", "fill", "screenshot", "wait", "frame.list", "focus", "key"].contains(command) { allowed.insert("timeout") }
         if ["snapshot", "click", "fill", "wait"].contains(command) { allowed.insert("frame") }
         if command == "space.create" { allowed.formUnion(["proxy", "ca-cert", "ignore-certificate-errors"]) }
         if command == "click" { allowed.formUnion(["wait-for-navigation", "wait-for-popup"]) }
@@ -50,6 +58,12 @@ struct Request: Codable {
             throw BrowserError("invalid_arguments", "未知命令或参数数量不正确：\(command)；awb help 查看用法")
         }
         let allowed = Self.allowedOptions(for: command)
+        if ["focus", "key"].contains(command), options["tab"] == nil || options["tab"] == "" {
+            throw BrowserError("invalid_arguments", "focus/key 必须显式指定 --tab")
+        }
+        if command == "key", BackgroundKey(rawValue: args[0]) == nil {
+            throw BrowserError("unsupported_key", "支持的后台按键：\(BackgroundKey.allCases.map(\.rawValue).joined(separator: ", "))；通用快捷键和 IME 未支持")
+        }
         if let frame = options["frame"], frame.isEmpty || options["tab"] == nil {
             throw BrowserError("invalid_arguments", "--frame 需要非空文档 ID 和显式 --tab；先用 frame list 确认目标")
         }
@@ -182,6 +196,8 @@ awb download wait|cancel ID --space NAME_OR_ID [--tab ID]
 awb upload SELECTOR_OR_REF FILE_PATH [FILE_PATH ...] --space NAME_OR_ID [--tab ID]
 awb click SELECTOR_OR_REF --space NAME_OR_ID [--tab ID] [--wait-for-navigation | --wait-for-popup] [--timeout 15000]
 awb fill SELECTOR_OR_REF VALUE --space NAME_OR_ID [--tab ID]
+awb focus SELECTOR_OR_REF --space NAME_OR_ID --tab ID [--timeout 15000]
+awb key KEY --space NAME_OR_ID --tab ID [--timeout 15000]
 awb evaluate JAVASCRIPT --space NAME_OR_ID [--tab ID] [--await] [--timeout 15000]
 awb screenshot --space NAME_OR_ID [--tab ID] --out PATH [--element SELECTOR_OR_REF | --full-page]
 awb wait [SELECTOR_OR_REF] --space NAME_OR_ID [--tab ID] [--timeout 15000]

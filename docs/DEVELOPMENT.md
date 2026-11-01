@@ -452,6 +452,27 @@ python3 tests/reliability.py --frames-only
 
 可行性结论见 [RESEARCH](RESEARCH.md)。该实验保留为独立 API 证据；正式 CLI 通过上节的 `frame list` / `--frame` 操作跨源文档，`>>>` 仍限同源 frame。实验没有把 WKFrameInfo 的临时对象或 URL 当成稳定 frame ID。
 
+## 后台 focus/key
+
+```sh
+awb focus '#field' --space work --tab TAB_ID
+awb key Enter --space work --tab TAB_ID
+awb key 'Shift+ArrowLeft' --space work --tab TAB_ID
+python3 tests/reliability.py --keyboard-only
+```
+
+两条命令都要求显式 Space/Tab，支持原有 1–60000 ms 超时。focus 使用唯一 selector 或最新 snapshot 的完整 ref，先验证主文档内可见、非禁用的元素能接受 DOM 焦点，再设置该 WebView 当前窗口的原生 responder；可编辑或带有效整数 tabindex 的 body/html 也可作为整页键盘目标，包括可程序聚焦的 tabindex=-1。默认不可聚焦或 tabindex 无效的根元素返回 `input_focus_failed`。open Shadow Root 可用，iframe（包括同源）、closed root 和 `--frame` 不在范围。DOM activeElement、原生 responder 接受和 document.hasFocus 是不同状态；后台 document.hasFocus 可能仍为 false。
+
+首版按键白名单为 `Enter`、`Tab`、`Escape`、`ArrowLeft`、`Shift+ArrowLeft`、`Option+ArrowLeft`、`Control+B`、`Shift+X`，键名区分大小写，使用固定 US 键码。未支持的组合（包括已知未实现全选的 Command+A）在发送前返回 `unsupported_key`。文字整段填写继续使用 fill，不把本接口当作通用打字、快捷键或 IME API。
+
+key 要求该 Tab 已成功 focus，并在发送前核对文档代号和当前主文档焦点；Tab 移焦后跟随同文档的新焦点。导航、历史缓存恢复后的代号变化返回 `input_target_changed`，新建/重建、休眠或重启后返回 `input_focus_required`，均需重新观察并 focus。发出后再次读取状态，若期间发生导航可能返回错误；输入可能已经生效，超时或错误后先查 state/业务结果，绝不自动重放。
+
+公开 NSEvent 只经目标 WebView 的 keyDown/keyUp 入口定向发送一次，不投递全局事件，不调用 activate/makeKey，不使用 Quartz、私有 API 或权限授权。WebView 被 GUI 重挂载后使用实际所属窗口，不固定向隐藏 Panel 发送。显式 focus 会改变目标页面及其宿主 responder；观察窗口存在地址栏草稿或前台正在编辑其他控件时返回 `input_focus_conflict`，不夺走编辑焦点。AppKit 自动给空闲搜索框设置的初始 responder 不作为用户编辑。
+
+key 返回 `method: appkit-directed`、`dispatched: true` 只说明宿主调用了定向事件入口；`nativeVerified`、`physicalInput`、`eventDeliveryVerified`、`defaultBehaviorVerified`、`businessOutcomeVerified` 均不因此为 true。WebKit 在受控页面把这些宿主构造事件标记为 isTrusted，不证明物理输入或所有用户激活门控 API 可用；正式命令包含 JS 焦点/状态读取，也不能用它来单独归因用户激活。需用 wait、页面状态或服务端回执独立验证默认行为和业务结果。
+
+hover 保留 `backgroundVerified: false, requiresForeground: true` 的人工接管边界，不新增 hover 或自动前台注入。`--keyboard-only` 验证主文档/open shadow、默认行为与 preventDefault、实际 POST、Space/Tab、重载/休眠/重启、卡死有界恢复及前台不变；额外编译独立原生宿主检查真实 GUI 重挂载和地址栏草稿保护，结果保存在 `.artifacts/reliability-*/`。不将本机用例扩大为任意 OS/布局/编辑器兼容性。
+
 ## 后台 Hover/键盘独立实验
 
 `python3 tests/input_probe.py` 编译、签名并运行独立 AppKit/WebKit 测试应用，使用本地 HTTP fixture、两个 nonPersistent Store 和三个 Tab。需要 Swift/WebKit 与已登录桌面会话；没有新依赖，不连接产品 Socket、不创建持久 Space、不修改系统代理。窗口全程隐藏、非 key，应用禁止激活；不使用 Quartz、全局事件投递或私有选择器。
@@ -460,7 +481,7 @@ python3 tests/reliability.py --frames-only
 
 输出 `.artifacts/input-probe-*/` 下的构建/运行日志、原生状态与事件、POST 记录和综合报告；只有进程退出、fixture 端口关闭、结果断言通过后才写成功报告。测试会改变独立页面的焦点和表单，前台 PID/应用激活通知同时监测。失败保留已有报告和日志；宿主超时不等于取消 JS，也不自动重放输入。
 
-实验结论和未测范围见[实现依据](RESEARCH.md#后台-hover键盘可行性)。实验确认部分后台键盘默认行为，未确认隐藏 Panel 的 CSS hover 或 Command-A 全选；报告对 hover 标记 `requiresForeground=true`，表示需人工前台接管，未实测自动前台注入。正式 CLI 不提供 hover/key/focus 命令。
+实验结论和未测范围见[实现依据](RESEARCH.md#后台-hover键盘可行性)。该实验保留为独立 API 证据，正式 CLI 已接入上节的有限 focus/key；隐藏 Panel 的 CSS hover 和 Command-A 全选仍未支持。hover 的 `requiresForeground=true` 表示需人工前台接管，没有自动前台注入。
 
 ## 逐步计时
 

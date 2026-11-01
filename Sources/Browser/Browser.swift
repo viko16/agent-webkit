@@ -70,6 +70,8 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     let downloads = DownloadStore()
     let fileChooser = FileChooser()
     let frames = FrameStore()
+    var inputDocumentEpoch: String?
+    var inputFocusConflict: (() -> Bool)?
     var navigationError: Error?
     var changed: (() -> Void)?
     var statusChanged: (() -> Void)?
@@ -200,6 +202,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         statusChanged = nil
         networkCheck = nil
         createPopup = nil; closeRequested = nil
+        inputFocusConflict = nil
         clearNavigationSpans()
     }
 
@@ -282,7 +285,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
                         return
                     }
                     if let message = nsError.userInfo["WKJavaScriptExceptionMessage"] as? String {
-                        let codes = ["stale_frame", "stale_ref", "selector_count", "invalid_selector", "unsupported_context", "element_not_actionable", "element_readonly", "unsupported_fill_type", "element_not_editable", "invalid_option", "unsupported_upload_target", "upload_multiple_not_allowed", "upload_unavailable", "unsupported_screenshot_geometry"]
+                        let codes = ["input_target_changed", "input_focus_failed", "stale_frame", "stale_ref", "selector_count", "invalid_selector", "unsupported_context", "element_not_actionable", "element_readonly", "unsupported_fill_type", "element_not_editable", "invalid_option", "unsupported_upload_target", "upload_multiple_not_allowed", "upload_unavailable", "unsupported_screenshot_geometry"]
                         let prefix = "__agent_webkit_dom__:"
                         let exception = message.hasPrefix("Error: ") ? String(message.dropFirst(7)) : message
                         let tagged = internalDOM && exception.hasPrefix(prefix)
@@ -1096,7 +1099,7 @@ final class BrowserModel {
                     "storeCleanupErrors": storeCleanupErrors.map { ["spaceId": $0.key.uuidString, "error": $0.value] as [String: Any] },
                     "blockedSpaces": spaces.filter { $0.networkError != nil }.map { $0.record.id.uuidString },
                     "systemProxy": systemProxySummary(), "frontmostPid": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1,
-                    "capabilities": ["input":"dom-synthetic", "snapshot":"same-origin-frames-and-open-shadow-roots", "crossOriginDOM":"frame list + explicit --tab/--frame for snapshot/click/fill/wait", "screenshot":"viewport", "screenshotModes":["viewport", "element", "full-page"], "foregroundRequired":false],
+                    "capabilities": ["input":"dom-synthetic", "keyboard":"explicit focus/key; limited directed AppKit events, main document/open shadow only", "snapshot":"same-origin-frames-and-open-shadow-roots", "crossOriginDOM":"frame list + explicit --tab/--frame for snapshot/click/fill/wait", "screenshot":"viewport", "screenshotModes":["viewport", "element", "full-page"], "foregroundRequired":false],
                     "directPolicy":"reject-enabled-system-proxy; no VPN/content-filter bypass guarantee"] as [String: Any]
         }
         if command == "shutdown" {
@@ -1318,6 +1321,10 @@ final class BrowserModel {
             tab.load(try validateURL(tab.persistedURL))
             try await tab.wait(selector: nil, timeout: timeout); try save(space)
         case "state": break
+        case "focus": value = try await tab.focus(target: arg(0))
+        case "key":
+            guard let key = BackgroundKey(rawValue: try arg(0)) else { throw BrowserError("unsupported_key", "不支持此后台按键") }
+            value = try await tab.key(key)
         case "frame.list": value = try await tab.frameList()
         case "snapshot":
             value = try await tab.runJS("window.__agentWebKit.snapshot()", world: DOM.world, frameID: r.options["frame"])

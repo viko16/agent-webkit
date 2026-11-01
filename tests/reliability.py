@@ -14,6 +14,7 @@ from fixtures import origin
 from popup_cases import verify_popups
 from context_cases import verify_contexts
 from cross_origin_cases import verify_frames
+from keyboard_cases import verify_keyboard
 from wait_cases import verify_waits
 from form_cases import framework_site, verify_forms
 from diagnostic_cases import verify_diagnostics
@@ -48,8 +49,9 @@ def main():
     parser.add_argument('--uploads-only', action='store_true', help='Run only real background multipart upload cases')
     parser.add_argument('--screenshots-only', action='store_true', help='Run only real screenshot geometry and pixel cases')
     parser.add_argument('--frames-only', action='store_true', help='Run production cross-origin frame document cases')
+    parser.add_argument('--keyboard-only', action='store_true', help='Run production background focus/key cases')
     args = parser.parse_args()
-    if sum([args.resources_only, args.integrity_only, args.cleanup_only, args.diagnostics_only, args.dialogs_only, args.lifecycle_only, args.downloads_only, args.uploads_only, args.screenshots_only, args.frames_only]) > 1 or (args.forms and (args.resources_only or args.integrity_only or args.cleanup_only or args.dialogs_only or args.lifecycle_only or args.downloads_only or args.uploads_only or args.screenshots_only or args.frames_only)):
+    if sum([args.resources_only, args.integrity_only, args.cleanup_only, args.diagnostics_only, args.dialogs_only, args.lifecycle_only, args.downloads_only, args.uploads_only, args.screenshots_only, args.frames_only, args.keyboard_only]) > 1 or (args.forms and (args.resources_only or args.integrity_only or args.cleanup_only or args.dialogs_only or args.lifecycle_only or args.downloads_only or args.uploads_only or args.screenshots_only or args.frames_only or args.keyboard_only)):
         parser.error('专项选项不能互相混用；--dialogs-only / --cleanup-only 不与 --forms 混用')
     out = ROOT / '.artifacts' / time.strftime('reliability-%Y%m%d-%H%M%S')
     out.mkdir(parents=True)
@@ -110,6 +112,10 @@ def main():
         verify_offline(cli)
         cli('open', 'https://example.com', '--space', 'work', '--proxy', 'direct', error='invalid_arguments')
         start()
+        if args.keyboard_only:
+            checks.append(verify_keyboard(cli, base, out, lambda: (stop(), start()), site_events, site.fixture_nonce))
+            report = dict(ok=True, checks=checks, artifacts=str(out))
+            return
         if args.frames_only:
             checks.append(verify_frames(cli, out, lambda: (stop(), start())))
             report = dict(ok=True, checks=checks, artifacts=str(out))
@@ -209,6 +215,7 @@ def main():
             return cli(*args, error=code)['error']
         checks.append(verify_popups(popup_cli, base, lambda: (stop(), start())))
         checks.append(verify_contexts(cli, base))
+        checks.append(verify_keyboard(cli, base, out, lambda: (stop(), start()), site_events, site.fixture_nonce))
         checks.append(verify_frames(cli, out, lambda: (stop(), start())))
         checks.append(verify_waits(cli, base))
         checks.append(verify_dialogs(cli, base, out, lambda: (stop(), start()), state))

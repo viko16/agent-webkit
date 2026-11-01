@@ -1,6 +1,6 @@
 ---
 name: agent-webkit
-description: 使用 Agent WebKit 的本机 awb CLI 操作隔离 Space/Tab，完成网页快照、表单、弹窗、等待与结果验证。适用于用户已选择 Agent WebKit 的浏览任务；不用于控制其他浏览器、系统代理或模拟可信原生输入。
+description: 使用 Agent WebKit 的本机 awb CLI 操作隔离 Space/Tab，完成网页快照、表单、有限后台 focus/key、弹窗、等待与结果验证。适用于用户已选择 Agent WebKit 的浏览任务；不用于控制其他浏览器、系统代理或全局键鼠注入。
 metadata:
   contract-version: "1"
 ---
@@ -36,6 +36,8 @@ awb snapshot --space SPACE_ID --tab TAB_ID
 
 动作是 DOM 合成事件；成功响应、`nativeVerified: false` 或 `businessOutcomeVerified: false` 都不能作为提交、支付、登录等业务成功证据。验证失败如实报告，不能改页面内容来伪造成功。`evaluate` 在页面 world 执行，`--await` 才等待 Promise；结果须可表示为 JSON。
 
+后台按键先 `focus SELECTOR_OR_REF --space SPACE_ID --tab TAB_ID`，再 `key KEY`，整次操作保持同一 Space/Tab。按 capabilities 的白名单使用 Enter/Tab/Escape/有限编辑键；仅主文档/open Shadow Root，不用 --frame 或 iframe 目标。key 跟随当前同文档焦点；input_focus_required/input_target_changed 时重新观察并聚焦，input_focus_conflict 时等待用户结束 GUI 地址栏等编辑，不切换其他 Tab 绕过保护。method=appkit-directed、dispatched=true 只表示宿主定向调用，不保证网页事件可信标记、物理输入、默认行为或业务结果；继续 wait/验证，出错不重放。hover、通用快捷键和 IME 仍需人工接管。
+
 ## 超时与恢复
 
 - `timeout` 后先查该 Space/Tab 的 `state` 和 `diagnostics`，再观察 URL、页面内容或服务端业务结果。尚在加载可继续 `wait`；不要自动重放 click、fill、登录或提交。
@@ -55,7 +57,7 @@ awb snapshot --space SPACE_ID --tab TAB_ID
 
 下载动作只触发一次，再对同一 Space/Tab 查询 `download list`，按返回 ID `download wait` 或显式 `download cancel`。等待超时原下载仍可能继续；仅 completed 的 path 是完成结果，失败或取消须读原因。已完成文件跨关闭/删除/重启保留，内存 ID 不恢复。
 
-原生文件面板需要用户在前台目标窗口操作，后台返回 requires_foreground；可信原生键鼠仍不可用。遇到站点拒绝合成上传、验证码、MFA 或必须人工登录时，说明具体阻塞，请用户在观察窗口接管，完成后继续读取原 Tab。screenshot 默认视口，--element SELECTOR_OR_REF 截取元素可见裁剪范围；--full-page 有界拼接并还原滚动，核对 mode/range、像素尺寸和 limitations，固定内容可能重复，动态页面不保证一致或完整逻辑列表。任何确需前台的人工作业要明确说明，普通 CLI 不激活应用。
+原生文件面板需要用户在前台目标窗口操作，后台返回 requires_foreground；物理输入和后台 hover 不由 focus/key 提供。遇到站点拒绝合成上传、验证码、MFA 或必须人工登录时，说明具体阻塞，请用户在观察窗口接管，完成后继续读取原 Tab。screenshot 默认视口，--element SELECTOR_OR_REF 截取元素可见裁剪范围；--full-page 有界拼接并还原滚动，核对 mode/range、像素尺寸和 limitations，固定内容可能重复，动态页面不保证一致或完整逻辑列表。任何确需前台的人工作业要明确说明，普通 CLI 不激活应用。
 
 代理和 TLS 按 Space 配置：direct 遇启用的系统代理会拒绝运行，不能保证绕过 VPN/内容过滤器；loopback 请求不承诺走代理。不得替用户修改系统代理、安装 CA 或自动降级证书校验。需要变更策略时说明原因并遵循用户选择。
 

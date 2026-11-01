@@ -59,9 +59,9 @@ Apple 的 [WWDC23 Network Relay 介绍](https://developer.apple.com/videos/play/
 
 脚本执行本身是混杂因素：[WebKit 的 WKWebView 实现](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/API/Cocoa/WKWebView.mm)中公开 evaluate/callAsync 入口使用强制手势参数。实验最初的 JS 准备就令 sticky activation 为真，后改为每轮新文档、页面自身初始化与计时器消息，原生动作前确认 active/sticky 均为 false。实际原生键盘轮次中，Escape 不产生激活，其他已测按键的事件内出现激活；这符合 [WebKit User Activation 说明](https://webkit.org/blog/13862/the-user-activation-api/)中对 Escape 的区分。现有产品 fill/click 则分别观察到非可信 input/click 与 JS 执行期间的激活，且 click 后 submit 可为可信；这些标记均不能证明物理用户输入。
 
-结论：公开 AppKit 路线足以继续独立实现一部分后台键盘行为，正式 CLI 暂不扩展。未来必须显式绑定 Space/Tab，区分 DOM 焦点、宿主 responder、事件送达和业务成功；逐键检查默认结果，有界等待后观察，不能重放副作用。当前 hover 报告的 requiresForeground 是回退策略，不是证明所有公开 API 都不可能，也不是已实现自动前台输入。真实用户激活只记录 WebKit 对本机人工构造事件的识别，不扩展为物理输入或所有受限 API 可用。
+结论：公开 AppKit 路线足以实现一部分后台键盘行为。正式 CLI 已提供显式绑定 Space/Tab 的有限 focus/key，区分 DOM 焦点、宿主 responder、事件送达和业务成功；逐键核对结果，有界等待后观察，不能重放副作用。用法与当前覆盖见[后台 focus/key](DEVELOPMENT.md#后台-focuskey)。原独立实验中的 hover requiresForeground 仍是人工回退策略，不证明所有公开 API 都不可能，也没有自动前台输入。WebKit 对本机宿主构造事件的可信标记不扩展为物理输入或所有受限 API 可用。
 
-未验证：可见但非激活窗口、前台原生输入、任意站点/OS/键盘布局、IME/组合文本、跨源 frame、富文本编辑器、系统/浏览器快捷键、剪贴板、授权面板及用户激活门控 API。拖拽留作可选后续范围，不请求辅助功能或输入监控权限。
+原独立实验未验证可见但非激活窗口；正式 focus/key 回归补充了 GUI 重挂载和地址栏编辑保护。前台原生输入、任意站点/OS/键盘布局、IME/组合文本、跨源 frame、富文本编辑器、系统/浏览器快捷键、剪贴板、授权面板及用户激活门控 API 仍未全面验证。拖拽留作可选后续范围，不请求辅助功能或输入监控权限。
 
 ## 代理实验结论
 

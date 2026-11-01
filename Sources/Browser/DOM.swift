@@ -262,6 +262,28 @@ enum DOM {
         }
         return {method:'dom',nativeVerified:false,businessOutcomeVerified:false,requiresForeground:false,target};
       }
+      function inputState(expectedEpoch=null,target=null) {
+        if(expectedEpoch!==null&&expectedEpoch!==epoch) throw new Error('input_target_changed: document changed; input may already have taken effect');
+        let el=document.activeElement;
+        while(el?.shadowRoot?.activeElement) el=el.shadowRoot.activeElement;
+        if(el?.localName==='iframe'||el?.localName==='frame') throw new Error('unsupported_context: native input is limited to the main document');
+        if(target!==null&&resolve(target)!==el) throw new Error('input_focus_failed: target lost DOM focus');
+        const tabIndex=el?.getAttribute('tabindex');
+        const acceptsKeys=el&&(el!==document.body&&el!==document.documentElement||el.isContentEditable||typeof tabIndex==='string'&&/^[+-]?\d+$/.test(tabIndex.trim()));
+        return {epoch,tag:el?.localName||'',documentHasFocus:document.hasFocus(),
+          actionable:Boolean(acceptsKeys&&visible(el)&&!el.matches(':disabled')&&el.getAttribute('aria-disabled')!=='true'&&!el.inert)};
+      }
+      function focus(target) {
+        const el=resolve(target);
+        if(el.ownerDocument!==document||['iframe','frame'].includes(el.localName)) throw new Error('unsupported_context: focus is limited to the main document and its open shadow roots');
+        if(!visible(el)||el.matches(':disabled')||el.getAttribute('aria-disabled')==='true') throw new Error('element_not_actionable');
+        el.focus({preventScroll:true});
+        let active=document.activeElement;
+        while(active?.shadowRoot?.activeElement) active=active.shadowRoot.activeElement;
+        const state=inputState();
+        if(active!==el||!state.actionable) throw new Error('input_focus_failed: element did not accept actionable DOM focus');
+        return state;
+      }
       let screenshotState=null;
       function prepareScreenshot(target) {
         const el=resolve(target);
@@ -338,7 +360,7 @@ enum DOM {
         window.scrollTo({left:0,top:y,behavior:'instant'});
         return pageScreenshotBounds(token);
       }
-      window.__agentWebKit={snapshot,resolve,act,visible,matchesCondition,prepareScreenshot,screenshotBounds,restoreScreenshot,pageScreenshotBounds,scrollScreenshot};
+      window.__agentWebKit={snapshot,resolve,act,focus,inputState,visible,matchesCondition,prepareScreenshot,screenshotBounds,restoreScreenshot,pageScreenshotBounds,scrollScreenshot};
     })();
     """#
 }

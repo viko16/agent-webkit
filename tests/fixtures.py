@@ -43,6 +43,15 @@ def origin(port=0, events=None, tls_context=None):
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_POST(self):
+            if self.path == '/keyboard-save':
+                payload = json.loads(self.rfile.read(int(self.headers.get('Content-Length', '0'))))
+                events.add(kind='keyboard-save', nonce=nonce, **payload)
+                body = json.dumps(dict(nonce=nonce, **payload)).encode()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers(); self.wfile.write(body)
+                return
             if self.path != '/upload':
                 self.send_error(404); return
             body = self.rfile.read(int(self.headers.get('Content-Length', '0')))
@@ -60,6 +69,13 @@ def origin(port=0, events=None, tls_context=None):
 
         def do_GET(self):
             query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            if urllib.parse.urlsplit(self.path).path == '/keyboard':
+                body = (Path(__file__).parent / 'site/keyboard.html').read_bytes()
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html; charset=utf-8')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers(); self.wfile.write(body)
+                return
             time.sleep(min(float(query.get('delay', ['0'])[0]), 3))
             events.add(kind='origin', path=self.path, peerPort=self.client_address[1], cookie=self.headers.get('Cookie'), host=self.headers.get('Host'), nonce=nonce)
             if self.path.startswith('/download-redirect?'):

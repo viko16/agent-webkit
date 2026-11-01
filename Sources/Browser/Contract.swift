@@ -10,7 +10,7 @@ enum CLIContract {
         "upload": ["SELECTOR_OR_REF"] + (1...16).map { "FILE_PATH_\($0)" },
         "tab.new": ["URL"], "tab.close": ["ID"], "tab.default": ["ID"],
         "open": ["URL"], "evaluate": ["JAVASCRIPT"], "click": ["SELECTOR_OR_REF"],
-        "fill": ["SELECTOR_OR_REF", "VALUE"], "wait": ["SELECTOR_OR_REF"], "dialog.respond": ["ID", "ACTION"]
+        "fill": ["SELECTOR_OR_REF", "VALUE"], "focus": ["SELECTOR_OR_REF"], "key": ["KEY"], "wait": ["SELECTOR_OR_REF"], "dialog.respond": ["ID", "ACTION"]
     ]
     private static let optionDetails: [String: [String: Any]] = [
         "socket": ["type": "string", "description": "Unix socket path; overrides BROWSER_SOCKET"],
@@ -50,6 +50,7 @@ enum CLIContract {
         if name == "space.create" { keys.append("proxy") }
         if name == "screenshot" { keys.append("out") }
         if name == "shutdown" { keys.append("all") }
+        if ["focus", "key"].contains(name) { keys.append("tab") }
         return keys
     }
 
@@ -121,6 +122,7 @@ enum CLIContract {
             "schemaVersion": 1, "version": productVersion,
             "commands": Request.arities.keys.sorted().map(command),
             "constraints": [
+                "key": ["supported": BackgroundKey.allCases.map(\.rawValue), "requiresFocus": true, "keyboardLayout": "fixed US key codes"],
                 "frame": ["requires": ["tab"], "commands": ["snapshot", "click", "fill", "wait"]],
                 "click": ["mutuallyExclusive": [["wait-for-navigation", "wait-for-popup"]]],
                 "screenshot": ["mutuallyExclusive": [["element", "full-page"]]],
@@ -168,6 +170,8 @@ enum CLIContract {
                 "shutdown": "requires explicit --all; status.shutdownImpact previews all affected Spaces/Tab IDs; successful reply reports the affected scope; busy rejects exit; website data retained, page memory lost",
                 "lifecycle": "space suspend releases WebViews, retaining its data-store coordinator and IDs/URLs/website data/proxy/TLS; suspended Spaces restart without WebViews; resume starts loading; page actions resume on demand; state/list/info never wake; JS memory is lost",
                 "input": "DOM synthetic; nativeVerified=false; businessOutcomeVerified=false",
+                "keyboard": "focus selector/ref then key KEY, explicit Space/Tab; public AppKit directed keyDown/up to actual WebView window; main document/open shadow only; finite US-key allowlist; no global input/activation; flags do not prove physical input, trusted delivery, default behavior or business success; re-focus after document changes",
+                "hover": ["backgroundVerified": false, "requiresForeground": true, "automaticForegroundInput": false],
                 "snapshot": "same-origin frames and open shadow roots; frame list + explicit --tab/--frame selects cross-origin or nested documents for snapshot/click/fill/wait; >>> does not cross origins; closed roots unsupported",
                 "frames": "128 most recently registered documents per Tab; opaque host-issued document IDs, epoch checked in the same JS turn as each operation; list validates live targets; no inferred parent routing; frame coordinates/visibility stay document-local; no --frame for evaluate/screenshots/upload",
                 "screenshot": "viewport, --element or bounded --full-page PNG; mode/range and pixel dimensions; scroll restoration; full-page uses viewport tiles, reports best-effort consistency and fixed/lazy/virtualized/nested-scroll limits; no foreground activation",
@@ -177,12 +181,13 @@ enum CLIContract {
                 "downloads": "per-Tab native WKDownload; private per-ID output directory; list/wait/cancel; timeout does not replay or cancel; 8 active, 64 records, 300000 ms lifetime; completed files retained after close/delete/restart, runtime records reset",
                 "fileChooser": "native panel only for already active key window; background delegate cancels with state.page.fileChooser.requiresForeground=true; never activates a window",
                 "upload": "1–16 explicit local absolute regular file paths; total at most 4194304 bytes; file input via isolated-world DataTransfer and synthetic input/change; method=dom-data-transfer, nativeVerified=false; no implicit submit; validate business result separately; accept attribute is a UI hint, not enforced",
-                "unsupported": "native keyboard/mouse; complete DevTools network trace"
+                "unsupported": "native mouse/hover; arbitrary keyboard shortcuts, IME, cross-frame native input; complete DevTools network trace"
             ]
         ]
     }
 
     private static let errorCodes = [
+        "input_focus_required", "input_focus_failed", "input_focus_conflict", "input_target_changed", "input_unavailable", "unsupported_key",
         "already_running", "certificate_rejected", "data_removal_failed", "data_removal_timeout", "data_store_removal_timeout", "download_not_found", "download_failed",
         "download_cancel_timeout", "download_file_limit", "download_space_limit", "download_total_limit", "download_disk_limit", "download_budget_unavailable",
         "file_unreadable", "upload_too_large", "unsupported_upload_target", "upload_multiple_not_allowed", "upload_unavailable", "unsupported_screenshot_geometry", "screenshot_changed", "screenshot_too_large",

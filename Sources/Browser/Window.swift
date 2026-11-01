@@ -438,6 +438,10 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
             window.endEditing(for: address)
             displayed?.park(); displayed = tab
             if let tab {
+                tab.inputFocusConflict = { [weak self] in
+                    guard let self else { return false }
+                    return self.editingAddress || (self.window.isKeyWindow && self.search.currentEditor() != nil)
+                }
                 tab.webView.removeFromSuperview(); host.addSubview(tab.webView)
                 tab.webView.frame = host.bounds; tab.webView.autoresizingMask = [.width, .height]
             }

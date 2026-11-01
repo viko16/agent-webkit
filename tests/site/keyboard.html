@@ -1,0 +1,25 @@
+<!doctype html><meta charset="utf-8"><title>Directed keyboard fixture</title>
+<form><label>First<input id="first" name="value" value="alpha beta"></label><label>Second<input id="second"></label><button>Save</button></form>
+<button id="open-modal" onclick="document.querySelector('dialog').showModal()">Open dialog</button>
+<dialog><input id="inside"><button>Dialog button</button></dialog>
+<input id="disabled" disabled><input id="readonly" readonly><div id="plain">Not focusable</div>
+<div id="host"></div><iframe id="frame" src="/context-frame"></iframe><output id="ack"></output>
+<script>
+const epoch=crypto.randomUUID(), mode=new URL(location.href).searchParams.get('mode');
+const first=document.querySelector('#first'), modal=document.querySelector('dialog'), events=[];
+document.querySelector('#host').attachShadow({mode:'open'}).innerHTML='<label>Shadow<input id="shadow"></label>';
+for(const type of ['keydown','keyup','input','focusin','focusout','cancel','close']) document.addEventListener(type,e=>{
+  events.push({type,key:e.key||'',trusted:e.isTrusted,target:e.composedPath()[0]?.id||'',shift:!!e.shiftKey,alt:!!e.altKey,ctrl:!!e.ctrlKey,meta:!!e.metaKey});
+  if(events.length>100) events.shift();
+  if(type==='keydown'&&mode==='cancel-tab'&&e.key==='Tab')e.preventDefault();
+  if(type==='keydown'&&mode==='hang'){while(true){}}
+});
+document.querySelector('form').onsubmit=async e=>{
+  e.preventDefault();
+  const reply=await fetch('/keyboard-save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({epoch,value:first.value})});
+  const result=await reply.json();document.querySelector('#ack').textContent=result.nonce;
+};
+window.inputRead=()=>({epoch,value:first.value,second:document.querySelector('#second').value,
+  selection:[first.selectionStart,first.selectionEnd],active:document.activeElement?.id||'',
+  shadowActive:document.querySelector('#host').shadowRoot.activeElement?.id||'',modal:modal.open,events:events.slice()});
+</script>

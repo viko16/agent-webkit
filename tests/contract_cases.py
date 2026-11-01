@@ -52,6 +52,12 @@ def verify_offline(cli):
     assert contract['constraints']['screenshot']['mutuallyExclusive'] == [['element', 'full-page']]
     assert contract['constraints']['frame']['requires'] == ['tab']
     assert 'frame.list' in commands and 'stale_frame' in contract['errors']
+    assert {option['name'] for option in commands['focus']['options'] if option['required']} == {'space', 'tab'}
+    assert {option['name'] for option in commands['key']['options'] if option['required']} == {'space', 'tab'}
+    assert contract['constraints']['key']['supported'] == ['Enter', 'Tab', 'Escape', 'ArrowLeft', 'Shift+ArrowLeft', 'Option+ArrowLeft', 'Control+B', 'Shift+X']
+    assert contract['scope']['hover'] == dict(backgroundVerified=False, requiresForeground=True, automaticForegroundInput=False)
+    cli('key', 'Command+A', '--space', 'work', '--tab', 'id', error='unsupported_key')
+    cli('key', 'Enter', '--space', 'work', error='invalid_arguments')
     assert {'stale_ref', 'timeout', 'space_busy', 'tab_not_found', 'operation_failed'} <= set(contract['errors'])
     for args in [('help', 'missing'), ('help', 'space', 'missing'), ('help', 'open', 'extra'),
                  ('capabilities', 'extra'), ('capabilities', '--space', 'work'), ('help', '--tab', 'id'),
@@ -86,6 +92,8 @@ def verify_live_contract(cli, socket_path):
     assert raw('dialog.respond', ['unknown', 'yes'], {'space': 'work'})['error']['code'] == 'invalid_arguments'
     assert raw('dialog.list', options={'space': 'work', 'text': 'wrong'})['error']['code'] == 'invalid_arguments'
     assert raw('snapshot', options={'space': 'work', 'element': '#message'})['error']['code'] == 'invalid_arguments'
+    assert raw('focus', ['#message'], {'space': 'work'})['error']['code'] == 'invalid_arguments'
+    assert raw('key', ['Command+A'], {'space': 'work', 'tab': 'id'})['error']['code'] == 'unsupported_key'
     assert raw('snapshot', options={'space': 'work', 'frame': 'unknown'})['error']['code'] == 'invalid_arguments'
     assert raw('snapshot', options={'space': 'work', 'tab': spaces[0]['defaultTabId'], 'frame': ''})['error']['code'] == 'invalid_arguments'
     assert raw('evaluate', ['true'], {'space': 'work', 'tab': spaces[0]['defaultTabId'], 'frame': 'unknown'})['error']['code'] == 'invalid_arguments'
