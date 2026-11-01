@@ -55,7 +55,8 @@ private func writeMessage(_ fd: Int32, _ data: Data) throws {
     try line.withUnsafeBytes { buffer in
         var offset = 0
         while offset < buffer.count {
-            let n = Darwin.write(fd, buffer.baseAddress!.advanced(by: offset), buffer.count - offset)
+            // SO_NOSIGPIPE configuration may fail if the peer disconnected before accept.
+            let n = Darwin.send(fd, buffer.baseAddress!.advanced(by: offset), buffer.count - offset, MSG_NOSIGNAL)
             if n < 0 && errno == EINTR { continue }
             guard n > 0 else { throw socketError("write") }
             offset += n
