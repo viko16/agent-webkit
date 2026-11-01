@@ -34,7 +34,7 @@ awb snapshot --space SPACE_ID --tab TAB_ID
 
 `--timeout` 单位为毫秒。`wait --url` 是完整 URL 精确匹配，支持 SPA；文本/元素状态等待按 `help wait` 选用，不能组合互斥条件。完整文档导航可用 `click --wait-for-navigation`；SPA 路由、同页锚点或 DOM 更新应等待对应 URL、文本或元素。以连字符开头的填写值放在 `--` 后，例如 `awb fill --space SPACE_ID --tab TAB_ID -- '#field' '--literal'`。
 
-动作是 DOM 合成事件；成功响应、`nativeVerified: false` 或 `businessOutcomeVerified: false` 都不能作为提交、支付、登录等业务成功证据。验证失败如实报告，不能改页面内容来伪造成功。`evaluate` 在页面 world 执行，`--await` 才等待 Promise；结果须可表示为 JSON。
+click/fill 使用 DOM 合成事件；成功响应、`nativeVerified: false` 或 `businessOutcomeVerified: false` 都不能作为提交、支付、登录等业务成功证据。验证失败如实报告，不能改页面内容来伪造成功。`evaluate` 在页面 world 执行，`--await` 才等待 Promise；结果须可表示为 JSON。
 
 后台按键先 `focus SELECTOR_OR_REF --space SPACE_ID --tab TAB_ID`，再 `key KEY`，整次操作保持同一 Space/Tab。按 capabilities 的白名单使用 Enter/Tab/Escape/有限编辑键；仅主文档/open Shadow Root，不用 --frame 或 iframe 目标。key 跟随当前同文档焦点；input_focus_required/input_target_changed 时重新观察并聚焦，input_focus_conflict 时等待用户结束 GUI 地址栏等编辑，不切换其他 Tab 绕过保护。method=appkit-directed、dispatched=true 只表示宿主定向调用，不保证网页事件可信标记、物理输入、默认行为或业务结果；继续 wait/验证，出错不重放。hover、通用快捷键和 IME 仍需人工接管。
 

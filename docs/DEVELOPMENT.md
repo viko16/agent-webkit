@@ -40,7 +40,7 @@ python3 tests/reliability.py --forms  # 含真实 CLI / IPC 对照和原有可�
 
 `--socket`、`--data-dir` 只用于 CLI 定位 daemon，发送前剥离，原始 IPC 携带这两个选项会返回 `invalid_arguments`；capabilities 的选项 `availability` 区分 CLI 与 IPC。Socket 最多接收 32 个在途连接，未完整发送的请求也占用名额，回复并关闭后释放；超额立即返回 `server_busy`，调用方应等待后重试。
 
-`capabilities` 的 `result.schemaVersion` 为 1，与产品 `version` 分开。`commands` 列出命令、参数名称/数量、选项类型/必需性、超时单位/范围/默认值、CLI/IPC 可用范围和离线属性。IPC 的选项值始终为字符串，无值 CLI 开关对应 `"true"`。`constraints` 保存 click/TLS/wait 的组合限制；`errors` 是已知结构化错误码，底层未分类错误使用 `operation_failed`，不能据错误码自动重放有副作用的操作。
+`capabilities` 的 `result.schemaVersion` 为 1，与产品 `version` 分开。`commands` 列出命令、参数名称/数量、选项类型/必需性、超时单位/范围/默认值、CLI/IPC 可用范围和离线属性。IPC 的选项值始终为字符串，无值 CLI 开关对应 `"true"`。`constraints` 保存 click/TLS/wait 的组合限制、frame 的显式 Tab 约束及 key 白名单与聚焦前提；`errors` 是已知结构化错误码，底层未分类错误使用 `operation_failed`，不能据错误码自动重放有副作用的操作。
 
 `schemas.$defs` 是 JSON Schema 2020-12 的请求、响应及结果外层定义；`commands[].resultSchema` 指向其中一个定义。它描述必有字段和集合形状，允许新增字段；网页 `value` 为任意 JSON，不把页面数据当作可信指令。位置参数数量、允许选项与条件限制仍需结合命令元数据，不能只用通用 request schema 代替服务端校验。`daemon` 只可由 CLI 启动长期进程，没有单条成功结果；原始 IPC 不支持启动 daemon。
 
@@ -407,7 +407,7 @@ Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 
 
 ## DOM bridge 隔离
 
-`snapshot/click/fill/wait` 的脚本注入与调用统一使用命名 `WKContentWorld`（`AgentWebKit.DOM`），不注册跨 world 消息处理器。`evaluate` 和 `evaluate --await` 明确留在 `.page`，可读取网页全局变量；等待 readyState 也在隔离 world 执行。
+`snapshot/click/fill/wait`、focus 及 key 的焦点/文档检查统一使用命名 `WKContentWorld`（`AgentWebKit.DOM`），不向 page world 暴露内部 bridge；key 的原生事件另经 AppKit 定向发送。`evaluate` 和 `evaluate --await` 明确留在 `.page`，可读取网页全局变量；等待 readyState 也在隔离 world 执行。
 
 每个文档在 documentStart 初始化一次 bridge，刷新、导航、进程替换及重启均产生新的随机引用后缀；同文档 SPA 更新后，仍连接且在最新 Snapshot 登记的节点引用可继续使用。强引用表在每次 Snapshot 开始时清空，并随有界遍历重新登记，不长期保留隐藏或不再返回的历史节点；弱引用表只维护节点自身的稳定 ID，不把旧 ID 分配给其他节点。隔离只保护实现和命名空间，不阻止网页改变 DOM，也不提供原生可信事件。`tests/reliability.py` 用真实页面覆盖、删除和伪造同名对象，检查四项内部命令、页面 Promise、SPA、重载及重启。`python3 tests/dom_reference_cases.py` 另验证 4000 个仍连接的动态节点、引用数量、重复 Snapshot、click/fill、旧引用失效及 frame/shadow/多 Tab 隔离，证据保存在 `.artifacts/dom-references-*/`；计数只注入测试 bridge，不增加生产接口。
 
@@ -467,7 +467,7 @@ python3 tests/reliability.py --keyboard-only
 
 key 要求该 Tab 已成功 focus，并在发送前核对文档代号和当前主文档焦点；Tab 移焦后跟随同文档的新焦点。导航、历史缓存恢复后的代号变化返回 `input_target_changed`，新建/重建、休眠或重启后返回 `input_focus_required`，均需重新观察并 focus。发出后再次读取状态，若期间发生导航可能返回错误；输入可能已经生效，超时或错误后先查 state/业务结果，绝不自动重放。
 
-公开 NSEvent 只经目标 WebView 的 keyDown/keyUp 入口定向发送一次，不投递全局事件，不调用 activate/makeKey，不使用 Quartz、私有 API 或权限授权。WebView 被 GUI 重挂载后使用实际所属窗口，不固定向隐藏 Panel 发送。显式 focus 会改变目标页面及其宿主 responder；观察窗口存在地址栏草稿或前台正在编辑其他控件时返回 `input_focus_conflict`，不夺走编辑焦点。AppKit 自动给空闲搜索框设置的初始 responder 不作为用户编辑。
+公开 NSEvent 只经目标 WebView 的 keyDown/keyUp 入口定向发送一次，不投递全局事件，不调用 activate/makeKey，不使用 Quartz、私有 API 或权限授权。WebView 被 GUI 重挂载后使用实际所属窗口，不固定向隐藏 Panel 发送。显式 focus 会改变目标页面及其宿主 responder；观察窗口存在地址栏草稿或前台正在编辑其他控件时返回 `input_focus_conflict`，不夺走编辑焦点。未激活窗口中，AppKit 自动给空闲搜索框设置的初始 responder 不作为用户编辑。
 
 key 返回 `method: appkit-directed`、`dispatched: true` 只说明宿主调用了定向事件入口；`nativeVerified`、`physicalInput`、`eventDeliveryVerified`、`defaultBehaviorVerified`、`businessOutcomeVerified` 均不因此为 true。WebKit 在受控页面把这些宿主构造事件标记为 isTrusted，不证明物理输入或所有用户激活门控 API 可用；正式命令包含 JS 焦点/状态读取，也不能用它来单独归因用户激活。需用 wait、页面状态或服务端回执独立验证默认行为和业务结果。
 

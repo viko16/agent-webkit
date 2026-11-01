@@ -9,7 +9,7 @@
 
 最终独立实现 Swift Package + AppKit，借鉴 agent-safari 的自动化机制，不引入两个项目的产品层和 MCP。`DOM.swift` 保留其 WeakMap 稳定引用思路，改为带导航随机后缀的引用，并通过 Map 直接定位元素，防止刷新后同编号引用误操作。保留 MIT 许可文本。
 
-检查的 agent-safari 源码包括 `BrowserController.swift`、`BrowserControllerSnapshot.swift`、`BrowserControllerInput.swift`、`BrowserControllerScreenshot.swift`、`BrowserControllerSession.swift`、`BrowserControllerWaits.swift` 和 `UnixSocketTransport.swift`。其原生事件与 DOM 事件有区分，本次只取 DOM 路径。Socket 服务按连接读取后交给主 Actor，页面操作均需要显式目标；本项目为每个客户端独立处理连接，不让一次页面等待堵住 accept 循环。
+检查的 agent-safari 源码包括 `BrowserController.swift`、`BrowserControllerSnapshot.swift`、`BrowserControllerInput.swift`、`BrowserControllerScreenshot.swift`、`BrowserControllerSession.swift`、`BrowserControllerWaits.swift` 和 `UnixSocketTransport.swift`。其原生事件与 DOM 事件有区分，初始实现只借鉴 DOM 路径；后台 focus/key 使用下文独立验证的公开 AppKit 定向入口。Socket 服务按连接读取后交给主 Actor，页面操作均需要显式目标；本项目为每个客户端独立处理连接，不让一次页面等待堵住 accept 循环。
 
 检查的 mcp-browser 源码包括 `BrowserTab.swift`、`BrowserTab+Agent.swift`、`BrowserTab+Network.swift` 和 `WebViewHost.swift`。其网络日志读取页面注入的 fetch/XHR 数组，不能用于证明主文档、资源或 CONNECT 的真实路径。本项目因此在测试代理和来源站点分别记录 TCP 连接，不使用页面网络 shim 作为代理证据。
 
