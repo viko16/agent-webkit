@@ -421,7 +421,8 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         guard width <= viewportWidth else { throw BrowserError("unsupported_screenshot_geometry", "整页截图暂不支持横向溢出；请截取元素或视口") }
         let scaleX = webView.bounds.width / viewportWidth, scaleY = webView.bounds.height / viewportHeight
         let backing = webView.window?.backingScaleFactor ?? 2
-        guard height <= 16000, width * height * pow(max(scaleX, scaleY) * backing, 2) <= 32_000_000 else {
+        let pixelScale = Double(max(scaleX, scaleY) * backing)
+        guard height <= 16000, width * height * pixelScale * pixelScale <= 32_000_000 else {
             throw BrowserError("screenshot_too_large", "整页截图最多16000 CSS px高、预计3200万像素")
         }
         var canvas: CGContext?
