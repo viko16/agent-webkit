@@ -166,5 +166,6 @@ def verify_lifecycle(cli, base, out, restart, state, interrupt_restart, site_eve
         (out / 'lifecycle.json').write_text(json.dumps(report, indent=2))
         return report
     finally:
-        for item in (name, peer):
-            cli('space', 'delete', item)
+        for item in cli('space', 'list'):
+            if item['name'] in (name, peer):
+                cli('space', 'delete', item['id'])

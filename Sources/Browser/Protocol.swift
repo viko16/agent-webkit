@@ -86,6 +86,9 @@ struct Request: Codable {
         if options["wait-for-navigation"] != nil && options["wait-for-popup"] != nil {
             throw BrowserError("invalid_arguments", "--wait-for-navigation 与 --wait-for-popup 不能同时使用")
         }
+        if options["frame"] != nil && options["wait-for-navigation"] != nil {
+            throw BrowserError("invalid_arguments", "--frame 不能与 --wait-for-navigation 同时使用；子文档跳转后重新 frame list，确认新文档 ID，再用 wait 等待对应条件；不会执行点击")
+        }
         if command == "wait" {
             let conditions = ["url", "text", "state"].filter { options[$0] != nil }
             guard conditions.count <= 1,
@@ -206,6 +209,7 @@ awb wait [SELECTOR_OR_REF] --text TEXT --space NAME_OR_ID
 awb wait SELECTOR_OR_REF --state visible|hidden|attached|detached|enabled|disabled --space NAME_OR_ID
 所有命令支持 --socket PATH。页面命令必须指定 Space；默认标签页固定，与 GUI 无关。
 WebKit 操作支持 --timeout 1–60000；--await 等待 Promise；-- 后的参数按字面值处理。
+--frame 与 --wait-for-navigation 不能组合；子文档跳转后重新 frame list 确认新文档，再 wait 验证。
 awb --help | --version 无需启动服务。reload 恢复异常页面，保留 Tab ID 和 Space 网站数据。
 --wait-for-popup 等待同 Space 新 Tab 并返回 newTabId；DOM 点击不保证可信用户激活或业务成功。
 响应 timing 包含 cliMs、ipcRoundTripMs、serverMs、webkitMs；完整 CLI 进程耗时需由调用方测量。

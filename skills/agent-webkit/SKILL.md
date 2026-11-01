@@ -32,7 +32,7 @@ awb wait --text '已保存' --space SPACE_ID --tab TAB_ID --timeout 5000
 awb snapshot --space SPACE_ID --tab TAB_ID
 ```
 
-`--timeout` 单位为毫秒。`wait --url` 是完整 URL 精确匹配，支持 SPA；文本/元素状态等待按 `help wait` 选用，不能组合互斥条件。完整文档导航可用 `click --wait-for-navigation`；SPA 路由、同页锚点或 DOM 更新应等待对应 URL、文本或元素。以连字符开头的填写值放在 `--` 后，例如 `awb fill --space SPACE_ID --tab TAB_ID -- '#field' '--literal'`。
+`--timeout` 单位为毫秒。`wait --url` 是完整 URL 精确匹配，支持 SPA；文本/元素状态等待按 `help wait` 选用，不能组合互斥条件。顶层完整文档导航可用 `click --wait-for-navigation`，它与 `--frame` 组合时会在点击前拒绝。子文档跳转只点击一次，再用 frame list 和 snapshot 确认新文档 ID，随后等待对应条件；不能复用旧 frame ID 或重放点击。SPA 路由、同页锚点或 DOM 更新应等待对应 URL、文本或元素。以连字符开头的填写值放在 `--` 后，例如 `awb fill --space SPACE_ID --tab TAB_ID -- '#field' '--literal'`。
 
 click/fill 使用 DOM 合成事件；成功响应、`nativeVerified: false` 或 `businessOutcomeVerified: false` 都不能作为提交、支付、登录等业务成功证据。验证失败如实报告，不能改页面内容来伪造成功。`evaluate` 在页面 world 执行，`--await` 才等待 Promise；结果须可表示为 JSON。
 

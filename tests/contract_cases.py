@@ -52,6 +52,11 @@ def verify_offline(cli):
     assert next(option for option in commands['screenshot']['options'] if option['name'] == 'full-page')['type'] == 'flag'
     assert contract['constraints']['screenshot']['mutuallyExclusive'] == [['element', 'full-page']]
     assert contract['constraints']['frame']['requires'] == ['tab']
+    assert ['frame', 'wait-for-navigation'] in contract['constraints']['click']['mutuallyExclusive']
+    assert 'pendingStores' in definitions['status']['required']
+    navigation = next(option for option in commands['click']['options'] if option['name'] == 'wait-for-navigation')
+    assert 'incompatible with --frame' in navigation['description']
+    cli('click', '#save', '--space', 'work', '--tab', 'id', '--frame', 'id', '--wait-for-navigation', error='invalid_arguments')
     assert 'frame.list' in commands and 'stale_frame' in contract['errors']
     assert {option['name'] for option in commands['focus']['options'] if option['required']} == {'space', 'tab'}
     assert {option['name'] for option in commands['key']['options'] if option['required']} == {'space', 'tab'}
@@ -97,6 +102,7 @@ def verify_live_contract(cli, socket_path):
     assert raw('key', ['Command+A'], {'space': 'work', 'tab': 'id'})['error']['code'] == 'unsupported_key'
     assert raw('snapshot', options={'space': 'work', 'frame': 'unknown'})['error']['code'] == 'invalid_arguments'
     assert raw('snapshot', options={'space': 'work', 'tab': spaces[0]['defaultTabId'], 'frame': ''})['error']['code'] == 'invalid_arguments'
+    assert raw('click', ['#save'], {'space': 'work', 'tab': spaces[0]['defaultTabId'], 'frame': 'id', 'wait-for-navigation': 'true'})['error']['code'] == 'invalid_arguments'
     assert raw('evaluate', ['true'], {'space': 'work', 'tab': spaces[0]['defaultTabId'], 'frame': 'unknown'})['error']['code'] == 'invalid_arguments'
     assert raw('screenshot', options={'space': 'work', 'full-page': 'false', 'out': '/tmp/unused.png'})['error']['code'] == 'invalid_arguments'
     assert raw('screenshot', options={'space': 'work', 'full-page': 'true', 'element': '#message', 'out': '/tmp/unused.png'})['error']['code'] == 'invalid_arguments'

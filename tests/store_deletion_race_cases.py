@@ -145,6 +145,7 @@ def verify_concurrent_store_deletion(cli, start, stop, state, base, out):
                 first = pool.submit(cli, 'space', 'delete', target['id'], error=expected)
             try:
                 wait_event('waiting:')
+                assert dict(spaceId=target['id'], name='delete-race') in cli('status')['pendingStores']
                 # A second independent CLI must not issue a second WebKit removal.
                 cli('space', 'delete', target['id'].lower(), error='space_busy')
                 # Test by name too, while the UUID survives only in the tombstone.
@@ -154,6 +155,10 @@ def verify_concurrent_store_deletion(cli, start, stop, state, base, out):
                 if mode.endswith('timeout'):
                     first.result(timeout=10)
                     cli('space', 'delete', target['id'], error='space_busy')
+                    if mode == 'remove-timeout':
+                        replacement = cli('space', 'create', 'delete-race', '--proxy', 'direct')
+                        cli('open', base, '--space', replacement['id'])
+                        cli('evaluate', 'localStorage.sameName="new";true', '--space', replacement['id'])
                     records = json.loads((state / 'spaces.json').read_text())
                     assert next(r for r in records if r['id'] == target['id'])['deleting']
                 attempts = [line for line in events.read_text().splitlines() if line.startswith('attempt:')]
@@ -169,7 +174,12 @@ def verify_concurrent_store_deletion(cli, start, stop, state, base, out):
                 # A late callback cannot turn the timed-out operation into reported success.
                 assert any(r['id'] == target['id'] and r['deleting']
                            for r in json.loads((state / 'spaces.json').read_text()))
-                assert cli('space', 'delete', target['id'])['websiteDataRemoved']
+                discovered = next(s['spaceId'] for s in cli('status')['pendingStores'] if s['name'] == 'delete-race')
+                assert discovered == target['id']
+                assert cli('space', 'delete', discovered)['websiteDataRemoved']
+                if mode == 'remove-timeout':
+                    assert cli('space', 'info', 'delete-race')['id'] == replacement['id']
+                    assert cli('evaluate', 'localStorage.sameName', '--space', replacement['id'])['value'] == 'new'
             elif mode == 'disconnect':
                 wait_event('result:')
             elif mode == 'failure':
@@ -182,7 +192,13 @@ def verify_concurrent_store_deletion(cli, start, stop, state, base, out):
                 extra_tab = cli('tab', 'new', base, '--space', replacement['id'])['tabId']
                 before = cli('tab', 'list', '--space', replacement['id'])
                 cli('space', 'delete', 'delete-race', error='space_ambiguous')
-                cli('space', 'delete', target['id'].lower(), error='data_removal_failed')
+                # Rediscover both UUIDs solely through CLI, without consulting the registry or old replies.
+                pending = [s for s in cli('status')['pendingStores'] if s['name'] == 'delete-race']
+                active = [s for s in cli('space', 'list') if s['name'] == 'delete-race']
+                assert pending == [dict(spaceId=target['id'], name='delete-race')]
+                assert len(active) == 1 and active[0]['id'] == replacement['id']
+                assert cli('status')['storeCleanupErrors'] == [], 'Must discover runtime tombstones without restore errors'
+                cli('space', 'delete', pending[0]['spaceId'].lower(), error='data_removal_failed')
                 assert cli('tab', 'list', '--space', replacement['id']) == before
                 assert cli('evaluate', '[document.cookie,localStorage.sameName]',
                            '--space', replacement['id'])['value'] == ['sameName=new', 'new']
@@ -196,6 +212,9 @@ def verify_concurrent_store_deletion(cli, start, stop, state, base, out):
             assert cli('evaluate', '[document.cookie,localStorage.sameName]',
                        '--space', replacement['id'])['value'] == ['sameName=new', 'new']
             assert cli('space', 'delete', replacement['id'].lower())['spaceId'] == replacement['id']
+        elif mode == 'remove-timeout':
+            assert cli('space', 'info', 'delete-race')['id'] == replacement['id']
+            cli('space', 'delete', replacement['id'])
         cli('wait', '#message', '--space', 'delete-healthy')
         assert cli('evaluate', 'localStorage.deleteRace', '--space', 'delete-healthy')['value'] == 'preserved'
         cli('space', 'delete', 'delete-healthy')

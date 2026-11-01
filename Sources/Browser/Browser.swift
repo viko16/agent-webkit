@@ -844,6 +844,14 @@ final class BrowserModel {
     }
 
     func restore() async throws {
+        let downloads = URL(fileURLWithPath: storagePath).appendingPathComponent("downloads", isDirectory: true)
+        // This process owns no previous transfers. Recovery only touches older session
+        // markers and must not hold healthy Spaces hostage to one blocked file-system call.
+        Task.detached(priority: .utility) {
+            for error in DownloadStore.recoverIncomplete(in: downloads) {
+                fputs("Pending download cleanup failed: \(error)\n", stderr)
+            }
+        }
         for record in records.filter(\.deleting) {
             do {
                 if try await removeStore(record.id) {
@@ -1096,6 +1104,7 @@ final class BrowserModel {
                     "resourceLimits": limits.summary,
                     "observer": observerState?() ?? [:],
                     "pendingStoreCleanup": records.filter(\.deleting).count,
+                    "pendingStores": records.filter(\.deleting).map { ["spaceId": $0.id.uuidString, "name": $0.name] },
                     "storeCleanupErrors": storeCleanupErrors.map { ["spaceId": $0.key.uuidString, "error": $0.value] as [String: Any] },
                     "blockedSpaces": spaces.filter { $0.networkError != nil }.map { $0.record.id.uuidString },
                     "systemProxy": systemProxySummary(), "frontmostPid": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1,
@@ -1140,7 +1149,7 @@ final class BrowserModel {
             } else {
                 let matches = records.filter { $0.name == target }
                 guard matches.count <= 1 else {
-                    throw BrowserError("space_ambiguous", "同名 Space 包含待清理记录；请从 space list 和 status.storeCleanupErrors 确认 UUID 后按 UUID 删除")
+                    throw BrowserError("space_ambiguous", "同名 Space 包含待清理记录；请从 space list 和 status.pendingStores 确认 UUID 后按 UUID 删除")
                 }
                 deletionID = matches.first?.id
             }

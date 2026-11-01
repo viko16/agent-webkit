@@ -108,11 +108,16 @@ private actor DownloadBudget {
             catch { if disappeared(error) { continue }; throw error }
             if values.isSymbolicLink == true { iterator.skipDescendants(); continue }
             guard values.isRegularFile == true else { continue }
+            // Session markers are host metadata at Tab depth, never payload files.
+            let canonical = url.resolvingSymlinksInPath()
+            let components = canonical.pathComponents
+            if components.count == componentCount + 3, (values.fileSize ?? Int.max) <= 36,
+               UUID(uuidString: components[componentCount]) != nil, UUID(uuidString: components[componentCount + 1]) != nil,
+               url.lastPathComponent.hasPrefix(".awb-pending-"),
+               UUID(uuidString: String(url.lastPathComponent.dropFirst(".awb-pending-".count))) != nil { continue }
             let bytes = Int64(values.fileSize ?? 0)
             result.total = add(result.total, bytes)
-            let canonical = url.resolvingSymlinksInPath()
             result.files[canonical.path] = bytes
-            let components = canonical.pathComponents
             if components.count > componentCount + 1 {
                 let space = components[componentCount]
                 result.spaces[space] = add(result.spaces[space] ?? 0, bytes)
@@ -125,6 +130,53 @@ private actor DownloadBudget {
 
 @MainActor
 final class DownloadStore: NSObject, WKDownloadDelegate {
+    nonisolated private static let sessionID = UUID().uuidString
+    // Outside the payload directory, so every suggested filename remains usable.
+    nonisolated private static func pendingMarker(_ folder: URL) -> URL {
+        folder.deletingLastPathComponent().appendingPathComponent(".awb-pending-" + folder.lastPathComponent)
+    }
+
+    nonisolated static func recoverIncomplete(in root: URL) -> [String] {
+        let manager = FileManager.default
+        var errors: [String] = []
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]
+        func children(_ directory: URL) -> [URL] {
+            do {
+                let values = try directory.resourceValues(forKeys: keys)
+                guard values.isDirectory == true, values.isSymbolicLink != true else { return [] }
+                return try manager.contentsOfDirectory(at: directory, includingPropertiesForKeys: Array(keys))
+            } catch {
+                if manager.fileExists(atPath: directory.path) { errors.append("\(directory.path): \(error.localizedDescription)") }
+                return []
+            }
+        }
+        // Do not infer completion from file size or membership in the current registry.
+        // Closed Tabs/deleted Spaces may still own unfinished files; legacy unmarked files are preserved.
+        for space in children(root) where UUID(uuidString: space.lastPathComponent) != nil {
+            for tab in children(space) where UUID(uuidString: tab.lastPathComponent) != nil {
+                for marker in children(tab) where marker.lastPathComponent.hasPrefix(".awb-pending-") {
+                    let id = String(marker.lastPathComponent.dropFirst(".awb-pending-".count))
+                    guard UUID(uuidString: id) != nil else { continue }
+                    do {
+                        let values = try marker.resourceValues(forKeys: keys)
+                        guard values.isRegularFile == true, values.isSymbolicLink != true, (values.fileSize ?? Int.max) <= 36 else { continue }
+                        // Restoration may finish while this scan is blocked. Never touch a
+                        // destination admitted by the current process, even if its Tab closes.
+                        if try Data(contentsOf: marker) == Data(sessionID.utf8) { continue }
+                        let folder = tab.appendingPathComponent(id, isDirectory: true)
+                        if manager.fileExists(atPath: folder.path) {
+                            let values = try folder.resourceValues(forKeys: keys)
+                            guard values.isDirectory == true, values.isSymbolicLink != true else { continue }
+                            try manager.removeItem(at: folder)
+                        }
+                        try manager.removeItem(at: marker)
+                    } catch { errors.append("\(marker.path): \(error.localizedDescription)") }
+                }
+            }
+        }
+        return errors
+    }
+
     private struct Entry {
         let id: String
         var download: WKDownload?
@@ -212,6 +264,7 @@ final class DownloadStore: NSObject, WKDownloadDelegate {
                 guard let index = entries.firstIndex(where: { $0.id == id }), entries[index].status == "running", !entries[index].cancelling, !stopped else { completionHandler(nil); return }
                 let folder = directory.appendingPathComponent(id, isDirectory: true)
                 try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+                try Data(Self.sessionID.utf8).write(to: Self.pendingMarker(folder), options: .atomic)
                 let leaf = String((suggestedFilename as NSString).lastPathComponent.prefix(128))
                 let name = leaf.isEmpty || [".", "..", "/"].contains(leaf) ? "download" : leaf
                 let path = folder.appendingPathComponent(name)
@@ -279,6 +332,15 @@ final class DownloadStore: NSObject, WKDownloadDelegate {
 
     private func finish(_ index: Int, status: String, error: String? = nil) {
         guard entries[index].status == "running" else { return }
+        var status = status, error = error
+        if status == "completed", let path = entries[index].path {
+            do { try FileManager.default.removeItem(at: Self.pendingMarker(path.deletingLastPathComponent())) }
+            catch let cause {
+                status = "failed"
+                error = "download_failed"
+                entries[index].cleanupError = cause.localizedDescription
+            }
+        }
         entries[index].bytesReceived = received(entries[index])
         entries[index].status = status; entries[index].error = error
         entries[index].timer?.cancel(); entries[index].timer = nil
@@ -292,6 +354,8 @@ final class DownloadStore: NSObject, WKDownloadDelegate {
             let folder = directory.appendingPathComponent(entries[index].id, isDirectory: true)
             do {
                 if FileManager.default.fileExists(atPath: folder.path) { try FileManager.default.removeItem(at: folder) }
+                let marker = Self.pendingMarker(folder)
+                if FileManager.default.fileExists(atPath: marker.path) { try FileManager.default.removeItem(at: marker) }
             } catch { entries[index].cleanupError = error.localizedDescription }
         }
     }

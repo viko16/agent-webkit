@@ -84,7 +84,7 @@ python3 tests/skill_workflow.py
 
 取消等待 WebKit 确认停止后清理本项目未完成下载的 UUID 目录；清理失败通过条目的 `cleanupError` 返回。若 WebKit 已通知下载完成、宿主仍在做最终预算校验，取消等待该校验，返回 `completed` 或 `failed`，不再向已结束的 WebKit 下载发起取消。关闭/删除/退出也请求取消；Space 有下载时拒绝休眠。完成文件不会被限额或清理策略自动删除。
 
-累计预算是动态限制，不是瞬时硬限额：并发下载可能各自通过目的地检查，100 ms 周期、目录扫描和取消确认期间仍会增长；超额幅度与传输速率及扫描耗时有关，没有固定的字节或时间上界。最终校验独立扫描，不复用下载完成前已开始的扫描；超额或扫描失败均拒绝报告完成。最终校验超过 5 秒以 `download_budget_timeout` 失败，不把超时当作扫描已停止；未验证文件不提供结果路径，保留到扫描返回后清理，挂起扫描仍占用下载容量。`python3 tests/download_limit_cases.py` 同时覆盖同 Space 多 Tab、跨 Space、已知/未知长度、额度释放和真实目录权限错误；旧扫描竞争及最终扫描挂起使用真实下载和测试副本中的可释放门控，未在产品中加入调试接口。
+累计预算是动态限制，不是瞬时硬限额：并发下载可能各自通过目的地检查，100 ms 周期、目录扫描和取消确认期间仍会增长；超额幅度与传输速率及扫描耗时有关，没有固定的字节或时间上界。最终校验独立扫描，不复用下载完成前已开始的扫描；超额或扫描失败均拒绝报告完成。最终校验超过 5 秒以 `download_budget_timeout` 失败，不把超时当作扫描已停止；未验证文件不提供结果路径，保留到扫描返回后清理，挂起扫描仍占用下载容量。目的地分配前在 Tab 目录写入含进程会话 ID 的 `.awb-pending-DOWNLOAD_ID` 标记，校验成功后先移除标记再报告 completed；重启后独立清理旧会话标记的目录，包括已关闭 Tab/已删除 Space 的残留，迟到清理跳过当前会话下载。恢复清理不阻塞 Space 就绪；单项失败记入 daemon 日志，保留标记供下次重试，实际移除前仍计入预算。无标记的旧文件保留，不能仅凭大小推断失败而删除。`python3 tests/download_limit_cases.py` 同时覆盖同 Space 多 Tab、跨 Space、已知/未知长度、额度释放和真实目录权限错误；旧扫描竞争、最终扫描和恢复清理挂起使用测试副本中的可释放门控，未在产品中加入调试接口。
 
 默认最多 64 个 Space、每 Space 64 个 Tab、合计 1024 个 Tab、128 个活跃 WebView，每个 Space 最多 8 个活跃网页弹窗。daemon 环境变量 `BROWSER_MAX_SPACES`、`BROWSER_MAX_TABS_PER_SPACE`、`BROWSER_MAX_TOTAL_TABS`、`BROWSER_MAX_LIVE_WEBVIEWS`、`BROWSER_MAX_POPUPS_PER_SPACE` 可调整，`status.resourceLimits` 返回生效值。创建和恢复运行时超额返回 `resource_limit`；启动时容量不足的 Space 保持休眠并显示 `resourceBlockedReason`，标签页记录保留。
 
@@ -363,7 +363,7 @@ Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 
 
 超时只是停止宿主等待，不是可靠地中断页面 JS。为避免继续在未知状态上操作，该 Tab 的后续 DOM 命令会返回 `web_content_unresponsive`。显式 `open` / `reload` 替换异常 WKWebView，继承同一 Tab ID、WKWebsiteDataStore 与 TLS 策略；不重放点击、填写或提交。真正的 WebContent 终止通知会让挂起调用立即失败，并在 UI 显示恢复提示。当前已实测无限循环和永不完成的 Promise 恢复；进程被系统终止的分支尚未单独故障注入验证。
 
-故障恢复后立即删除 Space，实测 WebKit 可能仍持有没有活动页面的网络会话，`remove(forIdentifier:)` 返回 `Data store is in use (by network process)`。流程先调用 `removeData` 清理全部公开网站数据类型，再用 `fetchDataRecords` 验证为空，并有限重试容器删除。容器未释放时返回 `websiteDataRemoved: true`、`dataStoreRemoved: false`、`cleanupPending: true`，保留 tombstone；不会把容器删除当成成功。重启后会再次清理，可通过 `status.pendingStoreCleanup` 查询。同名重建使用新 UUID，测试验证它读不到旧 LocalStorage，并验证重启后旧容器和 tombstone 清除。
+故障恢复后立即删除 Space，实测 WebKit 可能仍持有没有活动页面的网络会话，`remove(forIdentifier:)` 返回 `Data store is in use (by network process)`。流程先调用 `removeData` 清理全部公开网站数据类型，再用 `fetchDataRecords` 验证为空，并有限重试容器删除。容器未释放时返回 `websiteDataRemoved: true`、`dataStoreRemoved: false`、`cleanupPending: true`，保留 tombstone；不会把容器删除当成成功。重启后会再次清理，`status.pendingStoreCleanup` 返回数量，`status.pendingStores` 列出全部待清理记录的 `spaceId` 和 `name`，包括运行中删除失败或仍待回调的记录。同名活跃 Space 从 `space list` 查询；按名称删除有歧义时，核对两处 UUID，再按旧 UUID 清理。同名重建使用新 UUID，测试验证它读不到旧 LocalStorage，并验证重启后旧容器和 tombstone 清除。
 
 删除按 Store UUID 独立占用，同一 Store 的重复请求返回 `space_busy`，其他 Store 可以继续使用或删除。同名 tombstone 与新 Space 并存时，按名称删除返回 `space_ambiguous`，须明确 UUID；同名重建仍可用，旧 Store 重试不会选择新 Space。删除或清理验证超时后仍保留 tombstone 和尚未完成的回调占用；实际回调结束前不允许重试，回调一直未到时需重启恢复。客户端提前断连不会取消已经开始的删除。`--cleanup-only` 同时运行真实并发删除及生成源码中的回调闸门/故障注入，覆盖失败、同名重建/UUID 重试/重启隔离、删除/清理/回退重试超时、迟到回调和断连；测试钩子不进入生产构建。
 
@@ -436,7 +436,7 @@ python3 tests/reliability.py --frames-only
 
 `--frame` 仅用于 snapshot/click/fill/wait，且必须显式提供 `--tab`；所有元素引用与选择器在所选文档中解析。`wait` 的 readyState、URL、文本和状态均属于该文档，旧引用仍报 `stale_ref`。每次定向调用都在隔离 world 的同一次 JS 回合内核对随机文档代号和 active 状态，再执行操作；导航后旧 WKFrameInfo 即使指向新文档也不会触及新 DOM。目标已导航、移除、被淘汰或不属于所选 Tab 时返回 `stale_frame`，应重新列出并确认，不能自动重放动作。SPA 同文档导航保持 ID；顶层导航失败且原文档仍存活时也保留其 ID，所选文档的等待不继承无关的主导航错误。文档实际离开后由 pagehide 辅助移除记录并轮换文档、元素代号及 WeakMap，列表和动作再检查代号、剔除失效目标，历史返回也不复活旧引用；安全性不依赖宿主收到 leave 消息。关闭、休眠、WebView 重建、进程终止和重启清空宿主记录。
 
-响应中的 `page` 保持原有 Tab 主页面状态，所选文档由外层 `frameId` 标识，其 URL/title 从 `frame list` 读取。`click --wait-for-navigation` 仍等待 Tab 顶层导航，不等待子 frame 自身导航；子文档导航后应重新 `frame list` 确认新目标。`--wait-for-popup` 则沿用同 Space 新 Tab 语义。
+响应中的 `page` 保持原有 Tab 主页面状态，所选文档由外层 `frameId` 标识，其 URL/title 从 `frame list` 读取。`click --wait-for-navigation` 只支持顶层完整文档导航，与 `--frame` 组合时在执行点击前返回 `invalid_arguments`。子文档导航只点击一次，随后重新 `frame list` 并通过 snapshot 确认新文档，再用其 ID 等待对应条件；旧 ID 失效不表示导航失败。`--wait-for-popup` 则沿用同 Space 新 Tab 语义。
 
 每 Tab 最多保留最近注册的 128 个文档；超出时淘汰最早记录，列表返回 `truncated` 和 `evictedDocuments`，不能当作完整 frame 枚举。列表逐项验证文档代号并剔除失效目标，沿用整条命令的 1–60000 ms 截止时间、Space 锁和关闭/超时规则；超时不表示 WebKit 已取消执行。记录不持久化，popup 按实际 WebView 路由，不能继承另一 Tab 的目标。
 

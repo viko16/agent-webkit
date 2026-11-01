@@ -92,11 +92,14 @@ def concurrent_case(out, binary, *, same_space, known_length, stale_scan=False, 
     def sample():
         while not sampling_done.is_set():
             total = 0
-            for path in (state / 'downloads').glob('*/*/*/*'):
-                try:
-                    total += path.stat().st_size
-                except FileNotFoundError:
-                    pass
+            try:
+                for path in (state / 'downloads').glob('*/*/*/*'):
+                    try:
+                        total += path.stat().st_size
+                    except FileNotFoundError:
+                        pass
+            except FileNotFoundError:
+                pass  # A failed download directory can disappear during glob traversal too.
             samples.append((time.monotonic(), total))
             sampling_done.wait(.005)
 
@@ -145,7 +148,8 @@ def concurrent_case(out, binary, *, same_space, known_length, stale_scan=False, 
             result = dict(case=name, passed=True, inaccessibleDirectoryRejected=True, recoveredAfterPermissionsRestored=True)
         else:
             ids = [begin(flags) for flags in targets]
-            wait_until(lambda: len(list((state / 'downloads').glob('*/*/*'))) == 2, 'Both destinations were not admitted')
+            wait_until(lambda: sum(p.is_dir() for p in (state / 'downloads').glob('*/*/*')) == 2,
+                       'Both destinations were not admitted')
             sampler = threading.Thread(target=sample, daemon=True); sampler.start()
             if stale_scan:
                 (sampled_gate / 'armed').touch()

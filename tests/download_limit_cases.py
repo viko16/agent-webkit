@@ -11,6 +11,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from urllib.parse import parse_qs, urlsplit
 
 from skill_workflow import cleanup_test_services, verify_cleanup
@@ -30,6 +31,15 @@ def fixture_app(out):
         copied = out / path.name
         source = path.read_text()
         if path.name == 'Files.swift':
+            marker = '    nonisolated static func recoverIncomplete(in root: URL) -> [String] {\n'
+            assert source.count(marker) == 1
+            source = source.replace(marker, marker + '''        if let gate = ProcessInfo.processInfo.environment["BROWSER_TEST_RECOVERY_GATE"],
+           FileManager.default.fileExists(atPath: gate + "/armed") {
+            FileManager.default.createFile(atPath: gate + "/sampled", contents: nil)
+            while !FileManager.default.fileExists(atPath: gate + "/release") { Thread.sleep(forTimeInterval: 0.005) }
+            FileManager.default.createFile(atPath: gate + "/returned", contents: nil)
+        }
+''')
             marker = 'if refresh { return try await Task.detached(priority: .utility) { try Self.scan(root) }.value }'
             assert source.count(marker) == 1
             source = source.replace(marker, '''if refresh { return try await Task.detached(priority: .utility) {
@@ -135,10 +145,11 @@ def run_case(case, configured, out, binary):
         env['BROWSER_TEST_SLOW_BUDGET_SCAN'] = '1'
     if case in ('finish-cancel', 'finish-over-budget'):
         env['BROWSER_TEST_FINISH_DELAY'] = '2'
-    final_gate = out / 'final-scan-gate'
+    final_gate = out / (case + '-gate')
+    if case.startswith('final-scan-'):
+        env['BROWSER_TEST_FINAL_SCAN_GATE'] = str(final_gate)
     if case == 'final-scan-timeout':
         final_gate.mkdir()
-        env['BROWSER_TEST_FINAL_SCAN_GATE'] = str(final_gate)
     site = download_site()
     base = f'http://127.0.0.1:{site.server_port}/'
     daemon = None
@@ -200,7 +211,93 @@ def run_case(case, configured, out, binary):
             assert limits == dict(fileBytes=settings['MAX_FILE_BYTES'], spaceBytes=settings['MAX_SPACE_BYTES'],
                                   totalBytes=settings['MAX_TOTAL_BYTES'], minFreeBytes=settings['MIN_FREE_BYTES'])
             completed = None
-            if case == 'final-scan-timeout':
+            if case == 'recovery-isolation':
+                from download_budget_cases import wait_until
+                completed = wait(begin('#small'))
+                assert completed['status'] == 'completed', completed
+                stop()
+                tab_folder = Path(completed['path']).parent.parent
+                legacy = tab_folder / str(uuid.uuid4()).upper()
+                legacy.mkdir()
+                (legacy / 'legacy.bin').write_bytes(b'legacy-completed')
+                abandoned = tab_folder / str(uuid.uuid4()).upper()
+                abandoned.mkdir()
+                (abandoned / 'partial.bin').write_bytes(b'unvalidated')
+                marker = tab_folder / ('.awb-pending-' + abandoned.name)
+                marker.touch()
+                outside = state / 'outside-downloads'
+                outside.mkdir()
+                (outside / 'keep.bin').write_bytes(b'outside')
+                linked = tab_folder / str(uuid.uuid4()).upper()
+                linked.symlink_to(outside, target_is_directory=True)
+                (tab_folder / ('.awb-pending-' + linked.name)).touch()
+                recovery_gate = out / 'recovery-gate'
+                recovery_gate.mkdir()
+                (recovery_gate / 'armed').touch()
+                env['BROWSER_TEST_RECOVERY_GATE'] = str(recovery_gate)
+                tab_folder.chmod(0o500)
+                try:
+                    start()
+                    wait_until(lambda: (recovery_gate / 'sampled').exists(), 'Recovery gate not reached')
+                    assert cli('status')['ready']
+                    assert not (recovery_gate / 'release').exists(), 'Recovery must still be blocked after readiness'
+                    cli('wait', '#small', '--space', 'limit-b')
+                    assert cli('evaluate', 'document.querySelector("#small").textContent', '--space', 'limit-b')['value'] == 'small'
+                    running = begin('#stream', 'limit-b')
+                    running_folder = state / 'downloads' / created[1]['id'] / created[1]['defaultTabId'] / running
+                    running_marker = running_folder.parent / ('.awb-pending-' + running)
+                    wait_until(lambda: running_folder.exists() and running_marker.exists(), 'New download destination missing')
+                    (recovery_gate / 'release').touch()
+                    wait_until(lambda: 'Pending download cleanup failed:' in (out / (case + '-daemon.log')).read_text(),
+                               'Recovery did not report the isolated permission failure')
+                    assert running_folder.exists(), 'Startup recovery removed a new runtime download'
+                    assert cli('download', 'cancel', running, '--space', 'limit-b')['value']['status'] == 'cancelled'
+                    assert marker.exists() and abandoned.exists(), 'Failed cleanup lost its retry marker'
+                    assert 'Pending download cleanup failed:' in (out / (case + '-daemon.log')).read_text()
+                    stop()
+                finally:
+                    tab_folder.chmod(0o700)
+                    (recovery_gate / 'release').touch()
+                start()
+                wait_until(lambda: not abandoned.exists() and not marker.exists(), 'Writable residual was not retried')
+                assert (legacy / 'legacy.bin').read_bytes() == b'legacy-completed'
+                assert (outside / 'keep.bin').read_bytes() == b'outside' and linked.is_symlink()
+                assert Path(completed['path']).read_bytes() == b'x' * 1024
+            elif case in ('final-scan-restart', 'final-scan-tab-close', 'final-scan-space-delete'):
+                from download_budget_cases import wait_until
+                completed = wait(begin('#small', 'limit-b'), 'limit-b')
+                assert completed['status'] == 'completed', completed
+                final_gate.mkdir()
+                download = begin('#small')
+                wait_until(lambda: (final_gate / 'sampled').exists(), 'Final scan did not reach gate')
+                folder = state / 'downloads' / created[0]['id'] / created[0]['defaultTabId'] / download
+                assert (folder / 'payload.bin').read_bytes() == b'x' * 1024
+                failed = wait(download)
+                assert failed['status'] == 'failed' and failed['error'] == 'download_budget_timeout', failed
+                assert failed['path'] is None and folder.exists()
+                assert cli('state', '--space', 'limit-a')['page']['activeDownloads']
+                cli('space', 'suspend', 'limit-a', error='space_busy')
+                if case == 'final-scan-tab-close':
+                    cli('tab', 'new', base, '--space', 'limit-a')
+                    cli('tab', 'close', created[0]['defaultTabId'], '--space', 'limit-a')
+                elif case == 'final-scan-space-delete':
+                    cli('space', 'delete', created[0]['id'])
+                stop()
+                assert not (final_gate / 'release').exists(), 'Restart must not release the old scan'
+                start()
+                assert cli('status')['ready']
+                wait_until(lambda: not folder.exists(), 'Startup recovery did not clear the failed download')
+                cli('wait', '#small', '--space', 'limit-b')
+                # Record the actual quota outcome before asserting recovery, including on the baseline.
+                peer_id = begin('#small', 'limit-b')
+                peer_result = wait(peer_id, 'limit-b')
+                observation = dict(case=case, failedDownload=failed, residualExists=folder.exists(),
+                                   retainedCompleted=Path(completed['path']).read_bytes() == b'x' * 1024,
+                                   peerAfterRestart=peer_result, gateReleased=False, stateDirectory=str(state))
+                (out / (case + '-observation.json')).write_text(json.dumps(observation, indent=2))
+                assert not folder.exists(), observation
+                assert peer_result['status'] == 'completed', observation
+            elif case == 'final-scan-timeout':
                 from download_budget_cases import wait_until
                 download = begin('#small')
                 wait_until(lambda: (final_gate / 'sampled').exists(), 'Final scan did not reach gate')
@@ -234,6 +331,10 @@ def run_case(case, configured, out, binary):
                 cli('space', 'resume', 'limit-a')
                 cli('wait', '#small', '--space', 'limit-a')
                 completed = wait(begin('#small'))
+            elif case == 'exact-budget':
+                completed = wait(begin('#small'))
+                assert completed['status'] == 'completed', completed
+                assert_failed(wait(begin('#small', 'limit-b'), 'limit-b'), 'download_total_limit')
             elif case == 'file':
                 assert_failed(wait(begin('#large')), 'download_file_limit')
                 assert_failed(wait(begin('#stream')), 'download_file_limit')
@@ -323,7 +424,7 @@ def run_case(case, configured, out, binary):
             stop(); start()
             assert cli('status')['pendingStoreCleanup'] == 0
         finally:
-            if case == 'final-scan-timeout':
+            if case.startswith('final-scan-') and final_gate.exists():
                 (final_gate / 'release').touch()
             failed = sys.exc_info()[0] is not None
             errors = cleanup_test_services(cli, daemon, site)
@@ -333,6 +434,10 @@ def run_case(case, configured, out, binary):
                     raise AssertionError('Download limit cleanup failed') from errors[0]
     verify_cleanup(state)
     result = dict(case=case, passed=True, limits=limits, stateDirectory=str(state))
+    if case == 'recovery-isolation':
+        result.update(cleanupFailureIsolated=True, writableResidualRetried=True,
+                      completedAndLegacyPreserved=True, symlinkTargetPreserved=True,
+                      blockedRecoveryDoesNotDelayStartup=True, newRuntimeDownloadPreserved=True)
     if case == 'responsive':
         result.update(peerResponseSeconds=response_seconds, initialSharedScans=1,
                       cancelledDestinationRemainsAbsent=True)
@@ -351,7 +456,11 @@ def main():
              ('total', dict(MAX_TOTAL_BYTES=1536)),
              ('disk', dict(MIN_FREE_BYTES=9223372036854775807)),
              ('cancel', {}), ('responsive', {}), ('finish-cancel', {}),
-             ('finish-over-budget', dict(MAX_FILE_BYTES=1536)), ('final-scan-timeout', {})]
+             ('finish-over-budget', dict(MAX_FILE_BYTES=1536)), ('final-scan-timeout', {}),
+             ('final-scan-restart', dict(MAX_TOTAL_BYTES=2560)),
+             ('final-scan-tab-close', dict(MAX_TOTAL_BYTES=2560)),
+             ('final-scan-space-delete', dict(MAX_TOTAL_BYTES=2560)), ('recovery-isolation', {}),
+             ('exact-budget', dict(MAX_SPACE_BYTES=1024, MAX_TOTAL_BYTES=1024))]
     if args.case:
         cases = [(name, settings) for name, settings in cases if name == args.case]
         assert cases, 'Unknown case'

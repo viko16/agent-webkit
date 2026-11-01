@@ -203,6 +203,10 @@ def verify_frames(cli, out, restart):
                 removed = old - remaining
                 assert len(removed) == 1 and removed <= set(leaves)
                 command('fill', '#same', 'WRONG', frame=removed.pop(), error='stale_frame')
+                command('click', '#navigate', '--wait-for-navigation', frame=child, error='invalid_arguments')
+                command('click', '#save', '--wait-for-navigation', frame=child, error='invalid_arguments')
+                assert child in {f['frameId'] for f in documents()}, 'Rejected combination navigated the child'
+                assert len(requests) == 2, 'Rejected combination dispatched a side effect'
                 command('click', '#navigate', frame=child)
                 command('fill', '#same', 'WRONG', frame=child, error='stale_frame')
                 replacement = next(f for f in documents() if f['title'] == 'replacement')
