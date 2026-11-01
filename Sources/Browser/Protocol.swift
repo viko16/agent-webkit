@@ -89,6 +89,7 @@ struct Request: Codable {
     }
 }
 
+// Single version source; packaging reads it through `awb version`.
 let productVersion = "0.2.0"
 
 func jsonData(_ value: Any) throws -> Data {

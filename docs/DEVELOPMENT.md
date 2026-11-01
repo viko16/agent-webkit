@@ -9,9 +9,19 @@ python3 tests/acceptance.py --out .artifacts/acceptance
 python3 tests/reliability.py  # 独立应用、本地页面、超时恢复和计时回归
 ```
 
-Swift Package 无第三方包。`scripts/build.sh` 生成 `.build/Agent WebKit.app`，包含固定 Bundle ID、原生绘制的图标和允许 Web 内容联网的 ATS 配置。签名仅供本机开发，不包含公证或分发证书。测试使用 `.build/debug/awb` 作客户端，使用应用包中的 `awb daemon` 启动服务；测试前至少构建一次 debug，并确保客户端与应用包来自相同源码。`scripts/make_icon.swift` 以 AppKit 绘制各尺寸图标，再由系统 iconutil 打包，不需要图片生成服务或外部依赖。
+Swift Package 无第三方包。`scripts/build.sh` 生成 `.build/Agent WebKit.app`，包含固定 Bundle ID、原生绘制的图标和允许 Web 内容联网的 ATS 配置。应用使用 ad-hoc 签名，不包含公证或分发证书；从互联网下载后可能需要手动放行。测试使用 `.build/debug/awb` 作客户端，使用应用包中的 `awb daemon` 启动服务；测试前至少构建一次 debug，并确保客户端与应用包来自相同源码。`scripts/make_icon.swift` 以 AppKit 绘制各尺寸图标，再由系统 iconutil 打包，不需要图片生成服务或外部依赖。
 
 服务应始终由打包应用启动，保持 Bundle ID 一致；直接运行未打包的 `.build/debug/awb daemon` 会改变 WebKit 的存储归属，不能与应用包混用。该二进制仍可作 CLI 客户端。
+
+## 构建与发布
+
+版本号只在 `Sources/Browser/Protocol.swift` 的 `productVersion` 中维护，格式为 `MAJOR.MINOR.PATCH`。`scripts/build.sh` 将已有生成 App 移入废纸篓，重新打包，从构建好的 `awb version` 读取版本，写入 App 的 `CFBundleShortVersionString` 和 `CFBundleVersion`，再执行签名。
+
+发布时更新这一处版本号，将源码提交推送后，创建并推送同版本的 `vMAJOR.MINOR.PATCH` tag。`.github/workflows/release.yml` 在 Apple Silicon runner（`macos-15`）构建 release，检查架构、签名、版本一致性和离线 CLI，再用 `ditto` 打包并上传到 GitHub Release。tag 与 CLI 版本不一致会失败；发布使用自带的 `GITHUB_TOKEN`，无需额外配置 PAT 或 Apple 证书。
+
+附件为 `AgentWebKit-v版本号-macos-arm64.zip`，包含 `Agent WebKit.app`。CLI 位于 `Contents/MacOS/awb`，最低系统版本为 macOS 14。真实 WebKit、GUI、代理回归仍在本机运行，发布任务只做构建与离线检查。
+
+CLI 原名为 `browser`，现统一为 `awb`。Bundle ID、注册表目录、`browser.sock` 和 `BROWSER_*` 环境变量保持兼容，升级可继续使用已有 Space 和网站数据；使用旧命令名的外部脚本需更新为 `awb`。
 
 ## 离线帮助与机器可读契约
 
@@ -44,7 +54,7 @@ WebKit 操作默认超时 15000 ms，`--timeout` 接受 1–60000 ms；`evaluate
 
 ## Codex / Pi Skill
 
-`skills/agent-webkit/SKILL.md` 是对应 CLI 0.2.0 / 契约 v1 的单文件 Skill，直接调用现有 CLI；无安装脚本、MCP 或另一套浏览器客户端。参数和返回结构查当前二进制的 `capabilities` / `help`，Skill 只保留目标归属、动作与业务验证、失败恢复、弹窗/人工接管和共享服务清理约定。
+`skills/agent-webkit/SKILL.md` 是对应 `awb` / 契约 v1 的单文件 Skill，直接调用现有 CLI；无安装脚本、MCP 或另一套浏览器客户端。版本、参数和返回结构查当前二进制的 `version` / `capabilities` / `help`，Skill 只保留目标归属、动作与业务验证、失败恢复、弹窗/人工接管和共享服务清理约定。
 
 用户确认安装后，可将整个 `skills/agent-webkit` 目录复制或链接到 `~/.agents/skills/agent-webkit`（个人范围）或使用项目的 `.agents/skills/agent-webkit`（项目范围）。这两种位置由 [Codex 官方文档](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills)和 [Pi 官方文档](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/skills.md#add-it-to-pi)说明；同一位置可能被两个 Agent 发现。已有同名目录时先核对，不覆盖既有内容。仓库中的 `skills/` 只是发布源，构建/测试不会自动安装到发现目录或改动用户配置。
 

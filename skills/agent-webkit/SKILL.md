@@ -2,7 +2,6 @@
 name: agent-webkit
 description: 使用 Agent WebKit 的本机 awb CLI 操作隔离 Space/Tab，完成网页快照、表单、弹窗、等待与结果验证。适用于用户已选择 Agent WebKit 的浏览任务；不用于控制其他浏览器、系统代理或模拟可信原生输入。
 metadata:
-  cli-version: "0.2.0"
   contract-version: "1"
 ---
 
@@ -12,7 +11,7 @@ metadata:
 
 ## 连接与归属
 
-1. 使用用户提供的可执行文件，或 PATH 中的 `awb`；找不到时报告缺少工具，不自行安装。先查 `version`、`capabilities`，按需查 `help COMMAND [SUBCOMMAND]`，以当前二进制的契约为准；本 Skill 对应 CLI 0.2.0 / schemaVersion 1。使用自定义 Socket 时写 `awb version --socket PATH`；`--version` 别名只支持单独调用。
+1. 使用用户提供的可执行文件，或 PATH 中的 `awb`；找不到时报告缺少工具，不自行安装。先查 `version`、`capabilities`，按需查 `help COMMAND [SUBCOMMAND]`，以当前二进制的契约为准；本 Skill 对应 schemaVersion 1。使用自定义 Socket 时写 `awb version --socket PATH`；`--version` 别名只支持单独调用。
 2. `status` 确认服务已连接且 `ready: true`。沿用用户提供的 `--socket` / `BROWSER_SOCKET` 和 `--data-dir` / `BROWSER_DATA_DIR`，整次任务保持一致。离线帮助成功不代表 daemon 已连接。连接失败先核对路径；只有任务需要且已获启动授权时，才使用打包应用的 `awb daemon`。不要用未打包二进制启动服务或重启共享 daemon 来解决单页问题。
 3. 明确当前任务的 Space 所有权。复用用户指定 Space，或为独立会话创建唯一名称并显式选择 `--proxy direct` 或用户指定的 loopback HTTP 代理。不得因名称相似接管其他任务。已存在的 Space 先查 `space info NAME_OR_ID`（名称/ID 是位置参数），不自动删除重建。
 4. 保存返回的 Space UUID 和 Tab UUID，后续页面操作始终带 `--space`、`--tab`。CLI 默认 Tab 固定，GUI 选择不会改变它；`tab new` 和弹窗也不自动改默认目标。一个 Space 内顺序执行操作；不同 Space 可以并行。`space_busy` 时查询 state 和 dialog list：若原动作正在等待对话框，按下面流程回应；其余情况等待原操作，不另建 Tab 绕过锁或重放动作。

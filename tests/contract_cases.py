@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import subprocess
 import tempfile
@@ -10,11 +11,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def verify_offline(cli):
-    assert 'reload' in cli('--help')['usage']
-    assert cli('--version')['version'] == '0.2.0'
+    usage = cli('--help')['usage']
+    assert usage.startswith('awb help ') and 'reload' in usage
+    version = cli('version')['version']
+    assert re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', version), version
+    assert cli('--version')['version'] == version
     contract = cli('capabilities')
     assert contract['schemaVersion'] == 1
-    assert contract['version'] == cli('--version')['version']
+    assert contract['version'] == version
     commands = {item['command']: item for item in contract['commands']}
     assert len(commands) == len(contract['commands'])
     definitions = contract['schemas']['$defs']

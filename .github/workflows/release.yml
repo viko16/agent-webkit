@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Build
+        run: zsh scripts/build.sh release
+
+      - name: Verify and package
+        id: package
+        shell: bash
+        run: |
+          app='.build/Agent WebKit.app'
+          binary="$app/Contents/MacOS/awb"
+          version="$("$binary" version | plutil -extract result.version raw -o - -)"
+          if [[ ! "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ || "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME must match the CLI version v$version (vMAJOR.MINOR.PATCH)."
+            exit 1
+          fi
+          test "$(lipo -archs "$binary")" = arm64
+          test "$(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist")" = "$version"
+          test "$(plutil -extract CFBundleVersion raw -o - "$app/Contents/Info.plist")" = "$version"
+          codesign --verify --deep --strict "$app"
+          "$binary" help > /dev/null
+          "$binary" capabilities > /dev/null
+          archive=".build/AgentWebKit-$GITHUB_REF_NAME-macos-arm64.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$app" "$archive"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          ARCHIVE: ${{ steps.package.outputs.archive }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "$ARCHIVE" \
+            --verify-tag --title "Agent WebKit $GITHUB_REF_NAME" --generate-notes \
+            --notes '适用于 Apple Silicon（M 系列），macOS 14+。解压后将 Agent WebKit.app 放入 /Applications；CLI 为应用包内的 awb。应用使用 ad-hoc 签名，首次打开可能需要在「系统设置 → 隐私与安全性」中选择「仍要打开」。更新前请先退出应用。'

@@ -9,9 +9,21 @@
 - 支持原生文件下载的状态、等待和取消，已完成文件按 Space/Tab 独立保存。
 - 支持向 file input 上传本机单/多文件；后台路径使用合成事件，仍需确认页面提交结果。
 
-## 构建和启动
+## 安装和启动
 
-需要 macOS 14+、Command Line Tools / Swift 5.10+，以及已登录的桌面会话。
+需要 Apple Silicon（M 系列）Mac、macOS 14+，以及已登录的桌面会话。
+
+从 [GitHub Releases](https://github.com/viko16/agent-webkit/releases) 下载 `AgentWebKit-v版本号-macos-arm64.zip`，解压后将 `Agent WebKit.app` 放入 `/Applications`，双击启动。首次打开若被拦截，可在「系统设置 → 隐私与安全性」中选择「仍要打开」。更新时先退出应用，再替换 `.app`。
+
+将下面这行加入 `~/.zshrc`，并在当前终端执行一次，即可使用 CLI：
+
+```sh
+export PATH="/Applications/Agent WebKit.app/Contents/MacOS:$PATH"
+```
+
+### 从源码构建
+
+另需 Command Line Tools / Swift 5.10+。构建与发布流程见[开发说明](docs/DEVELOPMENT.md#构建与发布)。
 
 ```sh
 zsh scripts/build.sh
@@ -23,7 +35,7 @@ awb daemon
 
 ## CLI
 
-在另一个终端设置同样的 PATH，创建专属 Space 并打开页面：
+设置好 PATH 后，创建专属 Space 并打开页面：
 
 ```sh
 awb space create work --proxy direct
