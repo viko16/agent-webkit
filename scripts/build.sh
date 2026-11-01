@@ -15,6 +15,7 @@ version="$(".build/$configuration/awb" version | plutil -extract result.version 
 plutil -insert CFBundleShortVersionString -string "$version" "$app/Contents/Info.plist"
 plutil -insert CFBundleVersion -string "$version" "$app/Contents/Info.plist"
 cp THIRD_PARTY_NOTICES.md "$app/Contents/Resources/THIRD_PARTY_NOTICES.md"
+cp LICENSE "$app/Contents/Resources/LICENSE"
 swift scripts/make_icon.swift "$PWD/.build/AppIcon.iconset"
 iconutil -c icns "$PWD/.build/AppIcon.iconset" -o "$app/Contents/Resources/AppIcon.icns"
 codesign --force --sign - "$app"
