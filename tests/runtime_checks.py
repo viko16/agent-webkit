@@ -63,8 +63,15 @@ class Runtime:
         self.daemon = subprocess.Popen([str(executable), *args], env=self.env, stdout=self.log, stderr=self.log)
         for _ in range(200):
             assert self.daemon.poll() is None, f'Host exited; see {self.log.name}'
-            if (self.state / 'browser.sock').exists() and self.command('status')['ready']:
-                return
+            if (self.state / 'browser.sock').exists():
+                try:
+                    if self.command('status')['ready']:
+                        return
+                except AssertionError:
+                    # A stopped daemon can leave its socket path behind. Wait for
+                    # the replacement listener, without swallowing other errors.
+                    if self.rows[-1]['response'].get('error', {}).get('code') != 'ipc_error':
+                        raise
             time.sleep(.05)
         raise AssertionError('Host startup timed out')
 

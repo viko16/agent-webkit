@@ -343,6 +343,8 @@ GUI 的 selectedSpace / selectedTabs 只决定观察哪一个 WebView，并按�
 
 地址栏省略协议时使用 HTTPS，本地 HTTP 页面需显式输入 `http://`。图钉标记 CLI 默认 Tab，底部显示代理和证书策略，忽略证书错误时显示橙色提示。⌘T 新建 Tab，⌘L 聚焦地址栏，⌃⌘S 切换侧栏，⇧⌘F 搜索 Space，⇧⌘[ / ⇧⌘] 切换标签页，⌘W 隐藏观察窗口，⌘Q 退出服务。
 
+运行 `zsh scripts/build.sh release` 后，可用 `python3 tests/gui_security_cases.py` 检查原生证书提示。测试复用正式源码构建独立签名宿主，在三个 Direct Space 间切换，核对系统证书、自定义 CA、忽略证书错误的文字和警告颜色，并验证重启后的策略、选择与 Tab ID 保留、前台不变。需要已登录的 macOS 桌面；临时 CA 不导入钥匙串，退出清理自有 Space 和服务。报告与窗口截图保存在 `.artifacts/gui-security-*/`。本项验证 GUI 策略展示，TLS 网络信任判定仍由证书专项覆盖。
+
 本地 RPC 为每连接一条换行分隔的 JSON Request / Response，请求结构：
 
 ```json
