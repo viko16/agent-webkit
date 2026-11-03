@@ -130,7 +130,7 @@ python3 tests/reliability.py --dialogs-only
 
 专项覆盖真实委托、8 组接受/取消/输入、原动作忙碌下响应、其他 Space 独立操作及同时待决、过期/重复 ID、无动作重放、固定目标/前台不变；完整可靠性套件也调用这些用例。没有更改 DOM 合成、弹窗或原诊断能力。
 
-完整导航开始/显式加载会取消旧待决记录；关闭 Tab、内容进程终止和退出服务会停用该记录器，迟到的委托回调也只安全结束，不再形成孤立待决项。CLI shutdown 仍沿用原有 busy 检查，只有自主页面事件的空闲待决可以随显式退出结束；配置保存成功后才停用记录器，保存失败则服务仍可处理新对话框。AppKit 退出通知也会释放 completion。重启只恢复 URL，不持久化文本、默认值、输入或待决 ID，新载入的网页仍可能产生新对话框。生命周期用例覆盖链式对话框、初始导航中的对话框、frame/popup 归属、导航取消、关闭后迟到回调、退出保存失败、重启旧 ID 和真实15秒自主到期；未注入真实 WebContent 强制终止，不将该分支计作实机故障验收。
+完整导航开始/显式加载会取消旧待决记录；关闭 Tab、内容进程终止和退出服务会停用该记录器，迟到的委托回调也只安全结束，不再形成孤立待决项。CLI shutdown 仍沿用原有 busy 检查，只有自主页面事件的空闲待决可以随显式退出结束；配置保存成功后才停用记录器，保存失败则服务仍可处理新对话框。AppKit 退出通知也会释放 completion。重启只恢复 URL，不持久化文本、默认值、输入或待决 ID，新载入的网页仍可能产生新对话框。生命周期用例覆盖链式对话框、初始导航中的对话框、frame/popup 归属、导航取消、关闭后迟到回调、退出保存失败、重启旧 ID 和真实15秒自主到期；待决 confirm 期间的真实内容进程终止另由下文的 `runtime_checks.py termination` 验证。
 
 ## React / Vue 表单回归
 
@@ -361,7 +361,11 @@ Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 
 
 每条页面命令使用单调时钟的截止时间。JS、异步 JS 和截图通过 PendingOperation 将 WebKit 回调与主队列计时器协调，保证 continuation 只完成一次；晚到的回调不能再次完成请求或污染后续请求的计时。WebKit 调用超时后，标签页标记 `unresponsive`，Space 锁释放。`state`、`tab list`、`space info` 可在忙碌或故障期间读取，不需要执行页面 JavaScript。
 
-超时只是停止宿主等待，不是可靠地中断页面 JS。为避免继续在未知状态上操作，该 Tab 的后续 DOM 命令会返回 `web_content_unresponsive`。显式 `open` / `reload` 替换异常 WKWebView，继承同一 Tab ID、WKWebsiteDataStore 与 TLS 策略；不重放点击、填写或提交。真正的 WebContent 终止通知会让挂起调用立即失败，并在 UI 显示恢复提示。当前已实测无限循环和永不完成的 Promise 恢复；进程被系统终止的分支尚未单独故障注入验证。
+超时只是停止宿主等待，不是可靠地中断页面 JS。为避免继续在未知状态上操作，该 Tab 的后续 DOM 命令会返回 `web_content_unresponsive`。显式 `open` / `reload` 替换异常 WKWebView，继承同一 Tab ID、WKWebsiteDataStore 与 TLS 策略；不重放点击、填写或提交。真正的 WebContent 终止通知会让挂起调用失败，并在 UI 显示恢复提示。WebKit 有时先以不支持的 JS 返回类型结束回调，再通知内容进程退出；挂起调用恢复执行时若已确认终止，统一返回 `web_content_terminated`，未确认时保留原错误，不靠错误文案猜测崩溃。
+
+`python3 tests/runtime_checks.py termination` 构建独立签名宿主，复用正式 Browser、SocketServer 和 ObserverWindow 源码，通过包内 CLI 执行操作。先运行 `zsh scripts/build.sh release`。测试用 `launchctl print pid/宿主PID` 确认 XPC 归属，结合创建目标 Space 前后的差集及可执行路径，仅对唯一确定的测试 WebContent PID 发送 SIGKILL；无法确定归属就失败，不按全局进程名终止。需要已登录的 macOS 桌面和读取/终止自有进程的权限，不修改系统代理。
+
+覆盖空闲、挂起 JS、待决 confirm、导航中的真实终止；核对结构化错误、原生恢复按钮与 CLI reload、旧 frame/元素引用失效、Cookie/LocalStorage/Tab ID、另一 Space 的页面内存、一次服务端 POST 不重放，以及关窗后的后台快照/截图和重新显示窗口。GUI 加载进度、错误横幅、按钮及恢复状态通过实际 AppKit 控件读取和截图检查，不冒充人工点击验收；宿主记录应用激活通知并采样前台 PID。报告、命令、进程归属与 GUI 图片保存在 `.artifacts/termination-*/`，清理确认后才报告成功。当前实测 macOS 27.2；SIGKILL 不等同于系统内存压力回收、整机故障或长期稳定性验证。
 
 故障恢复后立即删除 Space，实测 WebKit 可能仍持有没有活动页面的网络会话，`remove(forIdentifier:)` 返回 `Data store is in use (by network process)`。流程先调用 `removeData` 清理全部公开网站数据类型，再用 `fetchDataRecords` 验证为空，并有限重试容器删除。容器未释放时返回 `websiteDataRemoved: true`、`dataStoreRemoved: false`、`cleanupPending: true`，保留 tombstone；不会把容器删除当成成功。重启后会再次清理，`status.pendingStoreCleanup` 返回数量，`status.pendingStores` 列出全部待清理记录的 `spaceId` 和 `name`，包括运行中删除失败或仍待回调的记录。同名活跃 Space 从 `space list` 查询；按名称删除有歧义时，核对两处 UUID，再按旧 UUID 清理。同名重建使用新 UUID，测试验证它读不到旧 LocalStorage，并验证重启后旧容器和 tombstone 清除。
 
@@ -511,5 +515,11 @@ WebKit 计时是宿主可观测的 API 延迟，包含 WebKit 进程间通信、
 `click --wait-for-navigation` 将点击及一次完整导航放在同一请求内计时，脚本用它提交搜索和打开结果；普通 `click` 仍只等待 DOM 操作回调。同页锚点和仅更新 DOM 的 SPA 操作不会满足完整导航等待，可用原有 `wait SELECTOR` 等待。超时返回错误和已消耗时间；尚未结束的导航标为 `inProgress`，不会把它后续的时长计入下一条请求。JS 执行失败和结果无法序列化时也保留计时。
 
 `tests/timing.py` 使用有固定延迟的本地页面，验证计时范围的嵌套关系、并发 Space 归属、导航完成与超时、无导航点击、JS / 序列化错误及真实截图；不依赖 Google 的实时可用性。Google 演示是一次实际样本，沿用持久化 Cookie；`open` 跳过本地缓存，之后的链接导航遵循 WebKit 常规策略，不能当成严格冷启动基准。
+
+CLI 开销量化使用 `zsh scripts/build.sh release` 后的 `python3 tests/runtime_checks.py timing --samples 30`。它启动独立的正式 Release 应用，并以同一包内二进制逐条调用 CLI；预热三轮后，对 state、snapshot、fill、click、wait、evaluate、固定延迟导航及截图分别记录中位数和 P95，也统计六条命令组成的填写验证流程。原始数据、版本、源码与二进制哈希保存在 `.artifacts/timing-*/`；测量时应避免并行构建或其他验收。
+
+`outsideMainMs = cliEndToEndMs - cliMs` 包含进程加载、最终 JSON 输出、退出、父进程收集与调度，不能称为纯启动耗时。`outsideIPCMs = cliEndToEndMs - ipcRoundTripMs` 是客户端和进程开销的乐观可省上限，不是已实现批量接口的加速比。流程的 `commandMs` 排除测试驱动写日志和校验的时间，`wallMs` 则包含它们。本地预热 fixture 的结果不代表公网、复杂 SPA、冷缓存或包含模型推理的完整 Agent 工作流。
+
+2026-11-04 在本机 arm64/macOS 27.2、Release 0.2.1 基础加终止错误分类修复的 30 轮测量中，普通页面命令中位数为 11–16 ms，截图约 50 ms，带 250 ms 服务端延迟的导航约 305 ms。六步流程的命令耗时中位数为 79.3 ms（P95 86.3 ms），其中 IPC 外开销合计中位数 62.6 ms。该数值还包含首条命令不可避免的启动等成本；批量接口实际可省时间会更少。当前决定保留逐条 CLI，不增加批量接口；如果实际工作流出现大量无需中途判断的短命令，再用该入口复测收益。
 
 命令专属选项在 CLI 与服务端同时校验。CLI 在发送前发现的参数错误只有 `cliMs`，不会伪造 IPC 或 WebKit 耗时。`--` 后的参数作为字面值处理，适用于以连字符开头的表单内容。

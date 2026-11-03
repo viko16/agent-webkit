@@ -253,23 +253,31 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         let token = timing?.begin(operation, from: monotonicNow())
         let id = UUID()
         defer { pending[id] = nil }
-        return try await withCheckedThrowingContinuation { continuation in
-            let call = PendingOperation(continuation)
-            pending[id] = { call.finish(.failure($0)) }
-            call.arm(milliseconds: remaining) { [weak self] in
-                if let self {
-                    let waitingForDialog = self.dialogs.hasPending || self.dialogs.expired(since: now)
-                    self.dialogs.cancelAll(code: "dialog_expired")
-                    self.unresponsive = !waitingForDialog
+        do {
+            return try await withCheckedThrowingContinuation { continuation in
+                let call = PendingOperation(continuation)
+                pending[id] = { call.finish(.failure($0)) }
+                call.arm(milliseconds: remaining) { [weak self] in
+                    if let self {
+                        let waitingForDialog = self.dialogs.hasPending || self.dialogs.expired(since: now)
+                        self.dialogs.cancelAll(code: "dialog_expired")
+                        self.unresponsive = !waitingForDialog
+                    }
+                    self?.diagnostics.native("operation-timeout", url: self?.webView.url,
+                        error: BrowserError("timeout", ""), duration: milliseconds(from: now))
+                    self?.changed?()
                 }
-                self?.diagnostics.native("operation-timeout", url: self?.webView.url,
-                    error: BrowserError("timeout", ""), duration: milliseconds(from: now))
-                self?.changed?()
+                body { result in
+                    if let token { timing?.finish(token) }
+                    call.finish(result)
+                }
             }
-            body { result in
-                if let token { timing?.finish(token) }
-                call.finish(result)
-            }
+        } catch {
+            // WebKit may fail a pending JS callback with an unsupported-result error
+            // before delivering its termination delegate in the same main-loop turn.
+            // Prefer the observed process state when the continuation resumes.
+            if terminated { throw BrowserError("web_content_terminated", "WebContent 进程已退出；reload 可恢复页面，操作可能已部分生效") }
+            throw error
         }
     }
 
