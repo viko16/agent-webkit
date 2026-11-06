@@ -20,7 +20,9 @@ metadata:
 
 从 `snapshot` 读取当前完整引用，再对指定目标执行一次 `click` / `fill`，最后用 `wait`、新 snapshot 或页面业务状态核对结果。导航、重载、节点替换后旧引用可能失效；遇 `stale_ref` 重新快照并重新确认目标。选择器必须唯一，可用 `>>>` 进入同源 frame / open Shadow Root；closed root 不受支持。
 
-跨源或嵌套文档先用 `frame list --space SPACE_ID --tab TAB_ID` 获取文档 ID，再对 snapshot/click/fill/wait 同时带 `--frame FRAME_ID` 和原 Space/Tab。列表平铺、parentFrameId 为 null，不按 URL、顺序或深度猜父子关系；同 URL 可对应多个文档，应通过 snapshot 确认。遇 `stale_frame` 重新列出并确认，旧 ID 不能跨导航、休眠、重启或 Tab 使用。检查列表 truncated；显式 frame 的坐标和可见性只在文档内成立，不能证明跨源外层可见或可原生点击。evaluate、截图、上传不支持 --frame，DOM 合成和业务验证规则不变。
+大页面可用 `snapshot --scope SELECTOR --interactive` 缩小范围。重复类名可用 `snapshot --scope SELECTOR --role button --name '保存'` 获取唯一引用。检查 `scopeTarget`、`scannedNodes` 和 `truncated`，只对返回的范围下结论。后续操作使用最近一次快照中的引用。
+
+跨源或嵌套文档先用 `frame list --space SPACE_ID --tab TAB_ID` 获取文档 ID，按 capabilities 的 frame 命令列表同时带 `--frame FRAME_ID` 和原 Space/Tab。同 URL 可对应多个文档，应通过 snapshot 确认。遇 `stale_frame` 重新列出并确认。检查列表 `truncated`，跨源外层的可见性和遮挡需要独立核对。
 
 下面的 `SPACE_ID`、`TAB_ID`、引用和结果文本均替换为当前返回值，不直接照抄：
 
@@ -32,11 +34,19 @@ awb wait --text '已保存' --space SPACE_ID --tab TAB_ID --timeout 5000
 awb snapshot --space SPACE_ID --tab TAB_ID
 ```
 
-`--timeout` 单位为毫秒。`wait --url` 是完整 URL 精确匹配，支持 SPA；文本/元素状态等待按 `help wait` 选用，不能组合互斥条件。顶层完整文档导航可用 `click --wait-for-navigation`，它与 `--frame` 组合时会在点击前拒绝。子文档跳转只点击一次，再用 frame list 和 snapshot 确认新文档 ID，随后等待对应条件；不能复用旧 frame ID 或重放点击。SPA 路由、同页锚点或 DOM 更新应等待对应 URL、文本或元素。以连字符开头的填写值放在 `--` 后，例如 `awb fill --space SPACE_ID --tab TAB_ID -- '#field' '--literal'`。
+`--timeout` 单位为毫秒。每次 `wait` 只选一个条件。SPA 可用精确 URL 或 `--url-pattern`，应用状态可用返回布尔值的只读同步 `--fn`。容易短暂满足的条件加 `--stable-for MS`。顶层完整导航可用 `click --wait-for-navigation`。子文档跳转只点击一次，重新列出 frame 并确认新文档 ID 后再等待。以连字符开头的填写值放在 `--` 后，例如 `awb fill --space SPACE_ID --tab TAB_ID -- '#field' '--literal'`。
 
-click/fill 使用 DOM 合成事件；成功响应、`nativeVerified: false` 或 `businessOutcomeVerified: false` 都不能作为提交、支付、登录等业务成功证据。验证失败如实报告，不能改页面内容来伪造成功。`evaluate` 在页面 world 执行，`--await` 才等待 Promise；结果须可表示为 JSON。
+用 `select` 操作原生单选下拉框，用 `check/uncheck` 设置原生复选框的目标状态，读回 `selectedValue` 或 `checked`。用 `back/forward` 遍历历史，用 `scroll` 滚动。click 的 `hitTest` 是滚动后对 DOM 命中点的采样。遇遮挡先用快照或截图确认覆盖层，再按任务处理。合成操作结束后仍需单独核对提交、支付或登录结果。
+
+`evaluate` 在页面 world 执行。返回值须可表示为 JSON，等待 Promise 时加 `--await`。
 
 后台按键先 `focus SELECTOR_OR_REF --space SPACE_ID --tab TAB_ID`，再 `key KEY`，整次操作保持同一 Space/Tab。按 capabilities 的白名单使用 Enter/Tab/Escape/有限编辑键；仅主文档/open Shadow Root，不用 --frame 或 iframe 目标。key 跟随当前同文档焦点；input_focus_required/input_target_changed 时重新观察并聚焦，input_focus_conflict 时等待用户结束 GUI 地址栏等编辑，不切换其他 Tab 绕过保护。method=appkit-directed、dispatched=true 只表示宿主定向调用，不保证网页事件可信标记、物理输入、默认行为或业务结果；继续 wait/验证，出错不重放。hover、通用快捷键和 IME 仍需人工接管。
+
+## 验收证据
+
+1. 记录 Space/Tab 和目标 URL。按任务设置 `viewport set WIDTH HEIGHT`。要调查启动错误，导航前启用 `diagnostics --detail continuous`。读回实际 CSS 视口、最终响应 URL、`page.httpStatus` 和导航 ID。
+2. 执行页面断言并记下等待条件与结果。保存任务需要的截图路径和诊断摘要，注明截图范围、诊断丢弃数和快照截断情况。采集结束后关闭本任务启用的详细诊断。
+3. 分别报告 **WebKit 页面结果、代理路径、业务请求、Chromium**，逐项附对应证据。代理路径用 Whistle 会话与来源日志核对，业务请求用同一次操作的服务端回执或可独立核对的结果。诊断的 `routeVerified: false` 只表示该接口没有验证路由。缺证据的项目标为「未验证」，包括未运行 Chromium 的情况。
 
 ## 超时与恢复
 

@@ -45,13 +45,26 @@ def verify_navigation_failures(cli, base, out, events):
         assert redirected['httpStatus'] == 200 and redirected['responseURL'] == base and redirected['redirectCount'] == 1, redirected
         assert redirected['navigationId'] != direct['navigationId']
         history_page = urljoin(base, '/diagnostic-status?status=200')
-        command('open', history_page)
+        original_history = command('open', history_page)['page']
+        assert command('back')['page']['url'] == base
+        restored_history = command('forward')['page']
+        assert restored_history['url'] == restored_history['responseURL'] == history_page
+        assert restored_history['httpStatus'] == 200
+        assert restored_history['httpResponseNavigationId'] in (restored_history['navigationId'], original_history['navigationId'])
+        command('forward', error='history_unavailable')
         js('history.back(); true')
         command('wait', '--url', base)
         assert command('wait')['page']['httpStatus'] == 200
         js('history.forward(); true')
         command('wait', '--url', history_page)
         assert command('wait')['page']['responseURL'] == history_page
+        js('history.pushState({step:1},"","?step=1");history.pushState({step:2},"","?step=2");true')
+        history_back = command('back')
+        assert history_back['value']['sameDocument'] and history_back['page']['url'].endswith('?step=1')
+        history_forward = command('forward')
+        assert history_forward['value']['sameDocument'] and history_forward['page']['url'].endswith('?step=2')
+        js('history.pushState({step:3},"",location.href);true')
+        assert command('back')['value']['sameDocument'] and js('history.state.step') == 2
         for status in (401, 404, 500):
             url = urljoin(base, f'/diagnostic-status?status={status}')
             page = command('open', url)['page']

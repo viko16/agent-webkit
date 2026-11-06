@@ -452,7 +452,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
                         return
                     }
                     if let message = nsError.userInfo["WKJavaScriptExceptionMessage"] as? String {
-                        let codes = ["input_target_changed", "input_focus_failed", "stale_frame", "stale_ref", "selector_count", "invalid_selector", "unsupported_context", "element_not_actionable", "element_readonly", "unsupported_fill_type", "element_not_editable", "invalid_option", "unsupported_upload_target", "upload_multiple_not_allowed", "upload_unavailable", "unsupported_screenshot_geometry"]
+                        let codes = ["input_target_changed", "input_focus_failed", "stale_frame", "stale_ref", "selector_count", "invalid_selector", "unsupported_context", "element_not_actionable", "element_readonly", "unsupported_fill_type", "element_not_editable", "invalid_option", "unsupported_upload_target", "upload_multiple_not_allowed", "upload_unavailable", "unsupported_screenshot_geometry", "snapshot_truncated", "unsupported_checkbox_target", "dom_state_mismatch"]
                         let prefix = "__agent_webkit_dom__:"
                         let exception = message.hasPrefix("Error: ") ? String(message.dropFirst(7)) : message
                         let tagged = internalDOM && exception.hasPrefix(prefix)
@@ -575,6 +575,48 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
             try await Task.sleep(nanoseconds: 25_000_000)
         } while milliseconds(from: start) < Double(timeout) && (deadline.map { monotonicNow() < $0 } ?? true)
         throw BrowserError("popup_not_opened", "期限内未观察到新 Tab；DOM 合成点击不是可信用户激活，网站或 WebKit 可能拒绝弹窗。请核对页面状态，必要时手动点击；不会自动重试")
+    }
+
+    func traverseHistory(back: Bool) async throws -> [String: Any] {
+        let history = webView.backForwardList
+        guard !navigationPending, !webView.isLoading else {
+            throw BrowserError("unsupported_navigation", "当前导航尚未完成，先检查 state")
+        }
+        guard let item = back ? history.backItem : history.forwardItem else {
+            throw BrowserError("history_unavailable", "目标方向没有历史记录")
+        }
+        let before = history.currentItem
+        let sequence = navigationSequence, errorRevision = navigationErrorRevision
+        let script = "({href:location.href,revision:window.__agentWebKit?.historyState.revision,ready:document.readyState==='complete'})"
+        let initial = try await runJS(script, world: DOM.world) as? [String: Any]
+        guard sequence == navigationSequence, history.currentItem === before, !navigationPending, !webView.isLoading else {
+            throw BrowserError("unsupported_navigation", "历史目标已改变；请重新检查当前页面")
+        }
+        try requireResponsiveContent()
+        guard webView.go(to: item) != nil else {
+            throw BrowserError("history_unavailable", "WebKit 未接受历史导航")
+        }
+        let end = deadline ?? monotonicNow() + 15_000_000_000
+        while monotonicNow() < end {
+            if terminated { throw BrowserError("web_content_terminated", "WebContent 进程已退出，请 reload") }
+            if navigationErrorRevision > errorRevision, let navigationError { throw navigationError }
+            if history.currentItem === item, !navigationPending, !webView.isLoading {
+                let sampleSequence = navigationSequence
+                let page = try await runJS(script, world: DOM.world) as? [String: Any]
+                let sameDocument = sampleSequence == sequence
+                let traversed = sameDocument
+                    ? (page?["revision"] as? Int ?? 0) > (initial?["revision"] as? Int ?? 0)
+                    : completedNavigationSequence == sampleSequence && !completedNavigationWasDownload
+                if traversed, let href = page?["href"] as? String, href == item.url.absoluteString, page?["ready"] as? Bool == true,
+                   history.currentItem === item, sampleSequence == navigationSequence, !navigationPending, !webView.isLoading {
+                    persistedURL = href; committedDocumentURL = href
+                    return ["method": "webkit-history", "sameDocument": sameDocument, "businessOutcomeVerified": false]
+                }
+            }
+            let now = monotonicNow()
+            if now < end { try await Task.sleep(nanoseconds: min(50_000_000, end - now)) }
+        }
+        throw BrowserError("timeout", "等待历史导航完成超时；先检查 state，命令不会重放")
     }
 
     func wait(selector: String?, timeout: Int, state: String = "visible", text: String? = nil,
@@ -1416,7 +1458,7 @@ final class BrowserModel {
                 ["spaceId": $0.key.uuidString, "error": $0.value]
             }
             let blockedSpaceIDs = spaces.filter { $0.networkError != nil }.map { $0.record.id.uuidString }
-            let capabilities: [String: Any] = ["input":"dom-synthetic", "keyboard":"explicit focus/key; limited directed AppKit events, main document/open shadow only", "snapshot":"same-origin-frames-and-open-shadow-roots", "crossOriginDOM":"frame list + explicit --tab/--frame for snapshot/click/fill/wait", "screenshot":"viewport", "screenshotModes":["viewport", "element", "full-page"], "foregroundRequired":false]
+            let capabilities: [String: Any] = ["input":"dom-synthetic", "keyboard":"explicit focus/key; limited directed AppKit events, main document/open shadow only", "snapshot":"same-origin-frames-and-open-shadow-roots", "crossOriginDOM":"frame list + explicit --tab/--frame", "frameCommands":Request.frameCommands, "fixedViewport":true, "screenshot":"viewport", "screenshotModes":["viewport", "element", "full-page"], "foregroundRequired":false]
             return ["version": productVersion, "pid": ProcessInfo.processInfo.processIdentifier, "spaces": spaces.count,
                     "ready": !restoring,
                     "shutdownImpact": shutdownImpact,
@@ -1657,6 +1699,9 @@ final class BrowserModel {
             tab.load(try validateURL(tab.persistedURL))
             try await tab.wait(selector: nil, timeout: timeout); try save(space)
         case "state": break
+        case "back", "forward":
+            value = try await tab.traverseHistory(back: command == "back")
+            try save(space)
         case "viewport.get", "viewport.set":
             var size: NSSize?
             if command == "viewport.set", let width = Int(r.args[0]), let height = Int(r.args[1]) {
@@ -1672,10 +1717,13 @@ final class BrowserModel {
             value = try await tab.key(key)
         case "frame.list": value = try await tab.frameList()
         case "snapshot":
-            value = try await tab.runJS("window.__agentWebKit.snapshot()", world: DOM.world, frameID: r.options["frame"])
+            let scope = try r.options["scope"].map(quoteJS) ?? "null"
+            let role = try r.options["role"].map(quoteJS) ?? "null"
+            let name = try r.options["name"].map(quoteJS) ?? "null"
+            value = try await tab.runJS("window.__agentWebKit.snapshot(\(scope),\(r.options["interactive"] == "true"),\(role),\(name))", world: DOM.world, frameID: r.options["frame"])
             if let frameID = r.options["frame"], var snapshot = value as? [String: Any] {
                 snapshot["frameId"] = frameID
-                snapshot["textScope"] = "selected-frame"
+                if snapshot["textScope"] as? String == "main-frame" { snapshot["textScope"] = "selected-frame" }
                 snapshot["visibilityScope"] = "selected-document; cross-origin embedding ancestors not checked"
                 snapshot["elements"] = (snapshot["elements"] as? [[String: Any]] ?? []).map { element in
                     var element = element
@@ -1687,18 +1735,22 @@ final class BrowserModel {
                 value = snapshot
             }
         case "evaluate": value = try await tab.runJS(arg(0), awaitPromise: r.options["await"] == "true")
-        case "click", "fill":
+        case "click", "fill", "select", "check", "uncheck":
             let before = tab.navigationSequence
             let beforeError = tab.navigationErrorRevision
             let beforePopup = tab.popupSequence
             tab.lastNavigationRejection = nil
-            value = try await tab.runJS("window.__agentWebKit.act(\(try quoteJS(command)),\(try quoteJS(arg(0))),\(try quoteJS(command == "fill" ? arg(1) : "")))", world: DOM.world, frameID: r.options["frame"])
+            let input = r.args.count == 2 ? r.args[1] : ""
+            value = try await tab.runJS("window.__agentWebKit.act(\(try quoteJS(command)),\(try quoteJS(arg(0))),\(try quoteJS(input)))", world: DOM.world, frameID: r.options["frame"])
             if r.options["wait-for-navigation"] == "true" { try await tab.waitForNavigation(after: before, errorRevision: beforeError, timeout: timeout) }
             if r.options["wait-for-popup"] == "true" {
                 let popupID = try await tab.waitForPopup(after: beforePopup, timeout: timeout)
                 var action = value as? [String: Any] ?? [:]
                 action["newTabId"] = popupID; value = action
             }
+        case "scroll":
+            guard let x = Int(try arg(0)), let y = Int(try arg(1)) else { throw BrowserError("invalid_arguments", "scroll 需要整数偏移") }
+            value = try await tab.runJS("window.__agentWebKit.scroll(\(x),\(y))", world: DOM.world, frameID: r.options["frame"])
         case "wait":
             try await tab.wait(selector: r.args.first, timeout: timeout, state: r.options["state"] ?? "visible",
                                text: r.options["text"], url: r.options["url"], urlPattern: r.options["url-pattern"],

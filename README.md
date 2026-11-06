@@ -46,6 +46,8 @@ awb screenshot --space work --out /tmp/work.png
 
 用 `awb help` 查看命令，`awb help open` 查看单项用法。点击或填写前先获取 snapshot，使用其中的完整元素引用；操作后通过页面内容或等待条件确认结果。
 
+页面较大时，可用 `awb snapshot --scope '#app' --interactive --space work` 只列出指定区域内的交互控件。表单也支持 `select` 和 `check/uncheck`，历史与滚动可直接用 `back/forward` 和 `scroll`。
+
 验收响应式页面时，用 `awb viewport set 768 600 --space work --tab TAB_ID` 设置尺寸。打开 URL 后查看 `page.httpStatus`，或加 `--fail-on-http-error` 将主文档 4xx/5xx 作为命令失败。需要捕获页面启动错误时，先对目标 Tab 启用 `awb diagnostics --detail continuous --space work --tab TAB_ID`，再导航。
 
 每个 Agent 使用独立 Space。页面命令必须指定 `--space`。允许省略 `--tab` 的命令会使用该 Space 的固定默认标签页，切换窗口中的页面不会改变这个目标。
@@ -81,7 +83,7 @@ awb open https://example.com --space dev
 
 - 点击和填写使用 DOM 合成事件。后台键盘先用 `awb focus SELECTOR_OR_REF --space work --tab TAB_ID`，再用 `awb key Enter --space work --tab TAB_ID`；[支持的按键及限制](docs/DEVELOPMENT.md#后台-focuskey)见开发说明。按键由宿主定向构造，不等同于物理输入或业务成功。hover、复杂编辑器、IME 和必须人工登录的操作仍需在窗口中接管。
 - 页面卡住时可用 `awb reload --space work` 恢复；未提交表单和页面内存状态不会保留。超时动作可能已经生效，先核对结果，再决定是否重试。
-- 支持开放 Shadow Root 和同源 iframe；跨源及嵌套 frame 先用 `awb frame list --space work --tab TAB_ID` 获取文档 ID，再用 `snapshot/click/fill/wait --frame FRAME_ID --space work --tab TAB_ID` 操作。导航后需重新确认目标，`>>>` 仍只穿透同源边界，closed Shadow Root 暂不支持。[跨源定位与限制](docs/DEVELOPMENT.md#跨源-frame-dom-操作)见开发说明。截图默认视口，`--element SELECTOR_OR_REF` 截取元素可见范围，`--full-page` 有界拼接整页并还原滚动。
+- 支持开放 Shadow Root 和同源 iframe。跨源及嵌套 frame 先用 `awb frame list --space work --tab TAB_ID` 获取文档 ID，再给支持 `--frame` 的命令指定该 ID。导航后重新确认目标。`>>>` 仅穿透同源 frame 和开放 Shadow Root。截图默认截取视口，也可截取元素可见范围或有界拼接整页。[跨源定位与限制](docs/DEVELOPMENT.md#跨源-frame-dom-操作)
 - JS alert/confirm/prompt 需要显式查询和回应，操作流程见[对话框说明](docs/DEVELOPMENT.md#js-对话框)。弹窗能打开不代表第三方 OAuth 已全自动兼容。
 - 普通关闭和重启保留持久化网站数据，登录是否延续仍由网站决定。`awb space delete work` 会删除该 Space 的网站数据。
 

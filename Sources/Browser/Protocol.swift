@@ -30,10 +30,12 @@ struct Request: Codable {
             "fill":2...2, "screenshot":0...0, "wait":0...1, "diagnostics":0...0,
             "dialog.list":0...0, "dialog.respond":2...2, "space.suspend":1...1, "space.resume":1...1,
             "download.list":0...0, "download.wait":1...1, "download.cancel":1...1, "upload":2...17, "frame.list":0...0,
-            "focus":1...1, "key":1...1, "viewport.get":0...0, "viewport.set":2...2]
+            "focus":1...1, "key":1...1, "viewport.get":0...0, "viewport.set":2...2,
+            "back":0...0, "forward":0...0, "scroll":2...2, "select":2...2, "check":1...1, "uncheck":1...1]
 
     static let clientOptions: Set<String> = ["socket", "data-dir"]
-    static let explicitTabCommands = ["focus", "key", "viewport.set"]
+    static let frameCommands = ["snapshot", "click", "fill", "wait", "scroll", "select", "check", "uncheck"]
+    static let explicitTabCommands = ["focus", "key", "viewport.set", "back", "forward", "scroll", "select", "check", "uncheck"]
 
     static func allowedOptions(for command: String, includingClientOptions: Bool = false) -> Set<String> {
         var allowed: Set<String> = includingClientOptions ? clientOptions : []
@@ -41,8 +43,9 @@ struct Request: Codable {
             allowed.insert("space")
             if !command.hasPrefix("tab.") { allowed.insert("tab") }
         }
-        if ["open", "reload", "tab.new", "snapshot", "evaluate", "click", "fill", "screenshot", "wait", "frame.list", "focus", "key"].contains(command) { allowed.insert("timeout") }
-        if ["snapshot", "click", "fill", "wait"].contains(command) { allowed.insert("frame") }
+        if (["open", "reload", "tab.new", "evaluate", "screenshot", "frame.list", "focus", "key", "back", "forward"] + frameCommands).contains(command) { allowed.insert("timeout") }
+        if frameCommands.contains(command) { allowed.insert("frame") }
+        if command == "snapshot" { allowed.formUnion(["scope", "interactive", "role", "name"]) }
         if command == "space.create" { allowed.formUnion(["proxy", "ca-cert", "ignore-certificate-errors"]) }
         if command == "click" { allowed.formUnion(["wait-for-navigation", "wait-for-popup"]) }
         if ["open", "reload"].contains(command) { allowed.insert("fail-on-http-error") }
@@ -75,8 +78,20 @@ struct Request: Codable {
         if command == "viewport.set", !args.allSatisfy({ Int($0).map { (100...4096).contains($0) } == true }) {
             throw BrowserError("invalid_arguments", "viewport set 的宽高均须为 100–4096 的整数")
         }
+        if command == "scroll", !args.allSatisfy({ Int($0).map { (-100_000...100_000).contains($0) } == true }) {
+            throw BrowserError("invalid_arguments", "scroll 需要两个 -100000–100000 的 CSS px 整数偏移")
+        }
         if let frame = options["frame"], frame.isEmpty || options["tab"] == nil {
             throw BrowserError("invalid_arguments", "--frame 需要非空文档 ID 和显式 --tab；先用 frame list 确认目标")
+        }
+        if command == "snapshot" {
+            guard options["scope"] != "", (options["scope"]?.utf8.count ?? 0) <= 512,
+                  (options["role"] == nil) == (options["name"] == nil),
+                  options["role"] != "", (options["role"]?.utf8.count ?? 0) <= 64,
+                  options["name"] != "", (options["name"]?.count ?? 0) <= 200,
+                  (options["name"]?.utf8.count ?? 0) <= 800 else {
+                throw BrowserError("invalid_arguments", "snapshot 的 --scope 需要非空选择器或引用；--role 与 --name 必须成对提供")
+            }
         }
         if options["element"] != nil && options["full-page"] != nil { throw BrowserError("invalid_arguments", "--element 与 --full-page 互斥") }
         if command == "shutdown", options["all"] != "true" {
@@ -136,7 +151,7 @@ struct Request: Codable {
         }
     }
 
-    static let flags: Set<String> = ["await", "wait-for-navigation", "wait-for-popup", "ignore-certificate-errors", "clear", "all", "full-page", "include-info", "fail-on-http-error"]
+    static let flags: Set<String> = ["await", "wait-for-navigation", "wait-for-popup", "ignore-certificate-errors", "clear", "all", "full-page", "include-info", "fail-on-http-error", "interactive"]
 }
 
 // Single version source; packaging reads it through `awb version`.
@@ -169,7 +184,7 @@ struct Options {
         var options: [String: String] = [:]
         var i = 0
         var literal = false
-        let allowed = Set(["space", "tab", "frame", "proxy", "ca-cert", "out", "timeout", "socket", "data-dir", "url", "url-pattern", "fn", "stable-for", "text", "state", "detail", "inspectable", "element"])
+        let allowed = Set(["space", "tab", "frame", "proxy", "ca-cert", "out", "timeout", "socket", "data-dir", "url", "url-pattern", "fn", "stable-for", "text", "state", "detail", "inspectable", "element", "scope", "role", "name"])
         while i < arguments.count {
             let arg = arguments[i]
             if arg == "--", !literal { literal = true; i += 1; continue }
@@ -217,9 +232,11 @@ awb tab list --space NAME_OR_ID
 awb tab close ID --space NAME_OR_ID
 awb tab default ID --space NAME_OR_ID
 awb reload --space NAME_OR_ID [--tab ID] [--timeout 15000] [--fail-on-http-error]
-awb snapshot|state --space NAME_OR_ID [--tab ID]
+awb back|forward --space NAME_OR_ID --tab ID
+awb snapshot --space NAME_OR_ID [--tab ID] [--scope SELECTOR_OR_REF] [--interactive] [--role ROLE --name NAME]
+awb state --space NAME_OR_ID [--tab ID]
 awb frame list --space NAME_OR_ID [--tab ID] [--timeout 15000]
-awb snapshot|click|fill|wait ... --space NAME_OR_ID --tab ID --frame FRAME_DOCUMENT_ID
+awb snapshot|click|fill|wait|scroll|select|check|uncheck ... --space NAME_OR_ID --tab ID --frame FRAME_DOCUMENT_ID
 awb diagnostics --space NAME_OR_ID [--tab ID] [--clear] [--detail on|continuous|off [--include-info] | --inspectable on|off]
 awb dialog list --space NAME_OR_ID [--tab ID]
 awb dialog respond ID accept|dismiss --space NAME_OR_ID [--tab ID] [--text PROMPT_VALUE]
@@ -228,6 +245,9 @@ awb download wait|cancel ID --space NAME_OR_ID [--tab ID]
 awb upload SELECTOR_OR_REF FILE_PATH [FILE_PATH ...] --space NAME_OR_ID [--tab ID]
 awb click SELECTOR_OR_REF --space NAME_OR_ID [--tab ID] [--wait-for-navigation | --wait-for-popup] [--timeout 15000]
 awb fill SELECTOR_OR_REF VALUE --space NAME_OR_ID [--tab ID]
+awb scroll DX DY --space NAME_OR_ID --tab ID
+awb select SELECTOR_OR_REF VALUE --space NAME_OR_ID --tab ID
+awb check|uncheck SELECTOR_OR_REF --space NAME_OR_ID --tab ID
 awb focus SELECTOR_OR_REF --space NAME_OR_ID --tab ID [--timeout 15000]
 awb key KEY --space NAME_OR_ID --tab ID [--timeout 15000]
 awb evaluate JAVASCRIPT --space NAME_OR_ID [--tab ID] [--await] [--timeout 15000]

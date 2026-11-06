@@ -53,6 +53,10 @@ def verify_offline(cli):
     assert contract['constraints']['screenshot']['mutuallyExclusive'] == [['element', 'full-page']]
     assert contract['constraints']['frame']['requires'] == ['tab']
     assert contract['constraints']['wait']['urlRequiresNoSelector'] is True
+    for command, args in [('back', ()), ('forward', ()), ('scroll', ('0', '1')), ('select', ('#x', 'a')),
+                          ('check', ('#x',)), ('uncheck', ('#x',))]:
+        assert any(option['name'] == 'tab' and option['required'] for option in commands[command]['options'])
+        cli(command, *args, '--space', 'work', error='invalid_arguments')
     assert ['frame', 'wait-for-navigation'] in contract['constraints']['click']['mutuallyExclusive']
     assert 'pendingStores' in definitions['status']['required']
     navigation = next(option for option in commands['click']['options'] if option['name'] == 'wait-for-navigation')

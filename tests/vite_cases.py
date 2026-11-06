@@ -150,11 +150,41 @@ def verify_vite_workflow(out, cli, restart):
                 final_revision = report['rounds'][-1][names[0]]['revision']
                 old_ref = next(e['ref'] for e in command('vite-a', 'snapshot')['value']['elements']
                                if e['name'] == 'Increment')
-                command('vite-a', 'open', target + '&renavigated=1')
-                ready('vite-a', final_revision)
-                assert js('vite-a', 'window.workflowState.documentId') != initial['vite-a']['documentId']
+                viewport = command('vite-a', 'viewport', 'set', '800', '600')['value']['cssViewport']
+                assert (viewport['width'], viewport['height']) == (800, 600), viewport
+                command('vite-a', 'diagnostics', '--detail', 'continuous', '--clear')
+                reopened = target + '&renavigated=1'
+                page = command('vite-a', 'open', reopened, '--fail-on-http-error')['page']
+                assert page['responseURL'] == reopened and page['httpStatus'] == 200, page
+                command('vite-a', 'wait', '--url-pattern', 'https://example.com/*renavigated=1', '--stable-for', '100')
+                try:
+                    ready('vite-a', final_revision)
+                except AssertionError:
+                    report['renavigationFailure'] = dict(
+                        state=js('vite-a', '({app:window.workflowState||null,text:document.querySelector("#revision")?.textContent})'),
+                        diagnostics=command('vite-a', 'diagnostics')['value'])
+                    raise
+                document_id = js('vite-a', 'window.workflowState.documentId')
+                assert document_id != initial['vite-a']['documentId']
                 assert command('vite-a', 'click', old_ref, ok=False)['code'] == 'stale_ref'
-                command('vite-a', 'screenshot', '--out', str(directory / 'after-hmr.png'))
+                command('vite-a', 'click', '#probe')
+                command('vite-a', 'wait', '#result', '--text', nonce)
+                probe_path = f'/api/probe?document={document_id}'
+                shot = command('vite-a', 'screenshot', '--out', str(directory / 'after-hmr.png'))['value']
+                assert shot['cssViewport'] == viewport
+                diagnostic = command('vite-a', 'diagnostics')['value']
+                assert not diagnostic['routeVerified'] and diagnostic['detail']['enabled']
+                assert any(e['navigationId'] == page['navigationId'] and e['kind'] == 'navigation-response' and e['status'] == 200
+                           for e in diagnostic['events'] if e['source'] == 'webkit'), diagnostic
+                navigation_sessions = [s['id'] for s in whistle.sessions()
+                                       if s['url'] == reopened and s['res']['statusCode'] == 200]
+                assert len(navigation_sessions) == 1, navigation_sessions
+                report['acceptanceEvidence'] = dict(spaceId=created['vite-a']['id'], tabId=page['tabId'], url=reopened,
+                    httpStatus=page['httpStatus'], navigationId=page['navigationId'], viewport=viewport,
+                    wait=dict(revision=final_revision, stableForMs=100), screenshot=shot['path'], businessProbe=probe_path,
+                    whistleNavigationSessionId=navigation_sessions[0],
+                    diagnostics=dict(events=len(diagnostic['events']), droppedEvents=diagnostic['droppedEvents'], routeVerified=False))
+                command('vite-a', 'diagnostics', '--detail', 'off')
                 time.sleep(2)  # Allow WebKit to flush the persistent test Cookie.
                 restart()
                 restored_documents = []
@@ -179,6 +209,10 @@ def verify_vite_workflow(out, cli, restart):
                 http = [s for s in sessions if s.get('url', '').startswith('https://example.com/')]
                 websocket = [s for s in sessions if s.get('url', '').startswith('wss://example.com/')]
                 assert any(s['url'] == target and s['res']['statusCode'] == 200 for s in http), http
+                assert navigation_sessions[0] in {s['id'] for s in http}, navigation_sessions
+                probe_sessions = [s['id'] for s in http if s['url'] == 'https://example.com' + probe_path and s['res']['statusCode'] == 200]
+                probe_replies = [e for e in received if e['kind'] == 'http' and e['path'] == probe_path and e['status'] == 200]
+                assert len(probe_sessions) == len(probe_replies) == 1, (probe_sessions, probe_replies)
                 for path in ('/main.js', '/revision.js', '/api/probe', '/@vite/client'):
                     assert any(path in s['url'] and s['res']['statusCode'] == 200 for s in http), (path, http)
                     assert any(e['kind'] == 'http' and e['path'].startswith(path) for e in received), path
@@ -199,6 +233,10 @@ def verify_vite_workflow(out, cli, restart):
                     hmrExpectedDocumentIds=expected_documents,
                     foregroundPid=focus, restored=True, syntheticInput=True,
                     explicitTabIsolation=True, waitTimeoutDidNotReplay=True)
+                report['acceptanceEvidence'].update(
+                    webkit='verified', proxyPath='verified', businessRequest='verified', chromium='unverified',
+                    whistleBusinessSessionId=probe_sessions[0],
+                    whistleEvidence=str(directory / 'whistle-sessions.json'), originEvidence=str(directory / 'origin.jsonl'))
             finally:
                 # Stop the test-owned network resources even if a Space deletion fails.
                 try:

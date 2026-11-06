@@ -423,7 +423,17 @@ Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 
 
 内部 DOM 操作和焦点、文档检查使用隔离的 `AgentWebKit.DOM`。key 的原生事件另经 AppKit 定向发送。`evaluate` 和顶层 `wait --fn` 在 page world 运行，可以读取网页全局变量。显式 frame 的等待在隔离 world 内检查文档归属。
 
-每个文档在 documentStart 初始化一次 bridge，刷新、导航、进程替换及重启均产生新的随机引用后缀；同文档 SPA 更新后，仍连接且在最新 Snapshot 登记的节点引用可继续使用。强引用表在每次 Snapshot 开始时清空，并随有界遍历重新登记，不长期保留隐藏或不再返回的历史节点；弱引用表只维护节点自身的稳定 ID，不把旧 ID 分配给其他节点。隔离只保护实现和命名空间，不阻止网页改变 DOM，也不提供原生可信事件。`tests/reliability.py` 用真实页面覆盖、删除和伪造同名对象，检查四项内部命令、页面 Promise、SPA、重载及重启。`python3 tests/dom_reference_cases.py` 另验证 4000 个仍连接的动态节点、引用数量、重复 Snapshot、click/fill、旧引用失效及 frame/shadow/多 Tab 隔离，证据保存在 `.artifacts/dom-references-*/`；计数只注入测试 bridge，不增加生产接口。
+每个文档在 documentStart 初始化 bridge，刷新、导航、进程替换及重启均产生新的引用后缀。同文档 SPA 更新后，仍连接且在最近一次成功快照中登记的引用可继续使用。成功快照替换强引用表。弱引用表只维护节点自身的稳定 ID。`python3 tests/dom_reference_cases.py` 验证 4000 个仍连接的动态节点、引用数量、重复快照、旧引用失效及 frame/shadow/多 Tab 隔离。
+
+## 局部快照与交互命令
+
+`snapshot --scope SELECTOR_OR_REF` 从唯一根节点开始遍历，`--interactive` 只返回可见、未禁用的交互候选，并省略正文。结果报告 `scopeTarget`、`scannedNodes`、`scanBudget`、`outputBudgetBytes` 与 `truncated`。定位根节点使用 WebKit 的选择器查询，遍历预算从该根开始计数。
+
+`--role ROLE --name NAME` 按快照中的角色和名称精确匹配，空白按快照规则归一。角色和名称从 DOM 计算，覆盖常见原生元素、label、aria-label 和 aria-labelledby。唯一性限于本次可访问范围。零个或多个匹配返回 `selector_count`，预算不足以确认唯一时返回 `snapshot_truncated`。可组合 `--scope`、同源/开放 Shadow Root 路径和显式 `--frame`。
+
+`click` 和实际需要切换的 `check/uncheck` 先检查可见与禁用状态，再滚动并抽样检查 DOM 命中点。遮挡、裁剪后采不到命中点，或嵌入 frame 变换无法映射时返回 `element_not_actionable`。跨源祖先不可检查时，成功结果的 `hitTest.scope` 为 `document-local`。有限采样可能漏掉很窄的可点击区域。随后仍由 DOM 发出点击，原生事件送达和业务结果需要单独验证。
+
+`check/uncheck` 只操作原生复选框，目标状态已满足时 `changed: false` 且不发点击。`select SELECTOR_OR_REF VALUE` 只操作原生单选下拉框，按启用的选项值选择，必要时发一次 input 和 change。若页面同步撤销了选中状态，返回 `dom_state_mismatch`，应先观察页面。`scroll DX DY` 以 CSS px 相对滚动所选文档，返回前后坐标。`back/forward` 遍历一条顶层 WebKit 历史记录，等待完整导航或同文档历史事件。无对应条目时返回 `history_unavailable`。休眠或重启后只恢复当前地址。
 
 ## iframe 与 Shadow DOM 定位
 
@@ -448,7 +458,7 @@ python3 tests/reliability.py --frames-only
 
 `frame list` 的 `value.frames` 平铺返回当前 Tab 可定向访问的文档，包含 `frameId`、`mainFrame`、有限 URL/title。ID 由宿主生成，标识某一文档，绑定当前 Space/Tab，不是 URL、WKFrameInfo 对象身份或永久 iframe 节点 ID。同 URL 兄弟和跨源嵌套文档分别列出。公开 WKFrameInfo 不提供父身份，故 `parentFrameId` 为 null、`parentRouting` 为 false；列表顺序不表示 DOM 顺序，不按 URL/深度猜测父子关系。可结合每个文档的 snapshot 确认目标。
 
-`--frame` 仅用于 snapshot/click/fill/wait，且必须显式提供 `--tab`；所有元素引用与选择器在所选文档中解析。`wait` 的 readyState、URL、文本和状态均属于该文档，旧引用仍报 `stale_ref`。每次定向调用都在隔离 world 的同一次 JS 回合内核对随机文档代号和 active 状态，再执行操作；导航后旧 WKFrameInfo 即使指向新文档也不会触及新 DOM。目标已导航、移除、被淘汰或不属于所选 Tab 时返回 `stale_frame`，应重新列出并确认，不能自动重放动作。SPA 同文档导航保持 ID；顶层导航失败且原文档仍存活时也保留其 ID，所选文档的等待不继承无关的主导航错误。文档实际离开后由 pagehide 辅助移除记录并轮换文档、元素代号及 WeakMap，列表和动作再检查代号、剔除失效目标，历史返回也不复活旧引用；安全性不依赖宿主收到 leave 消息。关闭、休眠、WebView 重建、进程终止和重启清空宿主记录。
+`--frame` 必须同时提供显式 `--tab`，支持命令见 capabilities 的 `constraints.frame.commands`。元素引用、选择器和等待条件均在所选文档中解析。每次定向调用在隔离 world 的同一次 JS 回合内核对文档代号和 active 状态，再执行操作。遇 `stale_frame` 先重新列出并确认目标。SPA 同文档导航保持 ID，顶层导航失败且原文档仍存活时也保留其 ID。文档离开后由 pagehide 辅助移除记录并轮换代号，历史返回也不复活旧引用。关闭、休眠、WebView 重建、进程终止和重启清空宿主记录。
 
 响应中的 `page` 保持原有 Tab 主页面状态，所选文档由外层 `frameId` 标识，其 URL/title 从 `frame list` 读取。`click --wait-for-navigation` 只支持顶层完整文档导航，与 `--frame` 组合时在执行点击前返回 `invalid_arguments`。子文档导航只点击一次，随后重新 `frame list` 并通过 snapshot 确认新文档，再用其 ID 等待对应条件；旧 ID 失效不表示导航失败。`--wait-for-popup` 则沿用同 Space 新 Tab 语义。
 

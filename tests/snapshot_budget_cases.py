@@ -136,6 +136,11 @@ def verify_snapshot_budget(cli, base, out):
         })()''')
         many_nodes = snapshot('many-nodes', True)
         assert any(element['name'] == 'Partial result preserved' for element in many_nodes['elements'])
+        evaluate('document.body.insertAdjacentHTML("beforeend", `<section id="tail"><button>Tail button</button></section>`);true')
+        cli('snapshot', '--role', 'button', '--name', 'Partial result preserved', *flags, error='snapshot_truncated')
+        localized = cli('snapshot', '--scope', '#tail', '--interactive', '--role', 'button', '--name', 'Tail button', *flags)['value']
+        assert not localized['truncated'] and len(localized['elements']) == 1
+        assert localized['scannedNodes'] < 100 and many_nodes['scannedNodes'] == many_nodes['scanBudget']
 
         evaluate('''(()=>{
           document.body.innerHTML='<button>Bounded first result</button>';

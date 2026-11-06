@@ -161,7 +161,8 @@ def verify_frames(cli, out, restart):
                 command('wait', '#same', '--state', 'enabled', frame=child)
                 command('wait', '#same', '--state', 'disabled', '--timeout', '80', frame=child, error='timeout')
                 command('wait', frame=child)
-                command('click', '#slow', frame=child)
+                click = command('click', '#slow', frame=child)['value']
+                assert click['hitTest']['scope'] == 'document-local' and not click['nativeVerified']
                 command('wait', '#ack', '--text', 'later', frame=child)
                 command('click', '#spa', frame=child)
                 command('wait', '--url', origins['B'] + '/child?spa=1', frame=child)
