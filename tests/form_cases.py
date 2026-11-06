@@ -44,12 +44,12 @@ def framework_site(out):
 
 def verify_forms(cli, base, nonce, out):
     name = 'forms'
-    cli('space', 'create', name, '--proxy', 'direct')
+    space = cli('space', 'create', name, '--proxy', 'direct')
 
     def command(*args, **kwargs):
         if args[0] == 'wait' and '--timeout' not in args:
             args = (*args, '--timeout', '5000')
-        return cli(*args, '--space', name, **kwargs)
+        return cli(*args, '--space', space['id'], '--tab', space['defaultTabId'], **kwargs)
 
     def js(source):
         return command('evaluate', source)['value']
@@ -70,6 +70,7 @@ def verify_forms(cli, base, nonce, out):
         packages = json.loads((ROOT / 'tests/forms/package-lock.json').read_text())['packages']
         expected_versions = {name: packages[f'node_modules/{name}']['version'] for name in ('react', 'vue')}
         assert versions == expected_versions, (versions, expected_versions)
+        js('window.checkboxChanges=[];true')
         for framework in ['react', 'vue']:
             prefix = '#' + framework
             command('wait', prefix + '-submit', '--state', 'disabled')
@@ -77,8 +78,23 @@ def verify_forms(cli, base, nonce, out):
             for suffix, error in [('-readonly', 'element_readonly'), ('-disabled', 'element_not_actionable')]:
                 command('fill', prefix + suffix, 'must not change', error=error)
                 assert js(f'document.querySelector("{prefix + suffix}").value') == 'locked'
-            action('click', prefix + '-accepted')
+            checkbox = prefix + '-accepted'
+            unchecked = action('uncheck', checkbox)
+            assert unchecked['checked'] is False and unchecked['changed'] is False, unchecked
+            js(f'''document.querySelector("{checkbox}").onchange = function() {{
+                checkboxChanges.push(this.id);
+                const form = this.form;
+                queueMicrotask(() => form.requestSubmit());
+            }};true''')
+            checked = action('check', checkbox)
+            assert checked['checked'] and checked['changed'], checked
+            command('wait', prefix + '-result', '--text', 'Saved:')
+            expected.append(dict(nonce=nonce, fields=dict(framework=framework, text='', note='', choice='a',
+                                                         accepted=True), accepted=True))
             command('wait', prefix + '-submit', '--state', 'enabled')
+            repeated = action('check', checkbox)
+            assert repeated['checked'] is True and repeated['changed'] is False, repeated
+            js(f'document.querySelector("{checkbox}").onchange=null;true')
             for index in range(2):
                 text = f'{framework} 中文 ✓ {index}'
                 note = f'first line {index}\n第二行'
@@ -122,6 +138,8 @@ def verify_forms(cli, base, nonce, out):
         assert filled_events and all(event['trusted'] is False for event in filled_events), events
         assert js('window.checkboxClicks') == [{'id': framework + '-accepted', 'trusted': False}
                                               for framework in ['react', 'vue']]
+        assert js('window.checkboxChanges') == ['react-accepted', 'vue-accepted']
+        assert [event['id'] for event in events if event['id'].endswith('-accepted')] == js('window.checkboxChanges')
         assert all(event['inputEvent'] and event['inputType'] == 'insertReplacementText'
                    for event in events if event['id'] in ['react-text', 'vue-text', 'rich']), events
         command('fill', '#rich-readonly', 'must not change', error='element_readonly')
@@ -134,6 +152,7 @@ def verify_forms(cli, base, nonce, out):
         assert cli('status')['frontmostPid'] == focus
         return dict(frameworks=versions, submissions=len(received), checks=[
             'controlled input/textarea/select/checkbox; empty and Unicode values',
+            'idempotent check/uncheck adds no events or duplicate POST to a change-triggered submission',
             'keyed rerender preserves framework state and invalidates old refs',
             'real POST payloads and rejected business outcome; no replay',
             'readonly/disabled/aria restrictions; plain-text contenteditable replacement',

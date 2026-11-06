@@ -138,6 +138,24 @@ def verify_scoped_actions(command, js):
     assert not command('check', '#opt-in')['value']['changed']
     assert command('uncheck', '#opt-in')['value']['changed']
     assert not command('uncheck', '#opt-in')['value']['changed']
+    for block, restore in [
+        ('box.hidden=true', 'box.hidden=false'),
+        ('box.disabled=true', 'box.disabled=false'),
+        ('''document.body.insertAdjacentHTML("beforeend", `<div id="checkbox-cover"
+            style="position:fixed;inset:0;opacity:0;z-index:99"></div>`)''',
+         'document.querySelector("#checkbox-cover").remove()'),
+    ]:
+        js(f'(() => {{const box=document.querySelector("#opt-in");{block};return true}})()')
+        before = js('actions.slice()')
+        for desired in (True, False):
+            js(f'document.querySelector("#opt-in").checked={str(desired).lower()};true')
+            satisfied, opposite = ('check', 'uncheck') if desired else ('uncheck', 'check')
+            result = command(satisfied, '#opt-in')['value']
+            assert result['checked'] is desired and result['changed'] is False and 'hitTest' not in result, result
+            command(opposite, '#opt-in', error='element_not_actionable')
+            assert js('document.querySelector("#opt-in").checked') is desired
+            assert js('actions') == before, (block, desired, js('actions'))
+        js(f'(() => {{const box=document.querySelector("#opt-in");{restore};return true}})()')
     command('check', '#color', error='unsupported_checkbox_target')
     changed = command('select', '#color', 'blue')['value']
     assert changed['selectedValue'] == 'blue' and changed['events'] == ['input', 'change']

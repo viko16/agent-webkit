@@ -36,7 +36,7 @@ awb snapshot --space SPACE_ID --tab TAB_ID
 
 `--timeout` 单位为毫秒。每次 `wait` 只选一个条件。SPA 可用精确 URL 或 `--url-pattern`，应用状态可用返回布尔值的只读同步 `--fn`。容易短暂满足的条件加 `--stable-for MS`。顶层完整导航可用 `click --wait-for-navigation`。子文档跳转只点击一次，重新列出 frame 并确认新文档 ID 后再等待。以连字符开头的填写值放在 `--` 后，例如 `awb fill --space SPACE_ID --tab TAB_ID -- '#field' '--literal'`。
 
-用 `select` 操作原生单选下拉框，用 `check/uncheck` 设置原生复选框的目标状态，读回 `selectedValue` 或 `checked`。用 `back/forward` 遍历历史，用 `scroll` 滚动。click 的 `hitTest` 是滚动后对 DOM 命中点的采样。遇遮挡先用快照或截图确认覆盖层，再按任务处理。合成操作结束后仍需单独核对提交、支付或登录结果。
+用 `select` 操作原生单选下拉框，用 `check/uncheck` 设置原生复选框的目标状态，读回 `selectedValue` 或 `checked`。复选框返回 `changed: false` 时，目标状态已经满足，命令跳过可交互性检查和点击。用 `back/forward` 遍历历史，用 `scroll` 滚动。click 的 `hitTest` 是滚动后对 DOM 命中点的采样。遇遮挡先用快照或截图确认覆盖层，再按任务处理。合成操作结束后仍需单独核对提交、支付或登录结果。
 
 `evaluate` 在页面 world 执行。返回值须可表示为 JSON，等待 Promise 时加 `--await`。
 

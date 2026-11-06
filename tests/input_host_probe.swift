@@ -7,37 +7,113 @@ import AppKit
 
 @MainActor
 final class InputHostProbe: NSObject, NSApplicationDelegate {
+    private var activatedDuringViewport = false
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         Task { await run() }
     }
 
-    func verifyViewport(_ tab: Tab, observer: ObserverWindow, directory: URL) async throws {
-        guard let host = tab.webView.superview else { throw BrowserError("probe_failed", "no observer host") }
-        tab.setViewport(NSSize(width: 680, height: 460))
-        func capture(_ phase: String) async throws -> [String: Any] {
+    func verifyViewport(_ tab: Tab, peer: Tab, model: BrowserModel, space: Space, directory: URL,
+                        showObserver: () -> ObserverWindow) async throws -> [String: Any] {
+        guard NSApp.activationPolicy() == .regular,
+              let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier else {
+            throw BrowserError("probe_failed", "viewport probe requires a logged-in GUI session")
+        }
+        let center = NotificationCenter.default
+        let activationObserver = center.addObserver(forName: NSApplication.didBecomeActiveNotification,
+            object: NSApp, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.activatedDuringViewport = true }
+        }
+        defer { center.removeObserver(activationObserver) }
+        let peerScript = "[innerWidth,innerHeight,location.href,inputRead().epoch,inputRead().value]"
+        guard let peerState = try await peer.runJS(peerScript) as? [Any],
+              peerState.first as? Int == 720, peerState.dropFirst().first as? Int == 480 else {
+            throw BrowserError("probe_failed", "unexpected peer viewport before setting the target")
+        }
+        let peerBefore = try jsonData(peerState)
+        let options = ["space": space.record.id.uuidString, "tab": tab.id.uuidString]
+        let viewport = await model.handle(Request(command: "viewport.set", args: ["1440", "900"], options: options))
+        guard viewport["ok"] as? Bool == true else { throw BrowserError("probe_failed", "viewport set failed: \(viewport)") }
+        _ = try await tab.runJS("""
+            const marks = [['left:0;top:0','red'],['right:0;top:0','lime'],
+                ['left:0;bottom:0','blue'],['right:0;bottom:0','magenta'],
+                ['left:50%;top:50%;transform:translate(-50%,-50%)','yellow']];
+            for (const [position,color] of marks)
+                document.body.insertAdjacentHTML('beforeend',
+                    '<div style="position:fixed;pointer-events:none;z-index:99;width:48px;height:48px;background:'+color+';'+position+'"></div>');
+            true
+            """)
+        func capture(_ phase: String, window: NSWindow) async throws -> [String: Any] {
+            let host = tab.webView.superview
+            let shouldBeVisible = window !== tab.backingWindow
+            func checkMount() throws {
+                guard tab.webView.window === window, tab.webView.superview === host, window.isVisible == shouldBeVisible else {
+                    throw BrowserError("probe_failed", "unexpected screenshot host during \(phase)")
+                }
+            }
+            try checkMount()
             let state = try await tab.runJS("[innerWidth,innerHeight,getComputedStyle(document.querySelector('#breakpoint'),'::before').content]") as? [Any]
-            guard state?[0] as? Int == 680, state?[1] as? Int == 460, state?[2] as? String == "\"narrow\"" else {
+            guard state?[0] as? Int == 1440, state?[1] as? Int == 900, state?[2] as? String == "\"wide\"" else {
                 throw BrowserError("probe_failed", "viewport/breakpoint changed during \(phase): \(String(describing: state))")
             }
-            let shot = try await tab.screenshot(path: directory.appendingPathComponent("viewport-\(phase).png").path)
-            return ["width": shot["width"]!, "height": shot["height"]!]
+            let path = directory.appendingPathComponent("viewport-\(phase).png")
+            var screenshotOptions = options
+            screenshotOptions["out"] = path.path
+            let result = await model.handle(Request(command: "screenshot", args: [], options: screenshotOptions))
+            guard let payload = result["result"] as? [String: Any], let shot = payload["value"] as? [String: Any],
+                  let bitmap = NSBitmapImageRep(data: try Data(contentsOf: path)),
+                  let css = shot["cssViewport"] as? [String: Double], css["width"] == 1440, css["height"] == 900,
+                  let scale = shot["pixelsPerCssPixel"] as? [String: Double],
+                  shot["width"] as? Int == bitmap.pixelsWide, shot["height"] as? Int == bitmap.pixelsHigh,
+                  scale["x"] == Double(bitmap.pixelsWide) / 1440, scale["y"] == Double(bitmap.pixelsHigh) / 900 else {
+                throw BrowserError("probe_failed", "invalid screenshot metadata during \(phase): \(result)")
+            }
+            let points = [(24, 24), (1416, 24), (24, 876), (1416, 876), (720, 450)]
+            let samples = points.compactMap { x, y -> [Int]? in
+                guard let color = bitmap.colorAt(x: x * bitmap.pixelsWide / 1440, y: y * bitmap.pixelsHigh / 900),
+                      color.colorSpace.colorSpaceModel == .rgb else { return nil }
+                return [color.redComponent, color.greenComponent, color.blueComponent, color.alphaComponent].map { Int(($0 * 255).rounded()) }
+            }
+            let expected = [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255], [255, 0, 255, 255], [255, 255, 0, 255]]
+            guard samples == expected else { throw BrowserError("probe_failed", "wrong PNG pixels during \(phase): \(samples)") }
+            try checkMount()
+            guard !activatedDuringViewport, !NSApp.isActive, !window.isKeyWindow,
+                  NSWorkspace.shared.frontmostApplication?.processIdentifier == frontmost,
+                  try await jsonData(peer.runJS(peerScript)) == peerBefore else {
+                throw BrowserError("probe_failed", "foreground or peer Tab changed during \(phase)")
+            }
+            return ["width": bitmap.pixelsWide, "height": bitmap.pixelsHigh, "cssViewport": css,
+                    "pixelsPerCssPixel": scale, "breakpoint": "wide", "samples": samples]
         }
-        let observed = try await capture("selected")
+        let background = try await capture("background", window: tab.backingWindow)
+        let observer = showObserver()
+        guard let host = tab.webView.superview else { throw BrowserError("probe_failed", "no observer host") }
+        let observed = try await capture("selected", window: observer.window)
         let originalWindowFrame = observer.window.frame
         let originalHostSize = host.bounds.size
-        observer.window.orderBack(nil)
-        observer.window.setContentSize(NSSize(width: 880, height: 430))
+        observer.window.setContentSize(NSSize(width: 880, height: 500))
         observer.window.contentView?.layoutSubtreeIfNeeded()
-        guard originalHostSize != host.bounds.size else { throw BrowserError("probe_failed", "test did not resize the observer host") }
-        let resized = try await capture("resized")
-        observer.window.orderOut(nil)
-        tab.park()
-        let parked = try await capture("parked")
-        tab.mount(in: host)
-        observer.window.setFrame(originalWindowFrame, display: true)
-        guard try jsonData(observed) == jsonData(resized), try jsonData(observed) == jsonData(parked) else {
-            throw BrowserError("probe_failed", "screenshot dimensions changed with observer geometry")
+        let clippedSize = host.bounds.size
+        guard tab.webView.superview === host, originalHostSize != clippedSize,
+              host.clipsToBounds, clippedSize.width < 1416, clippedSize.height < 876 else {
+            throw BrowserError("probe_failed", "test did not crop both axes: \(clippedSize)")
         }
+        let resized = try await capture("resized", window: observer.window)
+        observer.nextTab(nil)
+        guard tab.webView.window === tab.backingWindow, peer.webView.window === observer.window else {
+            throw BrowserError("probe_failed", "GUI Tab switch did not park the target")
+        }
+        let parked = try await capture("parked", window: tab.backingWindow)
+        observer.previousTab(nil)
+        observer.window.setFrame(originalWindowFrame, display: true)
+        for shot in [observed, resized, parked] where try jsonData(shot) != jsonData(background) {
+            throw BrowserError("probe_failed", "screenshot evidence changed with observer geometry")
+        }
+        tab.setViewport(NSSize(width: 680, height: 460))
+        return ["background": background, "selected": observed, "resized": resized, "parked": parked,
+                "hostBeforeResize": ["width": originalHostSize.width, "height": originalHostSize.height],
+                "hostAfterResize": ["width": clippedSize.width, "height": clippedSize.height],
+                "frontmostPid": frontmost, "peerUnchanged": true]
     }
 
     func probeFrameInput(_ tab: Tab, page: URL) async throws -> [[String: Any]] {
@@ -122,12 +198,22 @@ final class InputHostProbe: NSObject, NSApplicationDelegate {
             }
             let sibling = await browser.handle(Request(command: "space.create", args: ["input-next"], options: ["proxy": "direct"]))
             guard sibling["ok"] as? Bool == true else { throw BrowserError("probe_failed", "cannot create sidebar peer") }
-            let ui = ObserverWindow(model: browser, socketPath: "unused"); observer = ui
             tab.load(URL(string: CommandLine.arguments[1])!)
             try await tab.wait(selector: nil, timeout: 5000)
             try await tab.wait(selector: "#first", timeout: 5000)
-            guard tab.webView.window === ui.window else { throw BrowserError("probe_failed", "view was not reparented into GUI") }
-            try await verifyViewport(tab, observer: ui, directory: output.deletingLastPathComponent())
+            let newTab = await browser.handle(Request(command: "tab.new", args: [CommandLine.arguments[1]], options: ["space": space.record.id.uuidString]))
+            guard newTab["ok"] as? Bool == true, let peer = space.tabs.last, peer !== tab else {
+                throw BrowserError("probe_failed", "cannot create GUI Tab peer")
+            }
+            peer.setViewport(NSSize(width: 720, height: 480))
+            let viewportEvidence = try await verifyViewport(tab, peer: peer, model: browser, space: space,
+                directory: output.deletingLastPathComponent()) {
+                let ui = ObserverWindow(model: browser, socketPath: "unused")
+                observer = ui
+                return ui
+            }
+            guard let ui = observer else { throw BrowserError("probe_failed", "no observer") }
+            report["viewport"] = viewportEvidence
             ui.focusAddress(nil)
             guard let editor = ui.window.firstResponder as? NSTextView else { throw BrowserError("probe_failed", "address editor did not accept focus") }
             editor.string = "unfinished-address"
@@ -197,11 +283,6 @@ final class InputHostProbe: NSObject, NSApplicationDelegate {
             }
             ui.window.endEditing(for: nil)
             ui.window.makeFirstResponder(tab.webView)
-            let newTab = await browser.handle(Request(command: "tab.new", args: [CommandLine.arguments[1]], options: ["space": space.record.id.uuidString]))
-            guard newTab["ok"] as? Bool == true, let peer = space.tabs.last, peer !== tab else {
-                throw BrowserError("probe_failed", "cannot create GUI Tab peer")
-            }
-            try await peer.wait(selector: nil, timeout: 5000)
             inputHostAfterDOM = { ui.nextTab(nil) }
             do {
                 _ = try await tab.focus(target: "#first")
@@ -252,7 +333,7 @@ final class InputHostProbe: NSObject, NSApplicationDelegate {
                 tab.webView.evaluateJavaScript("releaseLateInputProbe()", completionHandler: nil)
             }
             guard tab.unresponsive else { throw BrowserError("probe_failed", "late callback changed timeout state") }
-            report = ["ok": true, "guiReparented": true, "fixedViewportVerified": true, "iframeInputProbe": iframeInput, "addressDraftPreserved": true,
+            report = ["ok": true, "guiReparented": true, "fixedViewportVerified": true, "viewport": viewportEvidence, "iframeInputProbe": iframeInput, "addressDraftPreserved": true,
                       "sidebarResponderPreserved": true, "rejectedKeyHasNoEffect": true,
                       "foregroundGUIVerified": foregroundTest,
                       "sidebarArrowNavigationPreserved": true, "concurrentTabSwitchRejected": true,
@@ -276,7 +357,7 @@ final class InputHostProbe: NSObject, NSApplicationDelegate {
 @main struct InputHostMain {
     @MainActor static func main() {
         let app = NSApplication.shared
-        app.setActivationPolicy(ProcessInfo.processInfo.environment["BROWSER_TEST_FOREGROUND"] == "1" ? .regular : .prohibited)
+        app.setActivationPolicy(CommandLine.arguments.last == "--cleanup-only" ? .prohibited : .regular)
         let probe = InputHostProbe(); app.delegate = probe
         withExtendedLifetime(probe) { app.run() }
     }

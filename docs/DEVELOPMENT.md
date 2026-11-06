@@ -144,12 +144,12 @@ python3 tests/reliability.py --dialogs-only
 
 ```sh
 npm ci --prefix tests/forms
-python3 tests/reliability.py --forms
+python3 tests/reliability.py --forms-only
 ```
 
 React、Vue 和 Vite 的测试依赖版本由 `tests/forms/package.json` 和 `package-lock.json` 固定，需 Node.js 20.19+ 或 22.12+。这些依赖仅用于测试页面，不进入 Swift 应用或普通可靠性套件。临时 Vite 服务绑定 loopback 随机端口，只写该次 `.artifacts/reliability-*/submissions.jsonl`，退出时停止自己的进程；不改变系统代理，也不占用用户的 5173。
 
-React fixture 使用 value/onChange，Vue 使用 v-model，分别验证 input/textarea/select/checkbox、中文/多行/空值、key 改变后的状态保留及旧引用失效、disabled/readOnly、服务端拒绝提交。成功必须同时满足框架渲染状态、真实 POST 数据和服务端随机 nonce；完整运行应只有 6 次提交，超时等待不能重放请求。该页还验证 contenteditable 整段纯文本替换、非可信 InputEvent 和 aria-readonly，并保存后台截图、核对前台 PID。表单写入沿用目标 realm 的原生 setter，文本 input 事件带 `inputType=insertReplacementText`，select 保持普通 input/change 事件；不模拟 beforeinput、输入法组合、选区或第三方富文本编辑器私有状态。
+React fixture 使用 value/onChange，Vue 使用 v-model，分别验证 input/textarea/select/checkbox、中文/多行/空值、key 改变后的状态保留及旧引用失效、disabled/readOnly、服务端拒绝提交。测试核对框架渲染状态、真实 POST 数据和服务端随机 nonce。每个框架应收到 4 次提交，其中 1 次由复选框首次切换触发。重复设置相同状态和等待超时都不应产生额外提交。该页还验证 contenteditable 整段纯文本替换、非可信 InputEvent 和 aria-readonly，并保存后台截图、核对前台 PID。表单写入沿用目标 realm 的原生 setter，文本 input 事件带 `inputType=insertReplacementText`，select 保持普通 input/change 事件；不模拟 beforeinput、输入法组合、选区或第三方富文本编辑器私有状态。
 
 表单模式只通过 Direct 加载本地 Vite 页面；Vite + Whistle 的域名/WSS/HMR 和真实第三方站点回归使用下方的独立入口。框架用法依据 [React 受控输入](https://react.dev/reference/react-dom/components/input)与 [Vue 表单绑定](https://vuejs.org/guide/essentials/forms.html)，兼容性结论仅来自本仓库实际运行的这些用例。
 
@@ -433,7 +433,7 @@ Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 
 
 `click` 和实际需要切换的 `check/uncheck` 先检查可见与禁用状态，再滚动并抽样检查 DOM 命中点。遮挡、裁剪后采不到命中点，或嵌入 frame 变换无法映射时返回 `element_not_actionable`。跨源祖先不可检查时，成功结果的 `hitTest.scope` 为 `document-local`。有限采样可能漏掉很窄的可点击区域。随后仍由 DOM 发出点击，原生事件送达和业务结果需要单独验证。
 
-`check/uncheck` 只操作原生复选框，目标状态已满足时 `changed: false` 且不发点击。`select SELECTOR_OR_REF VALUE` 只操作原生单选下拉框，按启用的选项值选择，必要时发一次 input 和 change。若页面同步撤销了选中状态，返回 `dom_state_mismatch`，应先观察页面。`scroll DX DY` 以 CSS px 相对滚动所选文档，返回前后坐标。`back/forward` 遍历一条顶层 WebKit 历史记录，等待完整导航或同文档历史事件。无对应条目时返回 `history_unavailable`。休眠或重启后只恢复当前地址。
+`check/uncheck` 只操作原生复选框。返回 `changed: false` 时，目标状态已经满足，命令跳过可交互性检查，也不发送点击。隐藏、禁用或被遮挡的复选框同样适用。`select SELECTOR_OR_REF VALUE` 只操作原生单选下拉框，按启用的选项值选择，必要时发一次 input 和 change。若页面同步撤销了选中状态，返回 `dom_state_mismatch`，应先观察页面。`scroll DX DY` 以 CSS px 相对滚动所选文档，返回前后坐标。`back/forward` 遍历一条顶层 WebKit 历史记录，等待完整导航或同文档历史事件。无对应条目时返回 `history_unavailable`。休眠或重启后只恢复当前地址。
 
 ## iframe 与 Shadow DOM 定位
 

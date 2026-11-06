@@ -40,6 +40,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--forms', action='store_true', help='Run real React/Vue fixtures (npm ci --prefix tests/forms)')
+    parser.add_argument('--forms-only', action='store_true', help='Run only the real React/Vue form cases')
     parser.add_argument('--integrity-only', action='store_true', help='Run navigation identity, configuration isolation and JavaScript error cases')
     parser.add_argument('--resources-only', action='store_true', help='Run creation, snapshot and download resource boundaries')
     parser.add_argument('--diagnostics-only', action='store_true', help='Run only the diagnostic regression cases')
@@ -52,8 +53,11 @@ def main():
     parser.add_argument('--frames-only', action='store_true', help='Run production cross-origin frame document cases')
     parser.add_argument('--keyboard-only', action='store_true', help='Run production background focus/key cases')
     args = parser.parse_args()
-    if sum([args.resources_only, args.integrity_only, args.cleanup_only, args.diagnostics_only, args.dialogs_only, args.lifecycle_only, args.downloads_only, args.uploads_only, args.screenshots_only, args.frames_only, args.keyboard_only]) > 1 or (args.forms and (args.resources_only or args.integrity_only or args.cleanup_only or args.dialogs_only or args.lifecycle_only or args.downloads_only or args.uploads_only or args.screenshots_only or args.frames_only or args.keyboard_only)):
-        parser.error('专项选项不能互相混用；--dialogs-only / --cleanup-only 不与 --forms 混用')
+    only = sum([args.resources_only, args.integrity_only, args.cleanup_only, args.diagnostics_only, args.dialogs_only,
+                args.lifecycle_only, args.downloads_only, args.uploads_only, args.screenshots_only, args.frames_only,
+                args.keyboard_only, args.forms_only])
+    if only > 1 or (args.forms and only and not args.diagnostics_only):
+        parser.error('专项选项不能互相混用；--forms-only 不与 --forms 混用')
     out = ROOT / '.artifacts' / time.strftime('reliability-%Y%m%d-%H%M%S')
     out.mkdir(parents=True)
     state = Path(tempfile.mkdtemp(prefix='awr-'))
@@ -109,10 +113,18 @@ def main():
         daemon.terminate(); daemon.wait(timeout=15)
         start()
 
+    def run_forms():
+        with framework_site(out) as (form_url, nonce):
+            checks.append(verify_forms(cli, form_url, nonce, out))
+
     try:
         verify_offline(cli)
         cli('open', 'https://example.com', '--space', 'work', '--proxy', 'direct', error='invalid_arguments')
         start()
+        if args.forms_only:
+            run_forms()
+            report = dict(ok=True, checks=checks, artifacts=str(out))
+            return
         if args.keyboard_only:
             checks.append(verify_keyboard(cli, base, out, lambda: (stop(), start()), site_events, site.fixture_nonce))
             report = dict(ok=True, checks=checks, artifacts=str(out))
@@ -227,8 +239,7 @@ def main():
         checks.append(verify_diagnostics(cli, base, out, lambda: (stop(), start())))
         checks.append(verify_detailed_diagnostics(cli, base, out, lambda: (stop(), start())))
         if args.forms:
-            with framework_site(out) as (form_url, nonce):
-                checks.append(verify_forms(cli, form_url, nonce, out))
+            run_forms()
         # Raw IPC gets the same validation as the CLI parser.
         with socket.socket(socket.AF_UNIX) as client:
             client.connect(str(state / 'browser.sock'))

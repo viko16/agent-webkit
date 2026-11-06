@@ -1,8 +1,179 @@
 """Real navigation error ownership and attachment transitions on an intact document."""
+from collections import Counter
+import http.server
 import json
 from pathlib import Path
+import threading
 import time
 from urllib.parse import urlencode, urljoin, urlsplit
+
+from fixtures import Events, Server
+
+
+def verify_same_url_races(command, js, base, out, origin_events):
+    plans = {}
+    for mode in ('click', 'redirect', 'reload'):
+        for first, second in ((500, 200), (200, 500)):
+            statuses = [202, first, second] if mode == 'reload' else [first, second]
+            for release_while_pending in (False, True):
+                path = f'/same-url/{mode}/{first}/{"pending" if release_while_pending else "finished"}'
+                plans[path] = dict(mode=mode, statuses=statuses, old_gate=threading.Event(),
+                                   new_gate=threading.Event() if release_while_pending else None)
+    counts = Counter()
+    lock = threading.Lock()
+    log = Events(out / 'same-url-server.jsonl')
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            pass
+
+        def do_GET(self):
+            redirect = self.path.startswith('/redirect/')
+            path = self.path.removeprefix('/redirect') if redirect else self.path
+            plan = plans.get(path)
+            if plan is None:
+                self.send_error(404)
+                return
+            statuses = plan['statuses']
+            with lock:
+                counts[self.path] += 1
+                ordinal = counts[self.path]
+                log.add(event='request', path=self.path, ordinal=ordinal)
+            if ordinal > len(statuses):
+                self.send_error(500, 'Unexpected replay')
+                return
+            gate = plan['old_gate'] if ordinal == len(statuses) - 1 else plan['new_gate'] if ordinal == len(statuses) else None
+            if not redirect and gate is not None and not gate.wait(10):
+                self.send_error(504, 'Response gate expired')
+                return
+            status = 302 if redirect else statuses[ordinal - 1]
+            body = b'' if redirect else f'<!doctype html><body data-ordinal="{ordinal}">HTTP {status}</body>'.encode()
+            outcome = 'written'
+            try:
+                self.send_response(status)
+                if redirect:
+                    self.send_header('Location', path)
+                self.send_header('Content-Type', 'text/html; charset=utf-8')
+                self.send_header('Cache-Control', 'no-store')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                outcome = 'client-disconnected'
+            log.add(event='response', path=self.path, ordinal=ordinal, status=status, outcome=outcome)
+
+    def assert_document(page, url, ordinal, status, redirects):
+        assert page['navigationPhase'] == 'finished' and not page['loading'] and page['lastError'] is None, page
+        assert page['httpStatus'] == status and page['url'] == page['committedDocumentURL'] == page['responseURL'] == url, page
+        assert page['navigationId'] and page['httpResponseNavigationId'] == page['navigationId'], page
+        assert page['redirectCount'] == redirects, page
+        assert js('[location.href,Number(document.body.dataset.ordinal),document.body.textContent]') == [
+            url, ordinal, f'HTTP {status}'], page
+
+    def assert_pending(page, phase, retained_url, retained_ordinal):
+        assert page['navigationPhase'] == phase and page['loading'] and page['url'] == retained_url, page
+        assert all(page[key] is None for key in ('httpStatus', 'responseURL', 'httpResponseNavigationId')), page
+        if retained_ordinal is not None:
+            assert js('Number(document.body.dataset.ordinal)') == retained_ordinal, page
+
+    def responses_for(path, count):
+        for _ in range(100):
+            responses = [row for row in log.items if row['path'] == path and row['event'] == 'response']
+            if len(responses) >= count:
+                return responses
+            time.sleep(.02)
+        raise AssertionError((path, responses))
+
+    results = []
+    with Server(('127.0.0.1', 0), Handler) as site:
+        threading.Thread(target=site.serve_forever, daemon=True).start()
+        try:
+            for path, plan in plans.items():
+                mode, statuses = plan['mode'], plan['statuses']
+                old_gate, new_gate = plan['old_gate'], plan['new_gate']
+                url = f'http://127.0.0.1:{site.server_address[1]}{path}'
+                via = urljoin(url, '/redirect' + path) if mode == 'redirect' else url
+                args = ('reload',) if mode == 'reload' else ('open', via)
+                retained_ordinal = 1 if mode == 'reload' else None
+                initial = command('open', url if mode == 'reload' else base)['page']
+                if mode == 'reload':
+                    assert_document(initial, url, 1, 202, 0)
+                old_ordinal = len(statuses) - 1
+                if mode == 'click':
+                    js(f'''document.body.insertAdjacentHTML('beforeend','<button id="race">Submit</button>');
+                        document.querySelector('#race').onclick=async () => {{
+                            const reply=await fetch('/keyboard-save',{{method:'POST',body:JSON.stringify({{race:{json.dumps(path)}}})}});
+                            if (reply.ok) location.href={json.dumps(url)};
+                        }};true''')
+                    command('click', '#race', '--wait-for-navigation', '--timeout', '600', error='timeout')
+                else:
+                    command(*args, '--timeout', '600', error='timeout')
+                pending = command('state')['page']
+                phase = 'redirecting' if mode == 'redirect' else 'provisional'
+                assert_pending(pending, phase, initial['url'], retained_ordinal)
+                assert pending['navigationId'] != initial['navigationId'], pending
+                assert counts[path] == old_ordinal, log.items
+
+                while_pending = []
+                if new_gate is not None:
+                    command(*args, '--timeout', '600', error='timeout')
+                    replacement = command('state')['page']
+                    assert_pending(replacement, phase, initial['url'], retained_ordinal)
+                    assert replacement['navigationId'] != pending['navigationId'], (pending, replacement)
+                    assert counts[path] == len(statuses), log.items
+                    old_gate.set()
+                    responses_for(path, old_ordinal)
+                    for _ in range(5):
+                        time.sleep(.05)
+                        observed = command('state')['page']
+                        assert_pending(observed, phase, initial['url'], retained_ordinal)
+                        assert observed['navigationId'] == replacement['navigationId'], (replacement, observed)
+                        while_pending.append(observed)
+                    new_gate.set()
+                    winner = command('wait')['page']
+                    assert winner['navigationId'] == replacement['navigationId'], (replacement, winner)
+                    order = range(1, len(statuses) + 1)
+                else:
+                    winner = command(*args)['page']
+                    old_gate.set()
+                    order = [*range(1, old_ordinal), len(statuses), old_ordinal]
+                assert winner['navigationId'] != pending['navigationId'], (pending, winner)
+                assert_document(winner, url, len(statuses), statuses[-1], int(mode == 'redirect'))
+                responses = responses_for(path, len(statuses))
+                assert [(row['ordinal'], row['status']) for row in responses] == [
+                    (ordinal, statuses[ordinal - 1]) for ordinal in order], responses
+                assert next(row for row in responses if row['ordinal'] == len(statuses))['outcome'] == 'written', responses
+                command('wait', '--fn', f'() => Number(document.body.dataset.ordinal)==={len(statuses)}',
+                        '--stable-for', '200')
+                final = command('state')['page']
+                assert_document(final, url, len(statuses), statuses[-1], int(mode == 'redirect'))
+                assert final['navigationId'] == winner['navigationId'], (winner, final)
+                if mode == 'redirect':
+                    redirects = [row['status'] for row in log.items if row['path'] == '/redirect' + path and row['event'] == 'response']
+                    assert redirects == [302, 302], log.items
+                if mode == 'click':
+                    posts = [row for row in origin_events.items if row.get('kind') == 'keyboard-save' and row.get('race') == path]
+                    assert len(posts) == 1, posts
+                else:
+                    posts = []
+                results.append(dict(mode=mode, pending=pending, whileReplacementPending=while_pending,
+                                    final=final, responses=responses, posts=posts))
+            # Recheck completed cases too, in case a replay arrives during a later case.
+            expected_requests = Counter({path: len(plan['statuses']) for path, plan in plans.items()})
+            expected_requests.update({'/redirect' + path: 2 for path, plan in plans.items() if plan['mode'] == 'redirect'})
+            with lock:
+                assert counts == expected_requests, (counts, expected_requests)
+            expected_posts = Counter(path for path, plan in plans.items() if plan['mode'] == 'click')
+            actual_posts = Counter(row['race'] for row in origin_events.items
+                                   if row.get('kind') == 'keyboard-save' and row.get('race') in expected_posts)
+            assert actual_posts == expected_posts, (actual_posts, expected_posts)
+        finally:
+            for plan in plans.values():
+                plan['old_gate'].set()
+                if plan['new_gate'] is not None:
+                    plan['new_gate'].set()
+            site.shutdown()
+    return results
 
 
 def verify_navigation_failures(cli, base, out, events):
@@ -38,6 +209,8 @@ def verify_navigation_failures(cli, base, out, events):
         return {d['id'] for d in command('download', 'list')['value']['downloads']}
 
     try:
+        races = verify_same_url_races(command, js, base, out, events)
+        (out / 'same-url-navigation.json').write_text(json.dumps(races, indent=2))
         direct = command('open', base)['page']
         assert direct['httpStatus'] == 200 and direct['responseURL'] == base and direct['navigationPhase'] == 'finished', direct
         redirect = urljoin(base, '/download-redirect?' + urlencode(dict(to=base)))
@@ -145,6 +318,7 @@ def verify_navigation_failures(cli, base, out, events):
             assert js('({marker:unsavedMarker,draft:document.querySelector("#not-file").value})') == dict(marker='keep me', draft='unsaved draft')
             assert requests(attachment) == before_requests + 1, (kind, 'Download was replayed')
         report = dict(passed=True, historicalErrorPreserved=True, newClickWaitIgnoresOldError=True,
+                      sameURLResponseRaces=len(races),
                       pendingOldFailureDoesNotAbortNewClick=True,
                       newFailureReported=True, noNavigationTimesOut=True, noActionReplay=True,
                       downloadTransitions=['attribute', 'plain', 'redirect', 'open', 'navigation-wait', 'frame'],
