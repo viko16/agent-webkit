@@ -47,7 +47,7 @@ Apple 的 [WWDC23 Network Relay 介绍](https://developer.apple.com/videos/play/
 
 ## 后台 Hover/键盘可行性
 
-独立实验延续隐藏 nonactivating Panel 的产品视图结构，两个 nonPersistent Store、三个 WKWebView。只创建定向 `NSEvent` 并调用公开 [NSResponder](https://developer.apple.com/documentation/appkit/nsresponder)、[NSWindow](https://developer.apple.com/documentation/appkit/nswindow) 事件/焦点入口；没有激活、Quartz 全局输入或私有 WebKit 调用。以下限本机 macOS 27.2（26B123）、固定 US 键码及受控主文档。
+独立实验延续隐藏 nonactivating Panel 的产品视图结构，两个 nonPersistent Store、三个 WKWebView。只创建定向 `NSEvent` 并调用公开 [NSResponder](https://developer.apple.com/documentation/appkit/nsresponder)、[NSWindow](https://developer.apple.com/documentation/appkit/nswindow) 事件/焦点入口；没有激活、Quartz 全局输入或私有 WebKit 调用。以下结果来自使用固定 US 键码及受控主文档的 macOS 测试。
 
 | 路径 | 真实观察 | 能力边界 |
 | --- | --- | --- |
@@ -67,7 +67,7 @@ Apple 的 [WWDC23 Network Relay 介绍](https://developer.apple.com/videos/play/
 
 ## 代理实验结论
 
-在 macOS 27.0.1 上测试过无域限制、空字符串匹配、显式 `localhost` / `127.0.0.1` 匹配，以及命名持久化 / 临时 Store。结果：loopback 请求均没有到达记录代理。最终配置使用空的 `matchDomains`，表示不限制域；不保留会缩小域范围的实验配置。
+在 macOS 上测试过无域限制、空字符串匹配、显式 `localhost` / `127.0.0.1` 匹配，以及命名持久化 / 临时 Store。结果：loopback 请求均没有到达记录代理。最终配置使用空的 `matchDomains`，表示不限制域；不保留会缩小域范围的实验配置。
 
 无域限制时，普通 HTTPS 域名实际产生了 CONNECT；本地代理故意返回 403，WebKit 导航失败，没有绕过此代理。另以 `agent-webkit.test` 作为仅由测试代理解析的域名，加载本地站点并比较 TCP 来源端口，证明普通域名的 HTTP 路径也经过了代理。这个附加实验没有替代 localhost 验收，也不能证明 HTTPS、WebSocket、Service Worker、媒体和全部子资源已全面隔离。
 
@@ -77,4 +77,4 @@ Apple 的 [WWDC23 Network Relay 介绍](https://developer.apple.com/videos/play/
 
 使用公开的 WKNavigationDelegate server-trust challenge、[SecTrustSetAnchorCertificates](https://developer.apple.com/documentation/security/sectrustsetanchorcertificates(_:_:)) 和 [SecTrustSetAnchorCertificatesOnly](https://developer.apple.com/documentation/security/sectrustsetanchorcertificatesonly(_:_:))，为指定 Space 添加本机 CA，同时保留系统 Anchor 与原有 SSL 校验。Apple [Configuring a Trust](https://developer.apple.com/documentation/security/configuring-a-trust) 明确这些修改只影响当前 Trust 对象，不影响设备其他评估。CA 与可选的开发忽略策略均按 Space 持久化，不修改钥匙串。
 
-本机 Whistle 2.10.2 的动态证书缺少 `serverAuth` EKU；严格添加 CA 后仍被拒绝。没有为兼容代理而暗中删除用途或主机名校验，而是提供互斥的 `--ca-cert` 与显式 `--ignore-certificate-errors`，并分别验证其语义。
+Whistle 2.10.2 的动态证书缺少 `serverAuth` EKU，严格添加 CA 后仍被拒绝。没有为兼容代理而暗中删除用途或主机名校验，而是提供互斥的 `--ca-cert` 与显式 `--ignore-certificate-errors`，并分别验证其语义。

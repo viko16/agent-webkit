@@ -333,7 +333,7 @@ awb space create dev --proxy http://127.0.0.1:8899 --ignore-certificate-errors
 
 `--ignore-certificate-errors` 对应显式 `insecure` 策略，直接接受该 WebView 收到的 server-trust challenge。它会接受证书链、主机名、有效期及用途错误，适合受控开发 Space；不会修改系统设置或其他 Space。此选项与 `--ca-cert` 互斥，不能附加在 `open` 等页面命令上。CLI 始终返回策略与警告，避免把忽略校验伪装成信任校验成功。
 
-Whistle 2.10.2 动态证书的 SAN 存在，但缺少 EKU `serverAuth`。本机系统已信任的默认 Whistle CA 可走系统策略；换成测试 CA 后，`custom-ca` 严格评估出现 `ServerAuthEKU` 错误。这与 [Apple 的服务端证书要求](https://support.apple.com/en-lb/103769)一致。B 使用显式 insecure Space 来验证该版本 Whistle，另用带正确 SAN / EKU 的本地 HTTPS 服务验证 custom-ca 的正反用例。
+Whistle 2.10.2 动态证书的 SAN 存在，但缺少 EKU `serverAuth`。如果系统已信任 Whistle 的默认 CA，可以使用系统策略。测试改用独立 CA 后，`custom-ca` 严格评估出现 `ServerAuthEKU` 错误。这与 [Apple 的服务端证书要求](https://support.apple.com/en-lb/103769)一致。B 使用显式 insecure Space 来验证该版本 Whistle，另用带正确 SAN / EKU 的本地 HTTPS 服务验证 custom-ca 的正反用例。
 
 测试证书均由 OpenSSL 临时生成，不安装到钥匙串。错误域名与过期证书先在 custom-ca Space 中验证拒绝，再在显式 insecure Space 中验证接受，最后重新检查 custom-ca 仍拒绝，以检测策略是否串到别的 Space。
 
@@ -375,7 +375,7 @@ Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 
 
 `python3 tests/runtime_checks.py termination` 构建独立签名宿主，复用正式 Browser、SocketServer 和 ObserverWindow 源码，通过包内 CLI 执行操作。先运行 `zsh scripts/build.sh release`。测试用 `launchctl print pid/宿主PID` 确认 XPC 归属，结合创建目标 Space 前后的差集及可执行路径，仅对唯一确定的测试 WebContent PID 发送 SIGKILL；无法确定归属就失败，不按全局进程名终止。需要已登录的 macOS 桌面和读取/终止自有进程的权限，不修改系统代理。
 
-覆盖空闲、挂起 JS、待决 confirm、导航中的真实终止；核对结构化错误、原生恢复按钮与 CLI reload、旧 frame/元素引用失效、Cookie/LocalStorage/Tab ID、另一 Space 的页面内存、一次服务端 POST 不重放，以及关窗后的后台快照/截图和重新显示窗口。GUI 加载进度、错误横幅、按钮及恢复状态通过实际 AppKit 控件读取和截图检查，不冒充人工点击验收；宿主记录应用激活通知并采样前台 PID。报告、命令、进程归属与 GUI 图片保存在 `.artifacts/termination-*/`，清理确认后才报告成功。当前实测 macOS 27.2；SIGKILL 不等同于系统内存压力回收、整机故障或长期稳定性验证。
+覆盖空闲、挂起 JS、待决 confirm、导航中的真实终止；核对结构化错误、原生恢复按钮与 CLI reload、旧 frame/元素引用失效、Cookie/LocalStorage/Tab ID、另一 Space 的页面内存、一次服务端 POST 不重放，以及关窗后的后台快照/截图和重新显示窗口。GUI 加载进度、错误横幅、按钮及恢复状态通过实际 AppKit 控件读取和截图检查，不冒充人工点击验收；宿主记录应用激活通知并采样前台 PID。报告、命令、进程归属与 GUI 图片保存在 `.artifacts/termination-*/`，清理确认后才报告成功。测试覆盖 SIGKILL 触发的进程终止。
 
 故障恢复后立即删除 Space，实测 WebKit 可能仍持有没有活动页面的网络会话，`remove(forIdentifier:)` 返回 `Data store is in use (by network process)`。流程先调用 `removeData` 清理全部公开网站数据类型，再用 `fetchDataRecords` 验证为空，并有限重试容器删除。容器未释放时返回 `websiteDataRemoved: true`、`dataStoreRemoved: false`、`cleanupPending: true`，保留 tombstone；不会把容器删除当成成功。重启后会再次清理，`status.pendingStoreCleanup` 返回数量，`status.pendingStores` 列出全部待清理记录的 `spaceId` 和 `name`，包括运行中删除失败或仍待回调的记录。同名活跃 Space 从 `space list` 查询；按名称删除有歧义时，核对两处 UUID，再按旧 UUID 清理。同名重建使用新 UUID，测试验证它读不到旧 LocalStorage，并验证重启后旧容器和 tombstone 清除。
 
@@ -540,6 +540,6 @@ CLI 开销量化使用 `zsh scripts/build.sh release` 后的 `python3 tests/runt
 
 `outsideMainMs = cliEndToEndMs - cliMs` 包含进程加载、最终 JSON 输出、退出、父进程收集与调度，不能称为纯启动耗时。`outsideIPCMs = cliEndToEndMs - ipcRoundTripMs` 是客户端和进程开销的乐观可省上限，不是已实现批量接口的加速比。流程的 `commandMs` 排除测试驱动写日志和校验的时间，`wallMs` 则包含它们。本地预热 fixture 的结果不代表公网、复杂 SPA、冷缓存或包含模型推理的完整 Agent 工作流。
 
-2026-11-04 在本机 arm64/macOS 27.2、Release 0.2.1 基础加终止错误分类修复的 30 轮测量中，普通页面命令中位数为 11–16 ms，截图约 50 ms，带 250 ms 服务端延迟的导航约 305 ms。六步流程的命令耗时中位数为 79.3 ms（P95 86.3 ms），其中 IPC 外开销合计中位数 62.6 ms。该数值还包含首条命令不可避免的启动等成本；批量接口实际可省时间会更少。当前决定保留逐条 CLI，不增加批量接口；如果实际工作流出现大量无需中途判断的短命令，再用该入口复测收益。
+基于 Release 0.2.1 加终止错误分类修复，在 Apple Silicon 上测量 30 轮。普通页面命令耗时中位数为 11–16 ms，截图约 50 ms，带 250 ms 服务端延迟的导航约 305 ms。六步流程的命令耗时中位数为 79.3 ms（P95 86.3 ms），其中 IPC 外开销合计中位数 62.6 ms。该数值还包含首条命令不可避免的启动等成本；批量接口实际可省时间会更少。当前决定保留逐条 CLI，不增加批量接口；如果实际工作流出现大量无需中途判断的短命令，再用该入口复测收益。
 
 命令专属选项在 CLI 与服务端同时校验。CLI 在发送前发现的参数错误只有 `cliMs`，不会伪造 IPC 或 WebKit 耗时。`--` 后的参数作为字面值处理，适用于以连字符开头的表单内容。
