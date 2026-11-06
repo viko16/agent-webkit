@@ -155,7 +155,7 @@ struct Request: Codable {
 }
 
 // Single version source; packaging reads it through `awb version`.
-let productVersion = "0.2.1"
+let productVersion = "0.2.2"
 
 func jsonData(_ value: Any) throws -> Data {
     // Foundation can raise an Objective-C exception for non-finite JS numbers.
