@@ -89,18 +89,25 @@ def verify_keyboard(cli, base, out, restart, site_events, nonce):
             command('focus', root)
             command('key', 'Shift+X')
             assert js('window.rootKeys') == [dict(tag=root, key='X', trusted=True)]
-        for key, selection, value in [('ArrowLeft', [9, 9], 'alpha beta'),
-                                      ('Shift+ArrowLeft', [9, 10], 'alpha beta'),
-                                      ('Option+ArrowLeft', [6, 6], 'alpha beta'),
-                                      ('Control+B', [9, 9], 'alpha beta'),
-                                      ('Shift+X', [11, 11], 'alpha betaX')]:
+        for key, start, selection, value in [('ArrowLeft', 10, [9, 9], 'alpha beta'),
+                                      ('ArrowRight', 6, [7, 7], 'alpha beta'),
+                                      ('Backspace', 10, [9, 9], 'alpha bet'),
+                                      ('Delete', 6, [6, 6], 'alpha eta'),
+                                      ('Shift+ArrowLeft', 10, [9, 10], 'alpha beta'),
+                                      ('Option+ArrowLeft', 10, [6, 6], 'alpha beta'),
+                                      ('Control+B', 10, [9, 9], 'alpha beta'),
+                                      ('Shift+X', 10, [11, 11], 'alpha betaX')]:
             command('reload')
             prepare()
+            if start != 10:
+                js(f"document.querySelector('#first').setSelectionRange({start},{start});true")
             result = command('key', key)['value']
             actual = read()
             assert actual['selection'] == selection and actual['value'] == value, (key, actual)
             keys = [e for e in actual['events'] if e['type'] in ['keydown', 'keyup']]
             assert len(keys) == 2 and all(e['trusted'] for e in keys), (key, actual)
+            if '+' not in key:
+                assert {event['key'] for event in keys} == {key}, (key, keys)
             assert result['dispatched'] and not result['physicalInput'] and not result['businessOutcomeVerified']
             evidence.append(dict(key=key, result=result, observed=actual))
         command('reload')
@@ -132,6 +139,19 @@ def verify_keyboard(cli, base, out, restart, site_events, nonce):
             assert read(target=target, space=space)['value'] == 'alpha betaX'
         # One genuine form submission per Space; correlate each page epoch with server evidence.
         for target, space in [(tab, 'keyboard-work'), (peer_tab, 'keyboard-peer')]:
+            if target == tab:
+                command('open', page + '?mode=suggestions')
+                prepare()
+                for key, expected in [('ArrowDown', 'apple'), ('ArrowDown', 'apricot'), ('ArrowUp', 'apple')]:
+                    command('key', key)
+                    assert js('document.querySelector("#suggestions [aria-selected=true]").textContent') == expected
+                command('key', 'Enter')
+                actual = read()
+                keys = [e for e in actual['events'] if e['type'] == 'keydown']
+                assert [e['key'] for e in keys] == ['ArrowDown', 'ArrowDown', 'ArrowUp', 'Enter'] and all(e['trusted'] for e in keys)
+                assert actual['value'] == 'apple' and js('document.querySelector("#suggestions").hidden')
+                assert not [e for e in site_events.items if e['kind'] == 'keyboard-save' and e['epoch'] == actual['epoch']]
+                evidence.append(dict(suggestions=actual))
             prepare(target=target, space=space)
             before = read(target=target, space=space)
             command('key', 'Enter', target=target, space=space)
@@ -152,15 +172,18 @@ def verify_keyboard(cli, base, out, restart, site_events, nonce):
         prepare()
         command('key', 'Shift+X')
         command('open', page + '?mode=hang')
+        prior_viewport = command('viewport', 'get')['value']['viewPoints']
         prepare()
         began = time.monotonic()
         command('key', 'Shift+X', '--timeout', '150', error='timeout')
         assert time.monotonic() - began < 3
         command('state')
+        command('viewport', 'set', '800', '600', error='web_content_unresponsive')
         command('focus', '#first', error='web_content_unresponsive')
         prepare(target=peer_tab, space='keyboard-peer')
         command('key', 'ArrowLeft', target=peer_tab, space='keyboard-peer')
         command('reload')
+        assert command('viewport', 'get')['value']['viewPoints'] == prior_viewport
         command('key', 'Enter', error='input_focus_required')
         with pending_navigation_site() as (pending_base, requested, release):
             command('open', pending_base + 'keyboard')

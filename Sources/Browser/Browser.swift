@@ -65,6 +65,8 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     let id: UUID
     let webView: WKWebView
     let backingWindow: NSPanel
+    static let defaultViewport = NSSize(width: 1000, height: 700)
+    private(set) var fixedViewport: NSSize?
     let diagnostics: DiagnosticLog
     let dialogs = DialogStore()
     let downloads = DownloadStore()
@@ -112,8 +114,32 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         let timing: RequestTiming?
         let token: Int?
         let sequence: Int
+        let id: UUID
         var becameDownload = false
     }
+    private struct MainDocumentResponse {
+        let status: Int
+        let url: URL
+        let navigationID: UUID
+    }
+    private struct HistoryResponse {
+        weak var item: WKBackForwardListItem?
+        let response: MainDocumentResponse
+    }
+    private struct NavigationResult {
+        enum Phase: String {
+            case provisional, redirecting, response, committed, finished, failed, download, terminated
+            case provisionalFailure = "provisional-failure"
+        }
+        let id = UUID()
+        var phase = Phase.provisional
+        var response: MainDocumentResponse?
+        var redirects = 0
+    }
+    private var navigationResult: NavigationResult?
+    private var committedNavigationID: UUID?
+    private static let historyResponseLimit = 128
+    private var historyResponses: [HistoryResponse] = []
     private var navigationSpans: [ObjectIdentifier: NavigationSpan] = [:]
     private(set) var navigationSequence = 0
     private var completedNavigationSequence = 0
@@ -130,24 +156,23 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         self.diagnostics = diagnostics ?? DiagnosticLog()
         let configuration = supplied ?? WKWebViewConfiguration()
         if supplied == nil { configuration.websiteDataStore = store }
+        else {
+            // Keep the supplied popup configuration (including opener/store), with a
+            // controller owned by this view so document-start opt-in cannot be inherited.
+            configuration.userContentController = WKUserContentController()
+        }
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
-        if !configuration.userContentController.userScripts.contains(where: { $0.source == DOM.bootstrap }) {
-            configuration.userContentController.addUserScript(WKUserScript(source: DOM.bootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: DOM.world))
-        }
-        if !configuration.userContentController.userScripts.contains(where: { $0.source == FrameRouter.script }) {
-            configuration.userContentController.add(FrameRouter.shared, contentWorld: DOM.world, name: FrameRouter.name)
-            configuration.userContentController.addUserScript(WKUserScript(source: FrameRouter.script, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: DOM.world))
-        }
-        if !configuration.userContentController.userScripts.contains(where: { $0.source == DiagnosticScript.source }) {
-            configuration.userContentController.add(DiagnosticRouter.shared, contentWorld: .page, name: DiagnosticScript.name)
-            configuration.userContentController.addUserScript(WKUserScript(source: DiagnosticScript.source, injectionTime: .atDocumentStart, forMainFrameOnly: true))
-        }
-        webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 1000, height: 700), configuration: configuration)
+        let controller = configuration.userContentController
+        controller.add(FrameRouter.shared, contentWorld: DOM.world, name: FrameRouter.name)
+        controller.add(DiagnosticRouter.shared, contentWorld: .page, name: DiagnosticScript.name)
+        Self.installUserScripts(on: controller, diagnosticSource: DiagnosticScript.source)
+        webView = WKWebView(frame: NSRect(origin: .zero, size: Self.defaultViewport), configuration: configuration)
         webView.isInspectable = false
         backingWindow = NSPanel(contentRect: webView.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init()
         dialogs.automaticallyDismissed = { [weak self] in self?.suppressedDialogs += 1 }
         DiagnosticRouter.shared.logs.setObject(self.diagnostics, forKey: webView)
+        self.diagnostics.captureConfigurationChanged = { [weak self] in self?.updateDiagnosticScript() }
         FrameRouter.shared.stores.setObject(frames, forKey: webView)
         backingWindow.isReleasedWhenClosed = false
         backingWindow.contentView = webView
@@ -191,9 +216,60 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         guard !closed else { return }
         webView.isHidden = false
         webView.removeFromSuperview()
+        let viewportSize = fixedViewport ?? Self.defaultViewport
+        webView.autoresizingMask = []
+        backingWindow.setContentSize(viewportSize)
         backingWindow.contentView = webView
-        webView.frame = NSRect(x: 0, y: 0, width: 1000, height: 700)
+        webView.frame = NSRect(origin: .zero, size: viewportSize)
         backingWindow.orderOut(nil)
+    }
+
+    func mount(in host: NSView) {
+        webView.removeFromSuperview()
+        host.addSubview(webView)
+        layoutViewport()
+    }
+
+    func setViewport(_ size: NSSize?) {
+        fixedViewport = size
+        layoutViewport()
+    }
+
+    private func layoutViewport() {
+        if webView.window === backingWindow {
+            let viewportSize = fixedViewport ?? Self.defaultViewport
+            backingWindow.setContentSize(viewportSize)
+            webView.frame = NSRect(origin: .zero, size: viewportSize)
+        } else if let host = webView.superview {
+            guard let viewportSize = fixedViewport else {
+                webView.frame = host.bounds
+                webView.autoresizingMask = [.width, .height]
+                return
+            }
+            webView.autoresizingMask = [.minYMargin]
+            webView.frame = NSRect(x: host.bounds.minX, y: host.bounds.maxY - viewportSize.height,
+                                   width: viewportSize.width, height: viewportSize.height)
+        }
+    }
+
+    func cssViewport(setting size: NSSize? = nil) async throws -> (width: Double, height: Double, devicePixelRatio: Double) {
+        let previous = fixedViewport
+        if let size {
+            try requireResponsiveContent()
+            setViewport(size)
+        }
+        let script = "({width:innerWidth,height:innerHeight,devicePixelRatio:devicePixelRatio})"
+        do {
+            guard let viewport = try await runJS(script, world: DOM.world) as? [String: Any],
+                  let width = viewport["width"] as? Double, let height = viewport["height"] as? Double,
+                  let scale = viewport["devicePixelRatio"] as? Double, width > 0, height > 0, scale > 0 else {
+                throw BrowserError("snapshot_failed", "无法读取文档 CSS 视口")
+            }
+            return (width, height, scale)
+        } catch {
+            if size != nil { setViewport(previous) }
+            throw error
+        }
     }
 
     func close() {
@@ -201,6 +277,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         dialogs.stop(code: "tab_closed")
         downloads.stop(); fileChooser.stop()
         webView.isInspectable = false
+        diagnostics.captureConfigurationChanged = nil
         diagnostics.setDetail(false)
         DiagnosticRouter.shared.logs.removeObject(forKey: webView)
         FrameRouter.shared.stores.removeObject(forKey: webView)
@@ -219,13 +296,79 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
 
     func disableDiagnosticDetails() {
         diagnostics.setDetail(false)
-        // Host filtering and erasure are immediate, even if a hung page cannot acknowledge this.
-        webView.evaluateJavaScript("window.__agentWebKitDiagnosticMode?.(null)", completionHandler: nil)
+    }
+
+    private static func installUserScripts(on controller: WKUserContentController, diagnosticSource: String) {
+        for source in [DOM.bootstrap, FrameRouter.script] {
+            controller.addUserScript(WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: DOM.world))
+        }
+        controller.addUserScript(WKUserScript(source: diagnosticSource, injectionTime: .atDocumentStart, forMainFrameOnly: false))
+    }
+
+    private func updateDiagnosticScript() {
+        let controller = webView.configuration.userContentController
+        let source = DiagnosticScript.source(configuration: diagnostics.documentStartConfiguration)
+        if controller.userScripts.last?.source != source {
+            // The API's script list is backed by the controller. Reinstall from source;
+            // a list retained across removal does not preserve the old scripts.
+            controller.removeAllUserScripts()
+            Self.installUserScripts(on: controller, diagnosticSource: source)
+        }
+        // Host filtering is immediate even when WebContent cannot acknowledge disable/expiry.
+        let stop = "window.__agentWebKitDiagnosticMode?.(null)"
+        if diagnostics.configuration == nil { webView.evaluateJavaScript(stop, completionHandler: nil) }
+        if diagnostics.documentStartConfiguration == nil {
+            for document in frames.documents where !document.info.isMainFrame {
+                webView.evaluateJavaScript(stop, in: document.info, in: .page) { _ in }
+            }
+        }
+    }
+
+    func enableDiagnosticDetails(continuous: Bool, includeInfo: Bool) async throws {
+        diagnostics.setDetail(true, continuous: continuous, includeInfo: includeInfo)
+        do {
+            guard let configuration = diagnostics.configuration, let generation = configuration["generation"] as? String else {
+                throw BrowserError("diagnostics_unavailable", "诊断模式已失效")
+            }
+            let literal = String(decoding: try jsonData(configuration), as: UTF8.self)
+            let script = """
+                typeof window.__agentWebKitDiagnosticMode === 'function' ?
+                ({generation:window.__agentWebKitDiagnosticMode(\(literal)),tree:window.__agentWebKitDiagnosticTreeId}) : null
+                """
+            let current = committedNavigationID
+            let info = try await runJS(script) as? [String: Any]
+            let ack = info?["generation"] as? String
+            // A fresh about:blank may have no hook yet. The next document is armed
+            // by the controller even if there is nothing to attach to right now.
+            let blank = committedDocumentURL == "about:blank" && (webView.url?.absoluteString ?? "about:blank") == "about:blank"
+            guard generation == diagnostics.detailGeneration, ack == generation || (continuous && blank && ack == nil) else {
+                throw BrowserError("diagnostics_unavailable", "当前文档没有可用诊断 hook；请检查页面或显式重新加载")
+            }
+            if let current, current == committedNavigationID {
+                diagnostics.associateDocumentTree(info?["tree"], navigation: current)
+            }
+            if continuous, ack == generation {
+                let source = DiagnosticScript.source(configuration: configuration)
+                let childScript = "if (typeof window.__agentWebKitDiagnosticMode === 'function') { \(script) } else { \(source) }"
+                for document in frames.documents where !document.info.isMainFrame {
+                    webView.evaluateJavaScript(childScript, in: document.info, in: .page) { _ in }
+                }
+            }
+        } catch {
+            disableDiagnosticDetails()
+            throw error
+        }
     }
 
     var state: [String: Any] {
         ["tabId": id.uuidString, "url": committedDocumentURL, "title": webView.title ?? "",
          "requestedURL": requestedURL as Any? ?? NSNull(), "committedDocumentURL": committedDocumentURL, "restoreURL": persistedURL,
+         "navigationId": navigationResult?.id.uuidString as Any? ?? NSNull(),
+         "navigationPhase": navigationResult?.phase.rawValue ?? "idle",
+         "httpStatus": navigationResult?.response?.status as Any? ?? NSNull(),
+         "responseURL": navigationResult?.response?.url.absoluteString as Any? ?? NSNull(),
+         "httpResponseNavigationId": navigationResult?.response?.navigationID.uuidString as Any? ?? NSNull(),
+         "redirectCount": navigationResult?.redirects ?? 0,
          "loading": webView.isLoading, "webContentTerminated": terminated, "suppressedDialogs": suppressedDialogs,
          "pendingDialogs": dialogs.pendingCount, "suspended": false,
          "activeDownloads": downloads.hasActive, "fileChooser": fileChooser.state,
@@ -242,10 +385,15 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         callbacks.forEach { $0(error) }
     }
 
-    private func perform<Value>(_ operation: String, body: (@escaping (Result<Value, Error>) -> Void) -> Void) async throws -> Value {
+    private func requireResponsiveContent() throws {
         guard !closed else { throw BrowserError("tab_closed", "标签页已关闭") }
         guard !terminated else { throw BrowserError("web_content_terminated", "WebContent 进程已退出，请重新 open") }
         guard !unresponsive else { throw BrowserError("web_content_unresponsive", "上次 WebKit 调用超时，请先 reload 恢复标签页") }
+        guard deadline.map({ monotonicNow() < $0 }) ?? true else { throw BrowserError("timeout", "命令执行超时") }
+    }
+
+    private func perform<Value>(_ operation: String, body: (@escaping (Result<Value, Error>) -> Void) -> Void) async throws -> Value {
+        try requireResponsiveContent()
         let now = monotonicNow()
         let remaining = deadline.map { Double($0 > now ? $0 - now : 0) / 1_000_000 } ?? 15000
         guard remaining > 0 else { throw BrowserError("timeout", "命令执行超时") }
@@ -343,6 +491,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         // A repeated failed load can return nil and still deliver a terminal delegate callback.
         // Never treat the previous document's readyState as completion of this request.
         navigationPending = true
+        navigationResult = NavigationResult()
         let start = monotonicNow()
         navigationStartedAt = start
         if let navigation = webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)) {
@@ -356,8 +505,10 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         let key = ObjectIdentifier(navigation)
         guard navigationSpan(navigation) == nil else { return }
         navigationSequence += 1
+        let result = NavigationResult()
+        navigationResult = result
         navigationSpans[key] = NavigationSpan(navigation: navigation, start: start, timing: operationTiming,
-            token: operationTiming?.begin("navigation", from: start), sequence: navigationSequence)
+            token: operationTiming?.begin("navigation", from: start), sequence: navigationSequence, id: result.id)
     }
 
     private func navigationSpan(_ navigation: WKNavigation?) -> NavigationSpan? {
@@ -386,7 +537,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         let span = navigationSpan(navigation)
         if span != nil, let navigation { navigationSpans.removeValue(forKey: ObjectIdentifier(navigation)) }
         if let token = span?.token { span?.timing?.finish(token) }
-        let latest = span.map { $0.sequence == navigationSequence } ?? navigationPending
+        let latest = span.map { $0.sequence == navigationSequence } ?? (navigationPending && (navigation == nil || provisionalNavigation == nil))
         if latest {
             completedNavigationSequence = navigationSequence
             completedNavigationWasDownload = becameDownload
@@ -426,30 +577,66 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         throw BrowserError("popup_not_opened", "期限内未观察到新 Tab；DOM 合成点击不是可信用户激活，网站或 WebKit 可能拒绝弹窗。请核对页面状态，必要时手动点击；不会自动重试")
     }
 
-    func wait(selector: String?, timeout: Int, state: String = "visible", text: String? = nil, url: String? = nil, frameID: String? = nil) async throws {
+    func wait(selector: String?, timeout: Int, state: String = "visible", text: String? = nil,
+              url: String? = nil, urlPattern: String? = nil, function: String? = nil,
+              stableFor: Int = 0, frameID: String? = nil) async throws {
         let start = monotonicNow()
+        let end = min(start + UInt64(timeout) * 1_000_000, deadline ?? UInt64.max)
+        var stableSince: UInt64?
+        var stableSequence = navigationSequence
+        let conditionScript: String?
+        if let url {
+            conditionScript = "location.href === \(try quoteJS(url))"
+        } else if let function {
+            conditionScript = """
+                (()=>{const predicate=(\(function)\n);
+                if(typeof predicate!=='function')throw new Error('--fn expects a synchronous function');
+                const result=predicate();
+                if(typeof result!=='boolean')throw new Error('--fn must return a boolean');
+                return result})()
+                """
+        } else if selector != nil || text != nil {
+            let target = try selector.map { try quoteJS($0) } ?? "null"
+            let expected = try text.map { try quoteJS($0) } ?? "null"
+            conditionScript = "Boolean(window.__agentWebKit && window.__agentWebKit.matchesCondition(\(target),\(try quoteJS(state)),\(expected)))"
+        } else { conditionScript = nil }
         repeat {
             if frameID == nil {
                 if let navigationError { throw navigationError }
                 if let certificateError { throw certificateError }
             }
-            if let url {
-                if (try await runJS("location.href === \(try quoteJS(url))", world: DOM.world, frameID: frameID) as? Bool) == true { return }
-            } else if selector != nil || text != nil {
-                let target = try selector.map { try quoteJS($0) } ?? "null"
-                let expected = try text.map { try quoteJS($0) } ?? "null"
-                let script = "Boolean(window.__agentWebKit && window.__agentWebKit.matchesCondition(\(target),\(try quoteJS(state)),\(expected)))"
-                if (try await runJS(script, world: DOM.world, frameID: frameID) as? Bool) == true { return }
+            let sampleSequence = navigationSequence
+            let matched: Bool
+            if let urlPattern {
+                let href = try await runJS("location.href", world: DOM.world, frameID: frameID) as? String
+                matched = href.map { fnmatch(urlPattern, $0, 0) == 0 } ?? false
+            } else if let conditionScript {
+                let world: WKContentWorld = function != nil && frameID == nil ? .page : DOM.world
+                matched = try await runJS(conditionScript, world: world, frameID: frameID) as? Bool == true
             } else if frameID != nil {
-                if (try await runJS("document.readyState", world: DOM.world, frameID: frameID) as? String) == "complete" { return }
+                matched = try await runJS("document.readyState", world: DOM.world, frameID: frameID) as? String == "complete"
             } else if !webView.isLoading, !navigationPending, navigationSequence == completedNavigationSequence,
                       (try await runJS("document.readyState", world: DOM.world) as? String) == "complete" {
                 if let navigationError { throw navigationError }
                 if let certificateError { throw certificateError }
-                if !webView.isLoading, !navigationPending, navigationSequence == completedNavigationSequence { return }
+                matched = !webView.isLoading && !navigationPending && navigationSequence == completedNavigationSequence
+            } else {
+                matched = false
             }
-            try await Task.sleep(nanoseconds: 50_000_000)
-        } while milliseconds(from: start) < Double(timeout)
+            let now = monotonicNow()
+            if stableSequence != navigationSequence {
+                stableSince = nil
+                stableSequence = navigationSequence
+            }
+            if matched, sampleSequence == navigationSequence,
+               stableFor == 0 || frameID != nil || !navigationPending {
+                if stableSince == nil { stableSince = now }
+                if let stableSince, now - stableSince >= UInt64(stableFor) * 1_000_000,
+                   now <= end { return }
+            } else { stableSince = nil }
+            if now >= end { break }
+            try await Task.sleep(nanoseconds: min(50_000_000, end - now))
+        } while monotonicNow() < end
         diagnostics.native(navigationPending ? "navigation-timeout" : "condition-timeout", url: URL(string: persistedURL),
                            error: BrowserError("timeout", ""), duration: milliseconds(from: start))
         throw BrowserError("timeout", "等待页面条件超时（\(timeout) ms）")
@@ -525,10 +712,21 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
 
     func screenshot(path: String, element: String? = nil, fullPage: Bool = false) async throws -> [String: Any] {
-        var rect = webView.bounds
+        let viewBounds = webView.bounds
+        let sequence = navigationSequence
+        let document = committedNavigationID
+        func requireUnchangedGeometry() throws {
+            guard webView.bounds == viewBounds, navigationSequence == sequence, committedNavigationID == document else {
+                throw BrowserError("screenshot_changed", "截图期间文档或 WebView 尺寸改变；未写成功文件")
+            }
+        }
+        let viewport = try await cssViewport()
+        try requireUnchangedGeometry()
+        let cssWidth = viewport.width, cssHeight = viewport.height
+        var rect = viewBounds
         var token: String?
         var tiles = 1
-        var range: [String: Any] = ["x": 0, "y": 0, "width": webView.bounds.width, "height": webView.bounds.height, "coordinateSpace": "view-points"]
+        var range: [String: Any] = ["x": 0, "y": 0, "width": viewBounds.width, "height": viewBounds.height, "coordinateSpace": "view-points"]
         func restore() async throws {
             guard let current = token else { return }
             token = nil
@@ -560,20 +758,32 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
                           let width = bounds["width"] as? Double, let height = bounds["height"] as? Double,
                           let viewportWidth = bounds["viewportWidth"] as? Double, let viewportHeight = bounds["viewportHeight"] as? Double,
                           viewportWidth > 0, viewportHeight > 0 else { throw BrowserError("snapshot_failed", "无效元素截图范围") }
-                    let scaleX = webView.bounds.width / viewportWidth, scaleY = webView.bounds.height / viewportHeight
-                    rect = CGRect(x: x * scaleX, y: y * scaleY, width: width * scaleX, height: height * scaleY).intersection(webView.bounds)
+                    guard viewportWidth == cssWidth, viewportHeight == cssHeight else {
+                        throw BrowserError("screenshot_changed", "截图期间 CSS 视口改变；未写成功文件")
+                    }
+                    let scaleX = viewBounds.width / viewportWidth, scaleY = viewBounds.height / viewportHeight
+                    rect = CGRect(x: x * scaleX, y: y * scaleY, width: width * scaleX, height: height * scaleY).intersection(viewBounds)
                     guard !rect.isEmpty else { throw BrowserError("element_not_actionable", "元素完全位于可截图范围之外") }
                     range = ["x": x, "y": y, "width": width, "height": height, "coordinateSpace": "main-viewport-css", "clipped": bounds["clipped"] ?? false]
                 }
+                try requireUnchangedGeometry()
                 bitmap = try await snapshotBitmap(rect: rect)
             }
             guard let data = bitmap.representation(using: .png, properties: [:]) else {
                 throw BrowserError("png_failed", "无法编码 PNG")
             }
             try await restore()
+            guard try await cssViewport() == viewport else {
+                throw BrowserError("screenshot_changed", "截图期间 CSS 视口改变；未写成功文件")
+            }
+            try requireUnchangedGeometry()
             let url = URL(fileURLWithPath: path)
             try data.write(to: url, options: .atomic)
+            let capturedWidth = fullPage ? range["width"] as? Double ?? cssWidth : cssWidth * rect.width / viewBounds.width
+            let capturedHeight = fullPage ? range["height"] as? Double ?? cssHeight : cssHeight * rect.height / viewBounds.height
             return ["path": url.path, "width": bitmap.pixelsWide, "height": bitmap.pixelsHigh, "requiresForeground": false,
+                    "cssViewport": ["width": cssWidth, "height": cssHeight, "devicePixelRatio": viewport.devicePixelRatio],
+                    "pixelsPerCssPixel": ["x": Double(bitmap.pixelsWide) / capturedWidth, "y": Double(bitmap.pixelsHigh) / capturedHeight],
                     "mode": fullPage ? "full-page" : element == nil ? "viewport" : "element", "range": range, "scrollRestored": true,
                     "tiles": tiles, "captureConsistency": fullPage ? "best-effort" : "single-snapshot",
                     "limitations": fullPage ? ["Fixed/sticky content can repeat across tiles", "Lazy and virtualized content is captured only as rendered; dimensions must remain stable", "Nested scroll containers are not expanded; dynamic pixels are not atomic across tiles"] : []]
@@ -587,40 +797,84 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         // A failed provisional load can retain the current document and all its frames.
         // Live document epochs, not navigation attempts, govern frame validity.
+        if let span = navigationSpan(navigation), span.sequence != navigationSequence { return }
         dialogs.cancelAll(code: "dialog_cancelled")
         fileChooser.stop()
-        diagnostics.beginNavigation()
         navigationError = nil
         certificateError = nil
-        if !navigationPending { navigationStartedAt = monotonicNow() }
+        if !navigationPending {
+            navigationStartedAt = monotonicNow()
+            navigationResult = NavigationResult()
+        }
         navigationPending = true
         provisionalNavigation = navigation
         if let navigation { trackNavigation(navigation, start: monotonicNow()) }
+        diagnostics.beginNavigation(id: navigationResult?.id)
         changed?()
     }
+    func webView(_ webView: WKWebView, didReceiveServerRedirectForProvisionalNavigation navigation: WKNavigation!) {
+        guard navigationSpan(navigation)?.sequence == navigationSequence else { return }
+        navigationResult?.redirects += 1
+        navigationResult?.phase = .redirecting
+        statusChanged?()
+    }
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        guard navigationSpan(navigation)?.sequence == navigationSequence || (navigation == nil && navigationPending) else { return }
+        if let response = navigationResult?.response?.url, let committed = webView.url,
+           response.absoluteString.split(separator: "#", maxSplits: 1).first != committed.absoluteString.split(separator: "#", maxSplits: 1).first {
+            navigationResult?.response = nil
+        }
+        navigationResult?.phase = .committed
+        committedNavigationID = navigationResult?.id
         if let url = webView.url { persistedURL = url.absoluteString; committedDocumentURL = url.absoluteString }
+        correlateDiagnosticDocument()
         changed?()
     }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         recordNavigation("navigation-finished", navigation: navigation)
-        if finishNavigation(navigation), let url = webView.url { persistedURL = url.absoluteString; committedDocumentURL = url.absoluteString }
+        if finishNavigation(navigation) {
+            navigationResult?.phase = .finished
+            committedNavigationID = navigationResult?.id
+            if let url = webView.url { persistedURL = url.absoluteString; committedDocumentURL = url.absoluteString }
+            if let item = webView.backForwardList.currentItem {
+                if let response = navigationResult?.response {
+                    historyResponses.removeAll { $0.item == nil || $0.item === item }
+                    if historyResponses.count == Self.historyResponseLimit { historyResponses.removeFirst() }
+                    historyResponses.append(HistoryResponse(item: item, response: response))
+                } else if let prior = historyResponses.first(where: { $0.item === item }),
+                          prior.response.url.absoluteString == committedDocumentURL {
+                    // A cached document can finish without a new response callback.
+                    navigationResult?.response = prior.response
+                }
+            }
+            correlateDiagnosticDocument()
+        }
         changed?()
     }
+    private func correlateDiagnosticDocument() {
+        guard diagnostics.detailGeneration != nil, let id = committedNavigationID else { return }
+        let script = "({tree:window.__agentWebKitDiagnosticTreeId??null,href:location.href})"
+        webView.evaluateJavaScript(script) { [weak self] value, _ in
+            guard let self, !self.closed, self.navigationResult?.id == id,
+                  self.committedNavigationID == id, let page = value as? [String: Any],
+                  page["href"] as? String == self.committedDocumentURL else { return }
+            self.diagnostics.associateDocumentTree(page["tree"], navigation: id)
+        }
+    }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        failNavigation(navigation, error: error)
+        failNavigation(navigation, error: error, provisional: false)
     }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        failNavigation(navigation, error: error)
+        failNavigation(navigation, error: error, provisional: true)
     }
-    private func failNavigation(_ navigation: WKNavigation?, error: Error) {
+    private func failNavigation(_ navigation: WKNavigation?, error: Error, provisional: Bool) {
         // Unknown cancelled callbacks may belong to a superseded navigation.
         let native = error as NSError
         if navigationSpan(navigation) == nil,
            native.domain == NSURLErrorDomain, native.code == NSURLErrorCancelled { return }
         if navigationSpan(navigation)?.becameDownload == true {
             recordNavigation("navigation-download", navigation: navigation)
-            finishNavigation(navigation, becameDownload: true)
+            if finishNavigation(navigation, becameDownload: true) { navigationResult?.phase = .download }
             changed?()
             return
         }
@@ -629,6 +883,8 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         let latest = finishNavigation(navigation)
         // A replacement load cancels the previous request. Its late failure must not poison the new one.
         if latest {
+            navigationResult?.phase = provisional ? .provisionalFailure : .failed
+            if provisional { navigationResult?.response = nil }
             navigationError = certificateError ?? error
             navigationErrorSequence = failedSequence
             changed?()
@@ -642,12 +898,20 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         // A failed provisional load can leave webView.url pointing at the previous document.
         let url = error == nil ? webView.url : failedURL ?? URL(string: persistedURL)
         diagnostics.native(kind, url: url, error: error, cause: latest ? certificateError : nil,
-                           duration: start.map { milliseconds(from: $0) })
+                           duration: start.map { milliseconds(from: $0) }, navigationId: span?.id)
     }
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
                  decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
         if navigationResponse.isForMainFrame, let response = navigationResponse.response as? HTTPURLResponse {
-            diagnostics.native("navigation-response", url: response.url, status: response.statusCode)
+            // The response delegate has no navigation token. Associate it with the
+            // live provisional main-frame load, and reconcile its URL on commit.
+            if navigationPending, let span = navigationSpan(provisionalNavigation), span.sequence == navigationSequence {
+                navigationResult?.phase = .response
+                if let url = response.url {
+                    navigationResult?.response = MainDocumentResponse(status: response.statusCode, url: url, navigationID: span.id)
+                }
+                diagnostics.native("navigation-response", url: response.url, status: response.statusCode, navigationId: span.id)
+            }
         }
         if !navigationResponse.canShowMIMEType || (navigationResponse.response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Disposition")?.lowercased().contains("attachment") == true {
             if navigationResponse.isForMainFrame, let navigation = provisionalNavigation, navigationSpan(navigation) != nil {
@@ -705,6 +969,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         terminated = true
+        navigationResult?.phase = .terminated
         frames.reset()
         clearNavigationSpans()
         dialogs.stop(code: "web_content_terminated")
@@ -821,6 +1086,8 @@ final class Space {
         if !suspended && configurationError == nil { return tabs.map(\.state) }
         return record.tabs.map { tab in
             ["tabId": tab.id.uuidString, "url": tab.url, "title": "", "loading": false,
+             "navigationId": NSNull(), "navigationPhase": "suspended", "httpStatus": NSNull(), "responseURL": NSNull(),
+             "httpResponseNavigationId": NSNull(), "redirectCount": 0,
              "webContentTerminated": false, "unresponsive": false, "suspended": true,
              "pendingDialogs": 0, "requiresForeground": false, "tls": record.tls?.summary ?? TLSConfiguration.systemSummary]
         }
@@ -1287,19 +1554,12 @@ final class BrowserModel {
                 if let inspectable = r.options["inspectable"] { tab.webView.isInspectable = inspectable == "on" }
                 if r.options["detail"] == "off" {
                     tab.disableDiagnosticDetails()
-                } else if r.options["detail"] == "on" {
+                } else if let detail = r.options["detail"] {
                     guard !space.busy else { throw BrowserError("space_busy", "启用详细诊断需要等待当前操作完成") }
                     space.busy = true
                     tab.operationTiming = timing; tab.deadline = monotonicNow() + 2_000_000_000
                     defer { space.busy = false; tab.operationTiming = nil; tab.deadline = nil }
-                    tab.diagnostics.setDetail(true)
-                    let generation = tab.diagnostics.detailGeneration!
-                    let config: [String: Any] = ["generation": generation, "expiresAtMs": Date().addingTimeInterval(300).timeIntervalSince1970 * 1000]
-                    do {
-                        let literal = String(decoding: try jsonData(config), as: UTF8.self)
-                        let ack = try await tab.runJS("typeof window.__agentWebKitDiagnosticMode === 'function' ? window.__agentWebKitDiagnosticMode(\(literal)) : null") as? String
-                        guard ack == generation else { throw BrowserError("diagnostics_unavailable", "当前文档没有可用诊断 hook；请检查页面或显式重新加载") }
-                    } catch { tab.disableDiagnosticDetails(); throw error }
+                    try await tab.enableDiagnosticDetails(continuous: detail == "continuous", includeInfo: r.options["include-info"] == "true")
                 }
                 var value = tab.diagnostics.snapshot(clear: r.options["clear"] == "true")
                 value["inspectable"] = tab.webView.isInspectable
@@ -1377,9 +1637,12 @@ final class BrowserModel {
         guard var tab = space.tabs.first(where: { $0.id.uuidString.lowercased() == tabID.lowercased() }) else { throw BrowserError("tab_not_found", "Space 中不存在该标签页") }
         // Replace a stalled view only on explicit navigation. Never replay an Agent action.
         if ["open", "reload"].contains(command), tab.terminated || tab.unresponsive {
-            let replacement = Tab(record: TabRecord(id: tab.id, url: tab.persistedURL, openerTabID: tab.openerTabID), store: store, tls: space.record.tls, diagnostics: tab.diagnostics)
             let index = space.tabs.firstIndex(where: { $0 === tab })!
-            tab.close(); space.tabs[index] = replacement; tab = replacement
+            let record = TabRecord(id: tab.id, url: tab.persistedURL, openerTabID: tab.openerTabID)
+            tab.close()
+            let replacement = Tab(record: record, store: store, tls: space.record.tls, diagnostics: tab.diagnostics)
+            replacement.setViewport(tab.fixedViewport)
+            space.tabs[index] = replacement; tab = replacement
             bind(space); changed?()
         }
         tab.operationTiming = timing; tab.deadline = monotonicNow() + UInt64(timeout) * 1_000_000
@@ -1394,6 +1657,15 @@ final class BrowserModel {
             tab.load(try validateURL(tab.persistedURL))
             try await tab.wait(selector: nil, timeout: timeout); try save(space)
         case "state": break
+        case "viewport.get", "viewport.set":
+            var size: NSSize?
+            if command == "viewport.set", let width = Int(r.args[0]), let height = Int(r.args[1]) {
+                size = NSSize(width: width, height: height)
+            }
+            let viewport = try await tab.cssViewport(setting: size)
+            let points = tab.webView.bounds.size
+            value = ["cssViewport": ["width": viewport.width, "height": viewport.height, "devicePixelRatio": viewport.devicePixelRatio],
+                     "viewPoints": ["width": points.width, "height": points.height]]
         case "focus": value = try await tab.focus(target: arg(0))
         case "key":
             guard let key = BackgroundKey(rawValue: try arg(0)) else { throw BrowserError("unsupported_key", "不支持此后台按键") }
@@ -1428,12 +1700,17 @@ final class BrowserModel {
                 action["newTabId"] = popupID; value = action
             }
         case "wait":
-            try await tab.wait(selector: r.args.first, timeout: timeout, state: r.options["state"] ?? "visible", text: r.options["text"], url: r.options["url"], frameID: r.options["frame"])
+            try await tab.wait(selector: r.args.first, timeout: timeout, state: r.options["state"] ?? "visible",
+                               text: r.options["text"], url: r.options["url"], urlPattern: r.options["url-pattern"],
+                               function: r.options["fn"], stableFor: r.options["stable-for"].flatMap(Int.init) ?? 0, frameID: r.options["frame"])
         case "screenshot":
             guard let path = r.options["out"] else { throw BrowserError("invalid_arguments", "截图需要 --out PATH") }
             value = try await tab.screenshot(path: path, element: r.options["element"], fullPage: r.options["full-page"] == "true")
         case "upload": value = try await tab.upload(target: arg(0), paths: Array(r.args.dropFirst()))
         default: throw BrowserError("unknown_command", "未知命令")
+        }
+        if r.options["fail-on-http-error"] == "true", let status = tab.state["httpStatus"] as? Int, status >= 400 {
+            throw BrowserError("http_error", "主文档 HTTP \(status)；使用 state 查看响应 URL 和导航 ID")
         }
         var result: [String: Any] = ["spaceId": id.uuidString, "space": space.record.name, "proxy": space.record.proxy, "network": space.networkState, "page": tab.state, "value": value]
         if let frameID = r.options["frame"] {

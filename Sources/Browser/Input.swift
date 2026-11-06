@@ -7,6 +7,11 @@ extension BackgroundKey {
         case .tab: return ("\t", "\t", 48, [])
         case .escape: return ("\u{1b}", "\u{1b}", 53, [])
         case .left: return ("\u{f702}", "\u{f702}", 123, [])
+        case .right: return ("\u{f703}", "\u{f703}", 124, [])
+        case .up: return ("\u{f700}", "\u{f700}", 126, [])
+        case .down: return ("\u{f701}", "\u{f701}", 125, [])
+        case .backspace: return ("\u{7f}", "\u{7f}", 51, [])
+        case .delete: return ("\u{f728}", "\u{f728}", 117, [])
         case .shiftLeft: return ("\u{f702}", "\u{f702}", 123, .shift)
         case .optionLeft: return ("\u{f702}", "\u{f702}", 123, .option)
         case .controlB: return ("\u{2}", "b", 11, .control)
@@ -70,6 +75,7 @@ extension Tab {
         state.removeValue(forKey: "epoch")
         state["nativeVerified"] = false
         state["physicalInput"] = false
+        state["userActivationVerified"] = false
         state["businessOutcomeVerified"] = false
         state["requiresForeground"] = false
         return state

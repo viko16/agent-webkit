@@ -61,6 +61,8 @@ Apple 的 [WWDC23 Network Relay 介绍](https://developer.apple.com/videos/play/
 
 结论：公开 AppKit 路线足以实现一部分后台键盘行为。正式 CLI 已提供显式绑定 Space/Tab 的有限 focus/key，区分 DOM 焦点、宿主 responder、事件送达和业务成功；逐键核对结果，有界等待后观察，不能重放副作用。用法与当前覆盖见[后台 focus/key](DEVELOPMENT.md#后台-focuskey)。原独立实验中的 hover requiresForeground 仍是人工回退策略，不证明所有公开 API 都不可能，也没有自动前台输入。WebKit 对本机宿主构造事件的可信标记不扩展为物理输入或所有受限 API 可用。
 
+#13 在同一系统版本重跑了 hover 与 Command+A 实验，并在观察窗口宿主中补做 iframe 实验。同源与跨源 iframe 均可通过文档 ID 聚焦输入框，顶层 activeElement 指向对应 iframe，定向 Shift+X 使子文档收到按键并插入 X。将焦点移回主文档后，相同的 AppKit 调用改写主文档输入框。AppKit 事件只能定向到 WebView，公开入口无法在派发时约束到已检查的 iframe 文档。因此 CLI 继续拒绝 iframe focus/key。复现命令为 `python3 tests/input_probe.py` 和 `python3 tests/reliability.py --keyboard-only`。
+
 原独立实验未验证可见但非激活窗口；正式 focus/key 回归补充了 GUI 重挂载和地址栏编辑保护。前台原生输入、任意站点/OS/键盘布局、IME/组合文本、跨源 frame、富文本编辑器、系统/浏览器快捷键、剪贴板、授权面板及用户激活门控 API 仍未全面验证。拖拽留作可选后续范围，不请求辅助功能或输入监控权限。
 
 ## 代理实验结论

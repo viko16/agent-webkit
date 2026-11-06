@@ -13,6 +13,10 @@ final class DiagnosticLog: NSObject {
     private var detailDeadline: UInt64?
     private var expiryTask: Task<Void, Never>?
     private var navigationID = UUID().uuidString
+    private var treeNavigations: [String: String] = [:]
+    private var continuous = false
+    private var includeInfo = false
+    var captureConfigurationChanged: (() -> Void)?
 
     var detailGeneration: String? {
         // Background timers can be coalesced. Never accept or expose details past their deadline.
@@ -21,11 +25,20 @@ final class DiagnosticLog: NSObject {
         return generation
     }
 
-    func setDetail(_ enabled: Bool) {
+    var configuration: [String: Any]? {
+        guard let generation = detailGeneration, let detailExpiry else { return nil }
+        return ["generation": generation, "expiresAtMs": detailExpiry.timeIntervalSince1970 * 1000, "includeInfo": includeInfo]
+    }
+
+    var documentStartConfiguration: [String: Any]? { continuous ? configuration : nil }
+
+    func setDetail(_ enabled: Bool, continuous: Bool = false, includeInfo: Bool = false) {
         expiryTask?.cancel(); expiryTask = nil
         // Disabling also erases details already retained; preserve the existing summary ring.
         for index in events.indices { events[index].removeValue(forKey: "detail") }
         generation = enabled ? UUID().uuidString : nil
+        self.continuous = enabled && continuous
+        self.includeInfo = enabled && includeInfo
         detailExpiry = enabled ? Date().addingTimeInterval(300) : nil
         detailDeadline = enabled ? monotonicNow() + 300_000_000_000 : nil
         if enabled {
@@ -34,11 +47,34 @@ final class DiagnosticLog: NSObject {
                 self?.setDetail(false)
             }
         }
+        captureConfigurationChanged?()
     }
 
-    func beginNavigation() {
-        setDetail(false)
-        navigationID = UUID().uuidString
+    func beginNavigation(id: UUID?) {
+        if !continuous, generation != nil { setDetail(false) }
+        navigationID = (id ?? UUID()).uuidString
+    }
+
+    private static func documentIdentifier(_ raw: Any?) -> String? {
+        guard let value = raw as? String, value.utf8.count == 32,
+              value.allSatisfy({ $0.isASCII && $0.isHexDigit }) else { return nil }
+        return value
+    }
+
+    func associateDocumentTree(_ raw: Any?, navigation: UUID) {
+        guard let tree = Self.documentIdentifier(raw), treeNavigations[tree] == nil else { return }
+        if treeNavigations.count == Self.limit, let first = treeNavigations.keys.first {
+            treeNavigations.removeValue(forKey: first)
+        }
+        let id = navigation.uuidString
+        treeNavigations[tree] = id
+        for index in events.indices where events[index]["documentTreeId"] as? String == tree {
+            events[index]["navigationId"] = id
+            if var detail = events[index]["detail"] as? [String: Any] {
+                detail["navigationId"] = id
+                events[index]["detail"] = detail
+            }
+        }
     }
 
     // Deliberately limited locator: no credentials, query, hash or dynamic path components.
@@ -84,8 +120,9 @@ final class DiagnosticLog: NSObject {
         events.append(event)
     }
 
-    func native(_ kind: String, url: URL?, error: Error? = nil, cause: BrowserError? = nil, duration: Double? = nil, status: Int? = nil) {
-        var fields: [String: Any] = ["kind": kind, "origin": Self.origin(url)]
+    func native(_ kind: String, url: URL?, error: Error? = nil, cause: BrowserError? = nil, duration: Double? = nil, status: Int? = nil, navigationId: UUID? = nil) {
+        let id = navigationId?.uuidString ?? navigationID
+        var fields: [String: Any] = ["kind": kind, "origin": Self.origin(url), "navigationId": id]
         if let duration { fields["durationMs"] = duration }
         if let status { fields["status"] = status }
         if let error {
@@ -103,26 +140,36 @@ final class DiagnosticLog: NSObject {
                 let message = error.localizedDescription.isEmpty ? fields["reason"] as? String ?? "error" : error.localizedDescription
                 fields["detail"] = ["message": Self.redact(message),
                                     "resource": url.map { Self.resource($0.absoluteString) } ?? "opaque",
-                                    "navigationId": navigationID]
+                                    "navigationId": id]
             }
         }
         append(fields, source: "webkit")
     }
 
-    func receive(_ body: Any) {
+    func receive(_ body: Any, mainFrame: Bool) {
         guard let batch = body as? [String: Any], let entries = batch["events"] as? [[String: Any]] else { return }
+        let generation = detailGeneration
+        // Child diagnostics are opt-in and are discarded completely after disable or expiry.
+        guard mainFrame || (continuous && generation != nil && batch["generation"] as? String == generation) else { return }
+        let documentID = Self.documentIdentifier(batch["documentId"])
+        let treeID = Self.documentIdentifier(batch["documentTreeId"])
+        let nativeNavigation = treeID.flatMap { treeNavigations[$0] }
         if let count = batch["dropped"] as? Double, count.isFinite, count > 0 { dropped += Int(min(count, 1_000_000)) }
         dropped += max(0, entries.count - 100)
         // The page can forge this channel. Whitelist every retained field; never copy arbitrary data.
         let enums: [String: Set<String>] = [
             "kind": ["capture-ready", "console", "exception", "unhandled-rejection", "resource-error", "fetch", "xhr"],
-            "level": ["warn", "error"],
+            "level": includeInfo ? ["warn", "error", "log", "info"] : ["warn", "error"],
             "errorType": ["TypeError", "RangeError", "ReferenceError", "SyntaxError", "Error", "other"],
             "outcome": ["response", "rejected", "abort", "timeout", "error"],
             "resourceType": ["img", "script", "link", "audio", "video", "other"]]
         for entry in entries.prefix(100) {
             guard let kind = entry["kind"] as? String, enums["kind"]!.contains(kind) else { continue }
-            var fields: [String: Any] = ["kind": kind]
+            if kind == "console", let level = entry["level"] as? String, !enums["level"]!.contains(level) { continue }
+            var fields: [String: Any] = ["kind": kind, "mainFrame": mainFrame]
+            fields["documentId"] = documentID
+            fields["documentTreeId"] = treeID
+            fields["navigationId"] = nativeNavigation
             for (key, choices) in enums {
                 if let value = entry[key] as? String, choices.contains(value) { fields[key] = value }
             }
@@ -132,9 +179,9 @@ final class DiagnosticLog: NSObject {
             if let raw = entry["origin"] as? String, raw.count <= 2048 {
                 fields["origin"] = Self.origin(URL(string: raw))
             }
-            if let generation = detailGeneration, entry["generation"] as? String == generation,
+            if let generation, entry["generation"] as? String == generation,
                let raw = entry["detail"] as? [String: Any] {
-                var detail: [String: Any] = ["navigationId": navigationID]
+                var detail: [String: Any] = ["navigationId": nativeNavigation as Any? ?? NSNull()]
                 if let message = raw["message"] as? String { detail["message"] = Self.redact(message) }
                 if let frames = raw["stack"] as? [String] { detail["stack"] = frames.prefix(8).map { Self.redact($0, limit: 256) } }
                 if let resource = raw["resource"] as? String {
@@ -144,7 +191,7 @@ final class DiagnosticLog: NSObject {
                 }
                 if let request = raw["requestId"] as? String,
                    request.range(of: "^(fetch|xhr)-[0-9]{1,10}$", options: .regularExpression) != nil {
-                    detail["requestId"] = generation + ":" + request
+                    detail["requestId"] = generation + ":" + (documentID ?? "unknown") + ":" + request
                 }
                 fields["detail"] = detail
             }
@@ -158,11 +205,14 @@ final class DiagnosticLog: NSObject {
         return ["events": events, "limit": Self.limit, "droppedEvents": dropped,
             "redacted": true, "persistent": false, "routeVerified": false,
             "detail": ["enabled": enabled, "expiresAtMs": detailExpiry.map { $0.timeIntervalSince1970 * 1000 } as Any? ?? NSNull(),
-                       "scope": "current-document", "maximumDurationMs": 300000, "messageLimit": 512, "stackLimit": 8],
+                       "scope": continuous ? "tab-across-navigation" : "current-document", "includeInfo": includeInfo,
+                       "maximumDurationMs": 300000, "messageLimit": 512, "stackLimit": 8],
             "coverage": ["native": "main-frame navigation responses/failures, operation deadlines and content termination",
-                         "pageScript": "main-frame console.warn/error, exceptions, unhandled rejection, resource error, fetch and XHR"],
+                         "pageScript": continuous ? "document-start capture in main frame and iframes; console, exceptions, unhandled rejection, resource error, fetch and XHR"
+                                                  : "main-frame console.warn/error, exceptions, unhandled rejection, resource error, fetch and XHR"],
             "limitations": ["Page-script entries can be forged, replaced or suppressed; they do not prove proxy routing.",
-                "No frames, workers, WebSocket messages, complete resource trace or response bodies.",
+                "Page events carry a document ID and a document tree ID when observed. The navigation ID is attached only when the committed main document can be correlated; frame handshakes can be lost.",
+                "No workers, WebSocket messages, complete resource trace or response bodies. Existing frames are enabled best-effort; page-cache restores may miss initialization.",
                 "Fetch rejection may be network, CORS or policy failure; status 0 does not prove a failed request.",
                 "Page batches may be delayed or lost on navigation/termination; clear only removes entries already received.",
                 !enabled ? "Origins only; free-form messages, stacks and URL paths are omitted."
@@ -177,22 +227,47 @@ final class DiagnosticRouter: NSObject, WKScriptMessageHandler {
     static let shared = DiagnosticRouter()
     let logs = NSMapTable<WKWebView, DiagnosticLog>.weakToWeakObjects()
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard message.frameInfo.isMainFrame, let view = message.webView else { return }
-        logs.object(forKey: view)?.receive(message.body)
+        guard let view = message.webView else { return }
+        logs.object(forKey: view)?.receive(message.body, mainFrame: message.frameInfo.isMainFrame)
     }
 }
 
 enum DiagnosticScript {
     static let name = "agentWebKitDiagnostics"
+    static func source(configuration: [String: Any]?) -> String {
+        guard let configuration, let data = try? jsonData(configuration) else { return source }
+        return source.replacingOccurrences(of: "/* document-start mode */ null", with: String(decoding: data, as: UTF8.self))
+    }
+
     static let source = #"""
     (() => {
       const post=window.webkit.messageHandlers.agentWebKitDiagnostics.postMessage.bind(window.webkit.messageHandlers.agentWebKitDiagnostics);
       const now=performance.now.bind(performance), apply=Reflect.apply;
       const URLType=URL, queue=[];
-      let dropped=0, timer=null, mode=null, requestSequence=0;
+      const mainFrame=window===window.top;
+      let dropped=0, timer=null, mode=/* document-start mode */ null, requestSequence=0;
+      if(!mainFrame && !mode)return;
+      const newId=()=>Array.from(crypto.getRandomValues(new Uint8Array(16)),n=>n.toString(16).padStart(2,'0')).join('');
+      const documentId=newId();
+      let documentTreeId=mainFrame?documentId:null;
+      Object.defineProperty(window,'__agentWebKitDiagnosticTreeId',{get:()=>documentTreeId});
+      const handshake='__agentWebKitDiagnosticTree';
+      if(mainFrame) addEventListener('message',event=>{
+        if(active() && event.data===handshake && event.source && event.source!==window)
+          event.source.postMessage({[handshake]:documentTreeId},'*');
+      });
+      else addEventListener('message',event=>{
+        if(event.source===window.top && typeof event.data?.[handshake]==='string')
+          documentTreeId=event.data[handshake];
+      });
+      function requestTree() {
+        if(!mainFrame && active()) window.top.postMessage(handshake,'*');
+      }
       Object.defineProperty(window,'__agentWebKitDiagnosticMode',{configurable:true,value:config=>{
         if(timer!==null)clearTimeout(timer);
         flush(); mode=config;
+        installInfoHooks();
+        requestTree();
         return mode?.generation||null;
       }});
       function active() { return mode && Date.now()<mode.expiresAtMs; }
@@ -232,10 +307,12 @@ enum DiagnosticScript {
       function flush() {
         timer=null;
         const events=queue.splice(0), lost=dropped; dropped=0;
-        try { post({events,dropped:lost}); } catch (_) {}
+        if(!events.length && !lost)return;
+        try { post({events,dropped:lost,documentId,documentTreeId,generation:mode?.generation}); } catch (_) {}
       }
       function emit(event) {
         try {
+          if(!mainFrame && !active())return;
           if(queue.length<100) queue.push({...event,pageTimeMs:now()}); else dropped++;
           if(timer===null) timer=setTimeout(flush,100);
         } catch (_) {}
@@ -246,9 +323,10 @@ enum DiagnosticScript {
         } catch (_) {}
         return 'other';
       }
-      for(const level of ['warn','error']) {
+      function wrapConsole(level) {
         const original=console[level];
         console[level]=function(...args) {
+          if((level==='log'||level==='info') && !(active() && mode.includeInfo)) return apply(original,this,args);
           let extra={};
           if(active()) {
             try {
@@ -261,6 +339,14 @@ enum DiagnosticScript {
           return apply(original,this,args);
         };
       }
+      let infoHooksInstalled=false;
+      function installInfoHooks() {
+        if(!mode?.includeInfo || infoHooksInstalled)return;
+        infoHooksInstalled=true;
+        for(const level of ['log','info']) wrapConsole(level);
+      }
+      for(const level of ['warn','error']) wrapConsole(level);
+      installInfoHooks();
       addEventListener('error',event=>{
         try {
           if(event.target===window) emit({kind:'exception',errorType:errorType(event.error),origin:origin(event.filename),line:event.lineno,column:event.colno,...details(event.message,event.error,event.filename)});
@@ -326,6 +412,12 @@ enum DiagnosticScript {
         try { return apply(send,this,args); } catch(error) { clean(); throw error; }
       };
       addEventListener('pagehide',()=>{if(timer!==null)clearTimeout(timer);flush();});
+      addEventListener('pageshow',event=>{
+        if(!event.persisted)return;
+        documentTreeId=mainFrame?newId():null;
+        requestTree();
+      });
+      requestTree();
       emit({kind:'capture-ready',origin:origin(location.href)});
     })();
     """#

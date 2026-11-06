@@ -38,9 +38,32 @@ def verify_navigation_failures(cli, base, out, events):
         return {d['id'] for d in command('download', 'list')['value']['downloads']}
 
     try:
+        direct = command('open', base)['page']
+        assert direct['httpStatus'] == 200 and direct['responseURL'] == base and direct['navigationPhase'] == 'finished', direct
+        redirect = urljoin(base, '/download-redirect?' + urlencode(dict(to=base)))
+        redirected = command('open', redirect)['page']
+        assert redirected['httpStatus'] == 200 and redirected['responseURL'] == base and redirected['redirectCount'] == 1, redirected
+        assert redirected['navigationId'] != direct['navigationId']
+        history_page = urljoin(base, '/diagnostic-status?status=200')
+        command('open', history_page)
+        js('history.back(); true')
+        command('wait', '--url', base)
+        assert command('wait')['page']['httpStatus'] == 200
+        js('history.forward(); true')
+        command('wait', '--url', history_page)
+        assert command('wait')['page']['responseURL'] == history_page
+        for status in (401, 404, 500):
+            url = urljoin(base, f'/diagnostic-status?status={status}')
+            page = command('open', url)['page']
+            assert page['httpStatus'] == status and page['responseURL'] == url and page['navigationPhase'] == 'finished', page
+            command('reload', '--fail-on-http-error', error='http_error')
+            strict = command('state')['page']
+            assert strict['httpStatus'] == status and strict['navigationId'] != page['navigationId'], strict
         command('open', base)
         js('window.noNavigationClicks=0;const b=document.createElement("button");b.id="no-navigation";b.onclick=()=>noNavigationClicks++;document.body.append(b);true')
         command('open', 'http://127.0.0.1:1/old-failure', error='operation_failed')
+        failed = command('state')['page']
+        assert failed['navigationPhase'] == 'provisional-failure' and failed['httpStatus'] is None and failed['responseURL'] is None, failed
         old_error = command('state')['page']['lastError']
         started = time.monotonic()
         command('click', '#no-navigation', '--wait-for-navigation', '--timeout', '150', error='timeout')
@@ -86,7 +109,8 @@ def verify_navigation_failures(cli, base, out, events):
             before_ids = download_ids()
             before_requests = requests(attachment)
             if kind == 'open':
-                command('open', attachment)
+                download = command('open', attachment)['page']
+                assert download['navigationPhase'] == 'download' and download['httpStatus'] == 200 and download['responseURL'] == attachment, download
             elif kind == 'frame':
                 js('const f=document.createElement("iframe");f.id="download-frame";document.body.append(f);true')
                 command('wait', '#download-frame >>> body', '--state', 'attached')

@@ -1,5 +1,6 @@
 """Wait for observable outcomes without client-side sleeps or action replay."""
 from urllib.parse import urljoin
+import time
 
 
 def verify_waits(cli, base):
@@ -41,6 +42,17 @@ def verify_waits(cli, base):
         destination = base + '?completed=1#done'
         js('setTimeout(()=>history.pushState({},"", "?completed=1#done"),150); true')
         command('wait', '--url', destination)
+        command('wait', '--url-pattern', base + '*#done', '--stable-for', '100')
+        command('wait', '--url-pattern', base + '*#missing', '--timeout', '120', error='timeout')
+        js('window.readyForTest=true; setTimeout(()=>readyForTest=false,130); true')
+        command('wait', '--fn', '() => window.readyForTest', '--stable-for', '220', '--timeout', '350', error='timeout')
+        js('fetch("/resource?delay=0.2").then(r=>r.json()).then(r=>{window.readyForTest=!!r.nonce}); true')
+        started = time.monotonic()
+        command('wait', '--fn', '() => window.readyForTest', '--stable-for', '200')
+        assert time.monotonic() - started >= .3, 'Wait returned before the API and stability interval'
+        command('wait', '--fn', 'async () => true', error='javascript_error')
+        command('wait', '#message', '--fn', '() => true', error='invalid_arguments')
+        command('wait', '--stable-for', '200', '--timeout', '100', error='invalid_arguments')
         command('wait', '--url', base, '--timeout', '120', error='timeout')
         js('setTimeout(()=>location.href="?navigation=1",150); true')
         command('wait', '--url', base + '?navigation=1')
@@ -49,6 +61,10 @@ def verify_waits(cli, base):
         command('fill', '#frame >>> #same', 'frame result')
         command('click', '#frame >>> #save')
         command('wait', '#frame >>> #result', '--text', 'frame result')
+        tab_id = command('state')['page']['tabId']
+        frames = command('frame', 'list', '--tab', tab_id)['value']['frames']
+        same_frame = next(frame['frameId'] for frame in frames if '/context-frame' in frame['url'] and frame['url'].startswith(base.split('/index.html')[0]))
+        command('wait', '--tab', tab_id, '--frame', same_frame, '--fn', '() => document.querySelector("#result").textContent === "frame result"')
         command('fill', '#host >>> input', 'shadow result')
         command('click', '#host >>> button')
         command('wait', '#host >>> output', '--text', 'shadow result')

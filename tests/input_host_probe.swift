@@ -11,6 +11,93 @@ final class InputHostProbe: NSObject, NSApplicationDelegate {
         Task { await run() }
     }
 
+    func verifyViewport(_ tab: Tab, observer: ObserverWindow, directory: URL) async throws {
+        guard let host = tab.webView.superview else { throw BrowserError("probe_failed", "no observer host") }
+        tab.setViewport(NSSize(width: 680, height: 460))
+        func capture(_ phase: String) async throws -> [String: Any] {
+            let state = try await tab.runJS("[innerWidth,innerHeight,getComputedStyle(document.querySelector('#breakpoint'),'::before').content]") as? [Any]
+            guard state?[0] as? Int == 680, state?[1] as? Int == 460, state?[2] as? String == "\"narrow\"" else {
+                throw BrowserError("probe_failed", "viewport/breakpoint changed during \(phase): \(String(describing: state))")
+            }
+            let shot = try await tab.screenshot(path: directory.appendingPathComponent("viewport-\(phase).png").path)
+            return ["width": shot["width"]!, "height": shot["height"]!]
+        }
+        let observed = try await capture("selected")
+        let originalWindowFrame = observer.window.frame
+        let originalHostSize = host.bounds.size
+        observer.window.orderBack(nil)
+        observer.window.setContentSize(NSSize(width: 880, height: 430))
+        observer.window.contentView?.layoutSubtreeIfNeeded()
+        guard originalHostSize != host.bounds.size else { throw BrowserError("probe_failed", "test did not resize the observer host") }
+        let resized = try await capture("resized")
+        observer.window.orderOut(nil)
+        tab.park()
+        let parked = try await capture("parked")
+        tab.mount(in: host)
+        observer.window.setFrame(originalWindowFrame, display: true)
+        guard try jsonData(observed) == jsonData(resized), try jsonData(observed) == jsonData(parked) else {
+            throw BrowserError("probe_failed", "screenshot dimensions changed with observer geometry")
+        }
+    }
+
+    func probeFrameInput(_ tab: Tab, page: URL) async throws -> [[String: Any]] {
+        var cross = URLComponents(url: page, resolvingAgainstBaseURL: false)!
+        cross.host = "localhost"; cross.path = "/context-frame"; cross.query = "probe=cross"
+        _ = try await tab.runJS("document.body.insertAdjacentHTML('beforeend','<iframe id=cross-frame></iframe>'); document.querySelector('#cross-frame').src=\(try quoteJS(cross.string!));true")
+        let crossPattern = cross.string!
+        try await tab.wait(selector: nil, timeout: 5000)
+        var results: [[String: Any]] = []
+        let frameScript = "({value:document.querySelector('#same').value, active:document.activeElement?.id, keys:window.frameProbeKeys})"
+        for (id, crossOrigin) in [("frame", false), ("cross-frame", true)] {
+            var document: [String: Any]?
+            for _ in 0..<50 {
+                let documents = try await tab.frameList()["frames"] as? [[String: Any]] ?? []
+                document = documents.first { row in
+                    guard row["mainFrame"] as? Bool == false, let url = row["url"] as? String else { return false }
+                    return crossOrigin ? url == crossPattern : url.hasSuffix("/context-frame")
+                }
+                if document != nil { break }
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+            guard let frameID = document?["frameId"] as? String, let window = tab.webView.window else {
+                throw BrowserError("probe_failed", "iframe probe document unavailable: \(id) \(try await tab.frameList())")
+            }
+            _ = try await tab.runJS("window.frameProbeKeys=[];document.addEventListener('keydown',e=>frameProbeKeys.push([e.key,e.isTrusted])); window.__agentWebKit.focus('#same')",
+                                    world: DOM.world, frameID: frameID)
+            guard window.makeFirstResponder(tab.webView),
+                  try await tab.runJS("document.activeElement?.id") as? String == id else {
+                throw BrowserError("probe_failed", "iframe is not the main document's active element")
+            }
+            func send() {
+                let key = BackgroundKey.shiftX.event
+                for type in [NSEvent.EventType.keyDown, .keyUp] {
+                    let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: key.modifiers,
+                        timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+                        characters: key.characters, charactersIgnoringModifiers: key.ignoring, isARepeat: false, keyCode: key.code)!
+                    if type == .keyDown { tab.webView.keyDown(with: event) } else { tab.webView.keyUp(with: event) }
+                }
+            }
+            send()
+            let routed = try await tab.runJS(frameScript, world: DOM.world, frameID: frameID)
+            _ = try await tab.runJS("document.querySelector('#first').focus();true")
+            let afterFocusMoved = try await tab.runJS(frameScript, world: DOM.world, frameID: frameID)
+            send()
+            let afterDispatch = try await tab.runJS(frameScript, world: DOM.world, frameID: frameID)
+            let mainInput = try await tab.runJS("document.querySelector('#first').value")
+            guard let routedState = routed as? [String: Any],
+                  routedState["value"] as? String == "X", routedState["active"] as? String == "same",
+                  try jsonData(routedState["keys"] ?? NSNull()) == jsonData([["X", true] as [Any]]),
+                  try jsonData(afterFocusMoved) == jsonData(afterDispatch),
+                  (mainInput as? String)?.hasSuffix("X") == true else {
+                throw BrowserError("probe_failed", "unexpected native event route for \(id)")
+            }
+            _ = try await tab.runJS("document.querySelector('#first').value='alpha beta';true")
+            results.append(["crossOrigin": crossOrigin, "routed": routed, "afterFocusMoved": afterFocusMoved,
+                            "afterDispatch": afterDispatch, "mainValueAfterDispatch": mainInput])
+        }
+        return results
+    }
+
     func run() async {
         let output = URL(fileURLWithPath: CommandLine.arguments[2])
         var model: BrowserModel?
@@ -40,6 +127,7 @@ final class InputHostProbe: NSObject, NSApplicationDelegate {
             try await tab.wait(selector: nil, timeout: 5000)
             try await tab.wait(selector: "#first", timeout: 5000)
             guard tab.webView.window === ui.window else { throw BrowserError("probe_failed", "view was not reparented into GUI") }
+            try await verifyViewport(tab, observer: ui, directory: output.deletingLastPathComponent())
             ui.focusAddress(nil)
             guard let editor = ui.window.firstResponder as? NSTextView else { throw BrowserError("probe_failed", "address editor did not accept focus") }
             editor.string = "unfinished-address"
@@ -152,6 +240,7 @@ final class InputHostProbe: NSObject, NSApplicationDelegate {
                   !NSApp.isActive, !ui.window.isKeyWindow else {
                 throw BrowserError("probe_failed", "GUI key or background invariants failed")
             }
+            let iframeInput = try await probeFrameInput(tab, page: URL(string: CommandLine.arguments[1])!)
             tab.deadline = monotonicNow() + 50_000_000
             do {
                 _ = try await tab.runJS("new Promise(resolve=>{window.releaseLateInputProbe=()=>{window.lateInputCount=1;resolve(1)}})", awaitPromise: true)
@@ -163,7 +252,7 @@ final class InputHostProbe: NSObject, NSApplicationDelegate {
                 tab.webView.evaluateJavaScript("releaseLateInputProbe()", completionHandler: nil)
             }
             guard tab.unresponsive else { throw BrowserError("probe_failed", "late callback changed timeout state") }
-            report = ["ok": true, "guiReparented": true, "addressDraftPreserved": true,
+            report = ["ok": true, "guiReparented": true, "fixedViewportVerified": true, "iframeInputProbe": iframeInput, "addressDraftPreserved": true,
                       "sidebarResponderPreserved": true, "rejectedKeyHasNoEffect": true,
                       "foregroundGUIVerified": foregroundTest,
                       "sidebarArrowNavigationPreserved": true, "concurrentTabSwitchRejected": true,

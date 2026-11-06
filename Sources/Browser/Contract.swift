@@ -10,6 +10,7 @@ enum CLIContract {
         "upload": ["SELECTOR_OR_REF"] + (1...16).map { "FILE_PATH_\($0)" },
         "tab.new": ["URL"], "tab.close": ["ID"], "tab.default": ["ID"],
         "open": ["URL"], "evaluate": ["JAVASCRIPT"], "click": ["SELECTOR_OR_REF"],
+        "viewport.set": ["WIDTH", "HEIGHT"],
         "fill": ["SELECTOR_OR_REF", "VALUE"], "focus": ["SELECTOR_OR_REF"], "key": ["KEY"], "wait": ["SELECTOR_OR_REF"], "dialog.respond": ["ID", "ACTION"]
     ]
     private static let optionDetails: [String: [String: Any]] = [
@@ -29,11 +30,16 @@ enum CLIContract {
         "await": ["type": "flag", "description": "Await the evaluated Promise within timeout"],
         "wait-for-navigation": ["type": "flag", "description": "Wait for top-level document navigation after one DOM click; incompatible with --frame; for child navigation, click once then rediscover the new frame document and wait for its condition; not business verification"],
         "wait-for-popup": ["type": "flag", "description": "Wait for same-Space popup; value.newTabId identifies it, not login success"],
+        "fail-on-http-error": ["type": "flag", "description": "After navigation, report http_error for a main-frame HTTP status of 400 or greater; state retains the response"],
         "url": ["type": "string", "description": "Nonempty exact location.href, including SPA query/hash"],
+        "url-pattern": ["type": "string", "description": "POSIX glob matched against the entire location.href, including SPA query/hash; up to 512 bytes"],
+        "fn": ["type": "string", "description": "Caller-supplied synchronous JS predicate returning a boolean, sampled repeatedly; use side-effect-free code; up to 4096 bytes; --frame uses the isolated DOM world"],
+        "stable-for": ["type": "integer", "unit": "ms", "minimum": 1, "maximum": 60000, "description": "Sample the same condition as true for this interval within timeout; a false sample or document change resets it"],
         "text": ["type": "string", "description": "wait: nonempty visible innerText substring; dialog respond: prompt input (empty allowed), only with accept"],
         "state": ["type": "string", "enum": ["visible", "hidden", "attached", "detached", "enabled", "disabled"]],
         "clear": ["type": "flag", "description": "Clear received in-memory diagnostics before returning the snapshot"],
-        "detail": ["type": "string", "enum": ["on", "off"], "description": "Opt-in bounded redacted details for this Tab's current document, at most 300000 ms; navigation/restart resets; off erases retained details"],
+        "detail": ["type": "string", "enum": ["on", "continuous", "off"], "description": "Redacted details for the current document (on) or across navigations and iframes (continuous, requires explicit --tab); 300000 ms per activation; re-enable starts fresh; off erases retained details"],
+        "include-info": ["type": "flag", "description": "Include console.log/info when enabling detail"],
         "inspectable": ["type": "string", "enum": ["on", "off"], "description": "Public WKWebView.isInspectable for manual Safari investigation; off by default; no automatic Inspector launch; resets with view replacement/close/restart"]
     ]
 
@@ -50,7 +56,7 @@ enum CLIContract {
         if name == "space.create" { keys.append("proxy") }
         if name == "screenshot" { keys.append("out") }
         if name == "shutdown" { keys.append("all") }
-        if ["focus", "key"].contains(name) { keys.append("tab") }
+        if Request.explicitTabCommands.contains(name) { keys.append("tab") }
         return keys
     }
 
@@ -126,11 +132,12 @@ enum CLIContract {
                 "frame": ["requires": ["tab"], "commands": ["snapshot", "click", "fill", "wait"]],
                 "click": ["mutuallyExclusive": [["wait-for-navigation", "wait-for-popup"], ["frame", "wait-for-navigation"]]],
                 "screenshot": ["mutuallyExclusive": [["element", "full-page"]]],
+                "viewport.set": ["minimum": 100, "maximum": 4096, "persistsAcrossSleepOrRestart": false],
                 "space.create": ["mutuallyExclusive": [["ca-cert", "ignore-certificate-errors"]]],
-                "diagnostics": ["mutuallyExclusive": [["detail", "inspectable"]]],
+                "diagnostics": ["mutuallyExclusive": [["detail", "inspectable"]], "continuousRequires": ["tab"], "includeInfoRequiresDetail": ["on", "continuous"]],
                 "dialog.respond": ["actions": ["accept", "dismiss"], "textRequires": ["type": "prompt", "action": "accept"]],
-                "wait": ["mutuallyExclusive": [["url", "text", "state"]],
-                         "urlRequiresNoSelector": true, "stateRequiresSelector": true],
+                "wait": ["mutuallyExclusive": [["url", "url-pattern", "fn", "text", "state"]],
+                         "urlRequiresNoSelector": true, "requiresNoSelector": ["url", "url-pattern", "fn"], "stateRequiresSelector": true],
                 "cli": ["literalSeparator": "--", "duplicateOptions": "rejected", "help": "awb help [COMMAND [SUBCOMMAND]]"]
             ],
             "schemas": [
@@ -175,7 +182,8 @@ enum CLIContract {
                 "hover": ["backgroundVerified": false, "requiresForeground": true, "automaticForegroundInput": false],
                 "snapshot": "same-origin frames and open shadow roots; frame list + explicit --tab/--frame selects cross-origin or nested documents for snapshot/click/fill/wait; >>> does not cross origins; closed roots unsupported",
                 "frames": "128 most recently registered documents per Tab; opaque host-issued document IDs, epoch checked in the same JS turn as each operation; list validates live targets; no inferred parent routing; frame coordinates/visibility stay document-local; no --frame for evaluate/screenshots/upload",
-                "screenshot": "viewport, --element or bounded --full-page PNG; mode/range and pixel dimensions; scroll restoration; full-page uses viewport tiles, reports best-effort consistency and fixed/lazy/virtualized/nested-scroll limits; no foreground activation",
+                "screenshot": "viewport, --element or bounded --full-page PNG; CSS viewport, range, image pixels and pixels per CSS px; scroll restoration; full-page uses viewport tiles, reports best-effort consistency and fixed/lazy/virtualized/nested-scroll limits; no foreground activation",
+                "viewport": "viewport set pins the Tab independently of observer geometry; unset uses 1000 × 700 in the background and fits the observer; viewport get reports measured CSS dimensions separately from view points",
                 "recovery": "never automatically replay actions after timeout; inspect state/diagnostics; explicit reload/open can replace unresponsive view retaining Tab ID and Space data",
                 "proxy": "direct rejects enabled system proxy; no VPN/content-filter bypass; loopback routing unverified; routeVerified=false",
                 "dialogs": "explicit per-Space/Tab list/respond; no automatic confirm acceptance; queries and replies work while busy; deadlines dismiss safely; no foreground activation",
@@ -192,7 +200,7 @@ enum CLIContract {
         "already_running", "certificate_rejected", "data_removal_failed", "data_removal_timeout", "data_store_removal_timeout", "download_not_found", "download_failed",
         "download_cancel_timeout", "download_file_limit", "download_space_limit", "download_total_limit", "download_disk_limit", "download_budget_unavailable", "download_budget_timeout",
         "file_unreadable", "upload_too_large", "unsupported_upload_target", "upload_multiple_not_allowed", "upload_unavailable", "unsupported_screenshot_geometry", "screenshot_changed", "screenshot_too_large",
-        "direct_system_proxy_conflict", "diagnostics_unavailable", "dialog_not_found", "dialog_already_handled", "dialog_expired", "dialog_cancelled", "dialog_capacity", "element_not_actionable", "element_not_editable", "element_readonly",
+        "direct_system_proxy_conflict", "diagnostics_unavailable", "dialog_not_found", "dialog_already_handled", "dialog_expired", "dialog_cancelled", "dialog_capacity", "element_not_actionable", "element_not_editable", "element_readonly", "http_error",
         "invalid_arguments", "invalid_certificate", "invalid_json_result", "invalid_name", "invalid_option",
         "invalid_proxy", "invalid_response", "invalid_selector", "invalid_timeout", "invalid_url", "ipc_error",
         "javascript_error", "last_tab", "message_too_large", "not_ready", "operation_failed", "persistence_failed", "png_failed", "resource_limit", "server_busy",

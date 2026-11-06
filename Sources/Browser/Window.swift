@@ -215,6 +215,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         retry.target = self; retry.action = #selector(reloadPage); retry.bezelStyle = .rounded
         [warning, bannerText, retry].forEach { banner.addArrangedSubview($0) }
         host.setContentHuggingPriority(.defaultLow, for: .vertical)
+        host.clipsToBounds = true
         host.heightAnchor.constraint(greaterThanOrEqualToConstant: 160).isActive = true
         let footer = NSStackView(views: [status, NSView(), security])
         footer.orientation = .horizontal; footer.edgeInsets = NSEdgeInsets(top: 6, left: 14, bottom: 6, right: 14)
@@ -442,8 +443,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
                     guard let self else { return false }
                     return self.editingAddress || (self.window.isKeyWindow && self.search.currentEditor() != nil)
                 }
-                tab.webView.removeFromSuperview(); host.addSubview(tab.webView)
-                tab.webView.frame = host.bounds; tab.webView.autoresizingMask = [.width, .height]
+                tab.mount(in: host)
             }
         }
         tab?.webView.isHidden = blank

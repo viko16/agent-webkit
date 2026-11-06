@@ -83,6 +83,8 @@ def verify_vite_workflow(out, cli, restart):
 
                 def ready(name, revision):
                     command(name, 'wait', '#revision', '--text', revision, '--timeout', '10000')
+                    command(name, 'wait', '--fn', f'() => document.querySelector("#revision").textContent === {json.dumps(revision)}',
+                            '--stable-for', '100', '--timeout', '10000')
 
                 def events():
                     return [json.loads(line) for line in (directory / 'origin.jsonl').read_text().splitlines()]

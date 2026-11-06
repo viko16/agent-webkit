@@ -1,5 +1,23 @@
 <!doctype html>
 <meta charset="utf-8"><title>Diagnostic fixture</title>
+<script>
+document.documentElement.dataset.nativeFetch = String(String(fetch).includes('[native code]'));
+const startup = new URLSearchParams(location.search).get('startup');
+if (startup) {
+  console.info('startup info ' + startup);
+  Promise.reject(new Error('startup rejection ' + startup));
+  throw new Error('startup exception ' + startup);
+}
+</script>
+<script>
+if (startup === 'main') {
+  const child = document.createElement('iframe');
+  const url = new URL('/diagnostics?startup=frame', location.href);
+  url.hostname = 'localhost';
+  child.src = url.href;
+  document.documentElement.append(child);
+}
+</script>
 <input id="secret" type="password" value="diagnostic-secret">
 <button id="run">Run errors and requests</button><output id="result">Ready</output>
 <script>

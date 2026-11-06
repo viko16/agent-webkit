@@ -33,6 +33,8 @@ def verify_detailed_diagnostics(cli, base, out, restart, verify_expiry=False):
         focus = cli('status')['frontmostPid']
         command('diagnostics', '--detail', 'yes', error='invalid_arguments')
         command('state', '--detail', 'on', error='invalid_arguments')
+        assert logs('--tab', work['defaultTabId'], '--detail', 'continuous')['detail']['enabled']
+        logs('--tab', work['defaultTabId'], '--detail', 'off')
         command('open', url)
         cli('open', url, '--space', peer)
         assert not logs()['inspectable']
@@ -161,6 +163,12 @@ def verify_detailed_diagnostics(cli, base, out, restart, verify_expiry=False):
         command('reload', '--timeout', '5000')
         assert not logs()['inspectable']
         assert not logs()['detail']['enabled']
+        tab = ('--tab', work['defaultTabId'])
+        logs(*tab, '--detail', 'continuous', '--clear')
+        recovered = command('open', urljoin(base, '/diagnostics?startup=recovered'), *tab)['page']
+        until(lambda v: any(e.get('navigationId') == recovered['navigationId'] and
+                            'startup exception recovered' in e.get('detail', {}).get('message', '')
+                            for e in v['events']), *tab)
         logs('--detail', 'on')
         assert logs('--inspectable', 'on')['inspectable']
         command('open', url)
@@ -174,10 +182,61 @@ def verify_detailed_diagnostics(cli, base, out, restart, verify_expiry=False):
         assert not logs()['inspectable']
         command('evaluate', 'delete window.__agentWebKitDiagnosticMode; true')
         command('diagnostics', '--detail', 'on', error='diagnostics_unavailable')
+        command('diagnostics', '--detail', 'continuous', *tab, error='diagnostics_unavailable')
         assert not logs()['detail']['enabled']
         command('reload')
+        startup_url = urljoin(base, '/diagnostics?startup=main')
+        command('open', startup_url, *tab)
+        child_frame = next(f['frameId'] for f in command('frame', 'list', *tab)['value']['frames']
+                           if not f['mainFrame'] and 'startup=frame' in f['url'])
+        command('wait', '--frame', child_frame, '--fn', '() => document.documentElement.dataset.nativeFetch === "true"', *tab)
+        command('diagnostics', '--detail', 'continuous', error='invalid_arguments')
+        enabled = logs(*tab, '--detail', 'continuous', '--include-info', '--clear')
+        assert enabled['detail']['scope'] == 'tab-across-navigation'
+        navigation_ids = set()
+        markers = ['startup exception main', 'startup rejection main', 'startup info main',
+                   'startup exception frame', 'startup rejection frame', 'startup info frame']
+        def startup_events(value):
+            events = {}
+            for event in value['events']:
+                message = event.get('detail', {}).get('message', '').removeprefix('Error: ')
+                if message in markers and event.get('navigationId') and event['navigationId'] not in navigation_ids:
+                    events[message] = event
+            return events
+
+        for _ in range(2):
+            opened = command('open', startup_url, *tab)['page']
+            command('wait', '#run', *tab)
+            assert any(e['name'] == 'Run errors and requests' for e in command('snapshot', *tab)['value']['elements'])
+            assert any(not frame['mainFrame'] and 'startup=frame' in frame['url']
+                       for frame in command('frame', 'list', *tab)['value']['frames'])
+            captured = until(lambda v: len(startup_events(v)) == len(markers), *tab)
+            events = startup_events(captured)
+            assert None not in {e.get('navigationId') for e in events.values()}, events
+            tree = {e['navigationId'] for e in events.values()}
+            assert tree == {opened['navigationId']}, events
+            navigation_ids.update(tree)
+            assert len({e['documentTreeId'] for e in events.values()}) == 1, events
+            assert len({e['documentId'] for e in events.values()}) == 2, events
+            assert all(e['mainFrame'] == message.endswith('main') for message, e in events.items())
+            assert captured['detail']['expiresAtMs'] == enabled['detail']['expiresAtMs']
+        (out / 'diagnostics-continuous.json').write_text(json.dumps(captured, indent=2))
+        command('evaluate', 'Boolean(window.open("/diagnostics?startup=popup"))', *tab)
+        child = next(t['tabId'] for t in command('tab', 'list') if t['tabId'] != tab[1])
+        popup = until(lambda v: any(e['kind'] == 'exception' for e in v['events']), '--tab', child)
+        assert not popup['detail']['enabled'] and not any('detail' in e for e in popup['events'])
+        command('tab', 'close', child)
+        assert not any('detail' in e for e in cli('diagnostics', '--space', peer)['value']['events'])
+        stopped = logs(*tab, '--detail', 'off')
+        assert not stopped['detail']['enabled'] and not any('detail' in e for e in stopped['events'])
+        logs(*tab, '--detail', 'continuous', '--clear')
+        cli('space', 'suspend', name)
+        command('diagnostics', *tab, error='space_suspended')
+        cli('space', 'resume', name)
+        command('wait', *tab)
+        assert not logs(*tab)['detail']['enabled']
         if verify_expiry:
-            enabled = logs('--detail', 'on', '--clear')
+            enabled = logs(*tab, '--detail', 'continuous', '--clear')
             command('evaluate', 'console.warn("expiry marker"); true')
             until(lambda v: any('detail' in e for e in v['events']))
             end = time.monotonic() + 310
@@ -186,8 +245,11 @@ def verify_detailed_diagnostics(cli, base, out, restart, verify_expiry=False):
             expired = logs()
             assert not expired['detail']['enabled'] and not any('detail' in e for e in expired['events'])
             (out / 'diagnostics-expired.json').write_text(json.dumps(expired, indent=2))
+            command('open', startup_url, *tab)
+            command('wait', '#run', *tab)
+            assert command('snapshot', *tab)['value']['elements']
         assert cli('status')['frontmostPid'] == focus
-        return dict(detailedDiagnostics=True, expiryVerified=verify_expiry, requests=len(requests), delayedXHRs=len(delayed),
+        return dict(detailedDiagnostics=True, continuousNavigation=True, expiryVerified=verify_expiry, requests=len(requests), delayedXHRs=len(delayed),
                     checks=['errors/stacks/resources/request IDs', 'redaction and bounded lengths', 'default/Space/popup isolation',
                             'quoted message/stack truncation boundaries; XHR open-before-enable and re-enable correlation',
                             'off clears details; busy/hung off; navigation and restart reset',

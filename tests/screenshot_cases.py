@@ -70,10 +70,20 @@ def verify_screenshots(cli, base, out, restart):
         cli('screenshot', '--space', peer, '--tab', target, '--element', '#target', '--out', str(out / 'rejected.png'), error='tab_not_found')
         assert cli('space', 'info', name)['defaultTabId'] == work['defaultTabId']
         assert cli('status')['frontmostPid'] == before['frontmostPid']
-        viewport = command('screenshot', '--out', str(out / 'viewport.png'))['value']
-        assert viewport['mode'] == 'viewport'
+        original_viewport = command('viewport', 'get')['value']['cssViewport']
+        assert (original_viewport['width'], original_viewport['height']) == (1000, 700)
+        measured = command('viewport', 'set', '760', '480')['value']['cssViewport']
+        assert (measured['width'], measured['height']) == (760, 480), measured
+        path = out / 'viewport.png'
+        viewport = command('screenshot', '--out', str(path))['value']
+        assert viewport['mode'] == 'viewport' and viewport['cssViewport'] == measured
+        pixels = image_pixels(path)
+        for axis, dimension in [('x', 'width'), ('y', 'height')]:
+            assert pixels[dimension] == viewport[dimension]
+            assert viewport['pixelsPerCssPixel'][axis] == pixels[dimension] / measured[dimension]
         restart()
         command('wait', '#target')
+        assert command('viewport', 'get')['value']['cssViewport'] == original_viewport
         command('screenshot', '--element', ref, '--out', str(out / 'rejected.png'), error='stale_ref')
         capture('#target', 'element-restarted.png', [220,30,40])
         report = dict(elementScreenshots=True, pixelsVerified=True, scrollRestored=True,

@@ -4,6 +4,8 @@
 <dialog><input id="inside"><button>Dialog button</button></dialog>
 <input id="disabled" disabled><input id="readonly" readonly><div id="plain">Not focusable</div>
 <div id="host"></div><iframe id="frame" src="/context-frame"></iframe><output id="ack"></output>
+<style>#breakpoint::before { content: "wide"; } @media(max-width: 750px) { #breakpoint::before { content: "narrow"; } }</style>
+<output id="breakpoint"></output>
 <script>
 const epoch=crypto.randomUUID(), mode=new URL(location.href).searchParams.get('mode');
 const first=document.querySelector('#first'), modal=document.querySelector('dialog'), events=[];
@@ -22,4 +24,28 @@ document.querySelector('form').onsubmit=async e=>{
 window.inputRead=()=>({epoch,value:first.value,second:document.querySelector('#second').value,
   selection:[first.selectionStart,first.selectionEnd],active:document.activeElement?.id||'',
   shadowActive:document.querySelector('#host').shadowRoot.activeElement?.id||'',modal:modal.open,events:events.slice()});
+if (mode==='suggestions') {
+  const suggestions=['apple','apricot','avocado'];
+  const list=document.createElement('ul');
+  list.id='suggestions'; list.setAttribute('role','listbox');
+  for (const value of suggestions) {
+    const option=document.createElement('li');
+    option.setAttribute('role','option'); option.textContent=value;
+    list.append(option);
+  }
+  let index=-1;
+  first.after(list);
+  first.addEventListener('keydown', event=>{
+    if (list.hidden) return;
+    if (event.key==='ArrowDown' || event.key==='ArrowUp') {
+      event.preventDefault();
+      index=Math.max(0,Math.min(suggestions.length-1,index+(event.key==='ArrowDown'?1:-1)));
+      for(const [i,option] of [...list.children].entries()) option.setAttribute('aria-selected',String(i===index));
+    } else if(event.key==='Enter' && index>=0) {
+      event.preventDefault();
+      first.value=suggestions[index];
+      list.hidden=true;
+    }
+  });
+}
 </script>

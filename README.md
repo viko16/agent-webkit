@@ -3,7 +3,7 @@
 一个供本机 AI Agent 共用的原生 macOS 浏览器。每个 Space 独立保存登录状态、网站数据、代理配置和标签页。Agent 通过 CLI 操作页面，你可以在原生窗口中查看进展。
 
 - 多个 Agent 可同时使用不同 Space，页面操作不受窗口当前选中标签页的影响。
-- 支持页面快照、点击、填写、JavaScript、条件等待和截图。
+- 支持页面快照、点击、填写、JavaScript、条件等待和截图。可固定单个 Tab 的视口，避免观察窗口的尺寸影响页面布局。
 - 支持独立 Whistle 代理、证书策略，以及重启后恢复标签页和持久化网站数据。
 - 提供页面错误诊断和 JS 对话框的显式回应，方便 Agent 判断结果、定位问题。
 - 支持原生文件下载的状态、等待和取消，已完成文件按 Space/Tab 独立保存。
@@ -46,7 +46,9 @@ awb screenshot --space work --out /tmp/work.png
 
 用 `awb help` 查看命令，`awb help open` 查看单项用法。点击或填写前先获取 snapshot，使用其中的完整元素引用；操作后通过页面内容或等待条件确认结果。
 
-每个 Agent 使用独立 Space。页面命令必须指定 `--space`；省略 `--tab` 时操作该 Space 的固定默认标签页，切换窗口中的页面不会改变这个目标。
+验收响应式页面时，用 `awb viewport set 768 600 --space work --tab TAB_ID` 设置尺寸。打开 URL 后查看 `page.httpStatus`，或加 `--fail-on-http-error` 将主文档 4xx/5xx 作为命令失败。需要捕获页面启动错误时，先对目标 Tab 启用 `awb diagnostics --detail continuous --space work --tab TAB_ID`，再导航。
+
+每个 Agent 使用独立 Space。页面命令必须指定 `--space`。允许省略 `--tab` 的命令会使用该 Space 的固定默认标签页，切换窗口中的页面不会改变这个目标。
 
 ## 手动浏览与 Agent 接管
 

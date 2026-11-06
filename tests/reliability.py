@@ -129,6 +129,7 @@ def main():
         if args.integrity_only:
             checks.append(verify_state_integrity(cli, base, out, start, stop, state))
             checks.append(verify_navigation_failures(cli, base, out, site_events))
+            checks.append(verify_waits(cli, base))
             checks.append(verify_proxy_summary(cli, start, stop, out, base))
             report = dict(ok=True, checks=checks, artifacts=str(out))
             return

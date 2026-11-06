@@ -27,7 +27,7 @@ def verify_offline(cli):
         assert command['resultSchema'] in definitions
         assert cli('help', *name.split('.'))['commands'] == [command]
         assert command['args']['maximum'] == len(command['args']['names'])
-    for group in ('space', 'tab', 'dialog', 'frame'):
+    for group in ('space', 'tab', 'dialog', 'frame', 'viewport'):
         assert {item['command'] for item in cli('help', group)['commands']} == {
             name for name in commands if name.startswith(group + '.')}
     timeout = next(option for option in commands['open']['options'] if option['name'] == 'timeout')
@@ -39,7 +39,7 @@ def verify_offline(cli):
             else:
                 assert option['ipcType'] == 'string' and 'ipc' in option['availability']
     detail = next(option for option in commands['diagnostics']['options'] if option['name'] == 'detail')
-    assert detail['enum'] == ['on', 'off'] and not detail['required']
+    assert detail['enum'] == ['on', 'continuous', 'off'] and not detail['required']
     inspectable = next(option for option in commands['diagnostics']['options'] if option['name'] == 'inspectable')
     assert inspectable['enum'] == ['on', 'off'] and not inspectable['required']
     assert contract['constraints']['dialog.respond']['actions'] == ['accept', 'dismiss']
@@ -52,6 +52,7 @@ def verify_offline(cli):
     assert next(option for option in commands['screenshot']['options'] if option['name'] == 'full-page')['type'] == 'flag'
     assert contract['constraints']['screenshot']['mutuallyExclusive'] == [['element', 'full-page']]
     assert contract['constraints']['frame']['requires'] == ['tab']
+    assert contract['constraints']['wait']['urlRequiresNoSelector'] is True
     assert ['frame', 'wait-for-navigation'] in contract['constraints']['click']['mutuallyExclusive']
     assert 'pendingStores' in definitions['status']['required']
     navigation = next(option for option in commands['click']['options'] if option['name'] == 'wait-for-navigation')
@@ -60,7 +61,8 @@ def verify_offline(cli):
     assert 'frame.list' in commands and 'stale_frame' in contract['errors']
     assert {option['name'] for option in commands['focus']['options'] if option['required']} == {'space', 'tab'}
     assert {option['name'] for option in commands['key']['options'] if option['required']} == {'space', 'tab'}
-    assert contract['constraints']['key']['supported'] == ['Enter', 'Tab', 'Escape', 'ArrowLeft', 'Shift+ArrowLeft', 'Option+ArrowLeft', 'Control+B', 'Shift+X']
+    assert contract['constraints']['key']['supported'] == ['Enter', 'Tab', 'Escape', 'ArrowLeft', 'ArrowRight', 'ArrowUp',
+                                                         'ArrowDown', 'Backspace', 'Delete', 'Shift+ArrowLeft', 'Option+ArrowLeft', 'Control+B', 'Shift+X']
     assert contract['scope']['hover'] == dict(backgroundVerified=False, requiresForeground=True, automaticForegroundInput=False)
     cli('key', 'Command+A', '--space', 'work', '--tab', 'id', error='unsupported_key')
     cli('key', 'Enter', '--space', 'work', error='invalid_arguments')

@@ -48,7 +48,7 @@ python3 tests/reliability.py --forms  # 含真实 CLI / IPC 对照和原有可�
 
 `shutdown --all` 要求调用方有显式全局退出意图；旧的裸 `shutdown` 在 CLI 和 IPC 均返回 `invalid_arguments`，不会退出。先读 `status.shutdownImpact`，其中 `spaces` 列出 Space ID、名称与全部 `tabIds`；成功退出回复保留 `shutdown: true` 并附带同结构的实际影响范围。`--all` 是无值开关，IPC 为 `"all":"true"`；不能用 `--space` / `--tab` 缩小全局退出范围。有任何 Space busy 时仍拒绝，保存失败也保持服务可用。退出保留网站数据和 URL，不保留 JS 内存或未提交表单；不代替 `space delete`。预览不锁定范围，真正退出按执行时的全部 Space 生效。
 
-页面命令必须指定 `--space NAME_OR_ID`，可用 `--tab UUID` 选择目标；省略时使用该 Space 的固定默认 Tab，`tab default ID --space NAME` 可修改并持久化默认值。相同 Space 的重叠页面操作返回 `space_busy`，由调用方顺序执行；`state`、`tab list`、`space info`、`dialog list` 可在忙碌时查询，`dialog respond` 可在原动作等待对话框时回应。
+页面命令必须指定 `--space NAME_OR_ID`。可用 `--tab UUID` 选择目标，允许省略时使用该 Space 的固定默认 Tab。`tab default ID --space NAME` 可修改并持久化默认值。相同 Space 的重叠页面操作返回 `space_busy`，由调用方顺序执行。忙碌时可以查询 `state`、`tab list`、`space info` 和 `dialog list`，也可以用 `dialog respond` 回应原动作正在等待的对话框。
 
 每条 CLI 命令返回一行 JSON：成功为 `{"ok":true,"result":...}`，失败为 `{"ok":false,"error":{"code":...,"message":...}}`，退出码分别为 0/1。页面结果包含 Space/Tab ID、URL、加载状态和代理限制；click/fill 标明 `method: "dom"`、`nativeVerified: false`，动作成功仍需核对业务结果。
 
@@ -102,9 +102,17 @@ busy 时拒绝休眠/恢复；自主对话框随页面关闭安全结束，原 I
 
 ## 操作结果等待
 
-`wait` 的 `--url`、`--text`、`--state` 互斥，CLI 和原始 IPC 均校验。URL 精确匹配 `location.href`，包括 SPA history/hash；它不保证文档已加载，也不代表服务器完成业务。文本为可见目标的 `innerText` 子串，不带选择器时只查主 frame 的 body。元素状态沿用唯一选择器、`>>>` 和引用作用域：hidden 包含节点不存在，attached/detached 只判断是否存在；enabled/disabled 要求元素可见，并检查原生禁用及 `aria-disabled`，readOnly 不算 disabled。过期引用始终报 `stale_ref`，要等节点被删除应使用选择器。
+`wait` 每次接受一个条件。`--url` 精确匹配 `location.href`，`--url-pattern` 用 POSIX glob 匹配完整地址，两者均覆盖 SPA history/hash。文本匹配可见目标的 `innerText` 子串。元素状态沿用唯一选择器、`>>>` 和引用作用域。hidden 包含节点不存在，attached/detached 只判断是否存在。enabled/disabled 要求元素可见，并检查原生禁用及 `aria-disabled`。过期引用返回 `stale_ref`，要等节点被删除应使用选择器。
+
+`--fn '() => window.appReady === true'` 反复运行返回布尔值的同步函数。调用方应传入只读条件，避免在轮询中提交请求或修改页面。主文档函数可读取页面全局变量。指定 `--frame` 时使用隔离 DOM world，只读取选中文档的 DOM，文档失效返回 `stale_frame`。`--stable-for 500` 要求约每 50 ms 的采样连续满足至少 500 ms。条件变假或顶层文档切换会重计时。比采样更短的变化可能漏掉。
 
 所有等待都在原有命令期限内轮询，不重复 click/fill；输入和点击仍返回 `businessOutcomeVerified: false`。用业务结果文本或 URL 独立核对结果，不能把 DOM 操作成功当成提交成功。`tests/wait_cases.py` 随可靠性套件验证延迟状态变化、SPA/完整导航、作用域、失败与超时。
+
+## 主文档 HTTP 状态与视口
+
+`state` 和导航命令的 `page` 返回最近一次顶层导航的 `navigationId`、`navigationPhase`、`httpStatus`、`responseURL` 与 `redirectCount`。重定向后报告最终响应。provisional failure 没有提交主文档，响应字段为空。缓存恢复已记录的历史条目时，`httpResponseNavigationId` 指向当时取得响应的导航。主文档附件响应进入 `download` 阶段，原文档仍可用。直接由下载链接触发且未开始主文档导航的下载在 `download list` 中报告。SPA 地址变化沿用原文档的 HTTP 结果。子文档与 fetch/XHR 不计入这些字段。`open/reload --fail-on-http-error` 在主文档返回 4xx/5xx 时报告 `http_error`，仍可通过 `state` 查询状态和 URL。
+
+未设置尺寸时，后台视口为 1000×700，GUI 中随观察窗口布局。`viewport set WIDTH HEIGHT` 要求显式 Tab，宽高均为 100–4096。设置后，窗口选择、缩放或隐藏只改变观察范围，窗口放不下时会裁剪。尺寸在 Tab 运行期间有效，休眠或重启恢复默认。使用 `viewport get` 读取实际 CSS 尺寸及对应 AppKit points。截图额外报告 `cssViewport`、PNG 宽高及 `pixelsPerCssPixel`。可分别用 `--integrity-only`、`--screenshots-only` 和 `--keyboard-only` 验证 HTTP/等待、PNG 尺寸与原生观察窗口。
 
 ## JS 对话框
 
@@ -204,17 +212,17 @@ GUI 模式复制一个独立 Bundle ID 的测试应用，打印原生操作检�
 后台清理定时任务之外，宿主也会在接收事件及生成快照前检查绝对/单调期限，先抹除过期详情，再接受或输出数据，不依赖后台定时器准时唤醒。
 
 ```sh
-awb diagnostics --space work --tab TAB_ID --detail on
+awb diagnostics --space work --tab TAB_ID --detail continuous
 awb diagnostics --space work --tab TAB_ID
 awb diagnostics --space work --tab TAB_ID --detail off
 python3 tests/reliability.py --diagnostics-only  # 含真实 5 分钟自然到期检查
 ```
 
-默认摘要与 200 条容量不变。显式启用后，仅指定 Tab 当前文档的新事件可包含 `detail`：错误/console 正文最多 512 字符、堆栈最多 8 行且每行 256 字符、有限 `resource`，以及宿主 `navigationId`、fetch/XHR 的 `requestId`。每次启用生成新代号，迟到的旧代号详情不接受；页面仍能伪造自己这一来源的数据，ID 不能作为可信审计或代理证据。请求 ID 对应每次 fetch/send 的终态，包含 HTTP 错误、拒绝、取消和超时，不读取响应体、header 或上传内容；这是有限定位信息，不是 DevTools 请求追踪。
+默认摘要与每 Tab 200 条容量不变。`--detail on` 只采集当前主文档的新事件，完整导航时停止。`--detail continuous` 要求显式 Tab，在后续文档启动时采集主文档和 iframe 的异常、未处理拒绝、控制台、资源错误与 fetch/XHR。可加 `--include-info` 收集 console.log/info。页面事件的 `documentId` 区分文档，`documentTreeId` 把主文档和 iframe 归组。宿主确认归属后补上与 `state.page.navigationId` 相同的 ID。frame 握手丢失或导航被替换时，部分关联字段可能缺失。页面可以伪造或抑制脚本消息。
 
-详细模式最长 300000 ms，导航、关闭 Tab、显式恢复或重启会关闭；popup 不继承。它不补回启用前的错误，也不捕获下一次完整文档导航的初始详情；SPA 同文档更新不关闭。开启需等待该 Space 空闲，以现有有界 WebKit 调用确认 hook（最长 2 秒）；hook 不可用返回 `diagnostics_unavailable`，超时沿用现有恢复规则。普通读取仍不执行 JS，忙碌、暂停或卡死页面可用；关闭会立即在宿主拒绝/抹除所有已保留详情，并向页面尽力发送停止信号，不等待失联页面。`--clear` 仅清除记录，不关闭模式。
+每次开启最长 300000 ms，导航不会续期。重新开启会清除旧详情并重新计时。关闭、休眠、WebView 替换或服务重启均结束采集，popup 有独立的脚本控制器。已有 iframe 尽力启用，页面缓存恢复可能缺少初始化记录。开启需等待 Space 空闲，最多用 2 秒确认当前 hook。空白 Tab 尚无 hook 时，持续模式会为下一份文档做好准备。普通读取在忙碌或卡死时仍可用。关闭会立即在宿主拒绝迟到详情并擦除已保留的详情。`--clear` 清除已收到的事件和丢弃计数。[Apple 的 popup 配置约定](https://developer.apple.com/documentation/webkit/wkuidelegate/webview%28_%3Acreatewebviewwith%3Afor%3Awindowfeatures%3A%29?language=objc)
 
-详情只保留在 Tab 的内存环形缓冲，不写 Space 注册表或其他磁盘日志；CLI 输出及调用方自行保存的内容不在此保证内。页面仅在启用期间读取最多 100 个表单控件的当前值用于本地字符串替换，不把这些值单独传出；超出数量或读取失败时省略对应自由文本。宿主再过滤字段、限长，删除 URL 凭据/query/hash，将数字、长串等动态路径片段替换为 `[redacted]`，并过滤带标签凭据、Bearer/Basic 和长 Token。只保留有限路径，不保证完整资源 URL；脱敏是尽力处理，任意页面文本仍可能包含未识别的敏感信息，不能当成绝对安全的导出或可信日志。关闭、到期、导航也会抹除已存详情，保留原摘要与事件 ID。
+详情只保留在 Tab 的内存环形缓冲。正文上限 512 字符，堆栈最多 8 行且每行 256 字符。页面仅在启用期间读取最多 100 个表单控件的当前值用于本地字符串替换，超限或读取失败时省略对应自由文本。宿主再过滤字段、限长，去除 URL 凭据、query 和 hash，过滤动态路径片段、带标签凭据和长 token。脱敏可能漏掉无标签的秘密，保存 CLI 输出前应核对内容。请求 ID 对应每次 fetch/send 的终态，只保留有限状态与定位信息。
 
 `--diagnostics-only` 同时回归原摘要及详细模式，包括实际异常/拒绝/失败资源/fetch/XHR、正文/堆栈/资源与关联 ID、脱敏、跨 Space/popup、关闭后的迟到批次、忙碌/卡死关闭、导航/重启及自然到期；普通 `--forms` 包含这些行为检查，但不重复等待 5 分钟。
 
@@ -254,11 +262,11 @@ python3 tests/reliability.py --forms  # 含诊断、原有可靠性和框架回�
 | `webkit` | 主 frame HTTP response、导航完成/失败/超时、条件等待超时、WebKit 调用超时、导航拒绝和内容进程终止回调 | 失败保存系统 domain/code 和有限原因分类，不保存 NSError.userInfo 或错误正文；HTTP 4xx/5xx 本身仍可能是正常完成的文档导航 |
 | `page-script` | console.warn/error 的等级与参数数量、异常类型/行列、未处理拒绝、元素资源错误、fetch/XHR 状态/耗时 | 页面可伪造、覆盖或停用；异常也可能由 Agent evaluate/DOM 调用触发，缺失记录不代表没有错误 |
 
-页面 hook 在 documentStart 注入 page world，通过公开 WKScriptMessageHandler 发送摘要；内部 DOM bridge 仍留在原有隔离 world。console 包装调用原方法且不遍历参数，fetch 保留响应和拒绝。XHR 每次 send 固定请求 origin，在捕获阶段观察 DONE 状态及 load/error/abort/timeout，先保存结果并解绑该次监听，再由普通页面回调处理，避免 onload/onreadystatechange 复用对象时串用状态；不读写 body/header。页面队列最多 100 条，约每 100 ms 批量发送，导航卸载尝试 flush；后台调度、导航和进程退出可能延迟或丢失批次。宿主再次按字段/枚举/数值范围过滤，不接收任意消息键；共享 popup controller 按 WKScriptMessage.webView 路由，不接受网页提供的 Tab/Space ID，并拒绝子 frame 消息。
+页面 hook 在 documentStart 注入 page world，通过公开 WKScriptMessageHandler 发送摘要。默认只在主文档安装采集 hook，持续模式才在 iframe 启用。XHR 每次 send 固定请求 origin，在捕获阶段记录终态并解绑该次监听，避免普通页面回调复用对象时串用状态。每文档队列最多 100 条，约每 100 ms 批量发送，导航卸载时尝试发送剩余记录。后台调度、导航和进程退出可能导致丢失。宿主按 WKScriptMessage.webView 路由并过滤字段，仅在持续模式接收子 frame 批次。
 
 默认摘要只保留 http(s) origin（含端口），删除用户名、密码、路径、query 和 hash；自由文本消息、栈、Cookie、Authorization、表单值和请求/响应内容不采集。显式开启的有界详情见上节。`pageTimeMs` 是网页相对时间，`durationMs` 是对应调用/导航耗时，`receivedAtMs` 可能晚于实际发生时间。Request/URL 对象在失败前无法安全读取目标时、opaque 响应等场景 origin 为 `opaque`。fetch 拒绝无法单独区分网络/CORS/策略问题；状态码 0 不能当成网络失败。
 
-本期不覆盖子 frame、worker、WebSocket 消息或所有 CSS/媒体/缓存/Service Worker 请求，不是 DevTools 的完整网络追踪；没有私有 WebKit delegate 或代理路径验证。`routeVerified` 始终 false，实际代理证据仍来自独立 Whistle 与来源日志。测试主动制造真实异常、HTTP 错误、断连、XHR 超时/取消、opaque 响应，并核对保留响应内容、容量、字段过滤、popup/Space/frame 归属、忙碌/卡死查询、恢复/重启和前台不变；完整验收另验证 TLS 拒绝及 Direct 暂停诊断。
+Worker 需要在独立执行环境中插桩。WebSocket 消息的采集与脱敏成本也高于页面错误摘要。诊断保留页面侧有限线索，完整请求链路和代理路径用独立 Whistle 与来源日志核对。`routeVerified` 始终为 false。
 
 接口依据本机 SDK 的 WKNavigationDelegate、WKScriptMessage、WKUserContentController 公开声明，以及 [error](https://developer.mozilla.org/en-US/docs/Web/API/Window/error_event)、[unhandledrejection](https://developer.mozilla.org/en-US/docs/Web/API/Window/unhandledrejection_event)、[XHR loadend](https://developer.mozilla.org/en-US/docs/Web/API/XMLHttpRequestEventTarget/loadend_event) 文档。包装函数会改变函数身份，页面仍可重新替换它们；保持该限制可见，不将观测结果视为可信审计。
 
@@ -413,7 +421,7 @@ Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 
 
 ## DOM bridge 隔离
 
-`snapshot/click/fill/wait`、focus 及 key 的焦点/文档检查统一使用命名 `WKContentWorld`（`AgentWebKit.DOM`），不向 page world 暴露内部 bridge；key 的原生事件另经 AppKit 定向发送。`evaluate` 和 `evaluate --await` 明确留在 `.page`，可读取网页全局变量；等待 readyState 也在隔离 world 执行。
+内部 DOM 操作和焦点、文档检查使用隔离的 `AgentWebKit.DOM`。key 的原生事件另经 AppKit 定向发送。`evaluate` 和顶层 `wait --fn` 在 page world 运行，可以读取网页全局变量。显式 frame 的等待在隔离 world 内检查文档归属。
 
 每个文档在 documentStart 初始化一次 bridge，刷新、导航、进程替换及重启均产生新的随机引用后缀；同文档 SPA 更新后，仍连接且在最新 Snapshot 登记的节点引用可继续使用。强引用表在每次 Snapshot 开始时清空，并随有界遍历重新登记，不长期保留隐藏或不再返回的历史节点；弱引用表只维护节点自身的稳定 ID，不把旧 ID 分配给其他节点。隔离只保护实现和命名空间，不阻止网页改变 DOM，也不提供原生可信事件。`tests/reliability.py` 用真实页面覆盖、删除和伪造同名对象，检查四项内部命令、页面 Promise、SPA、重载及重启。`python3 tests/dom_reference_cases.py` 另验证 4000 个仍连接的动态节点、引用数量、重复 Snapshot、click/fill、旧引用失效及 frame/shadow/多 Tab 隔离，证据保存在 `.artifacts/dom-references-*/`；计数只注入测试 bridge，不增加生产接口。
 
@@ -469,7 +477,7 @@ python3 tests/reliability.py --keyboard-only
 
 两条命令都要求显式 Space/Tab，支持原有 1–60000 ms 超时。focus 使用唯一 selector 或最新 snapshot 的完整 ref，先验证主文档内可见、非禁用的元素能接受 DOM 焦点，再设置该 WebView 当前窗口的原生 responder；可编辑或带有效整数 tabindex 的 body/html 也可作为整页键盘目标，包括可程序聚焦的 tabindex=-1。默认不可聚焦或 tabindex 无效的根元素返回 `input_focus_failed`。open Shadow Root 可用，iframe（包括同源）、closed root 和 `--frame` 不在范围。DOM activeElement、原生 responder 接受和 document.hasFocus 是不同状态；后台 document.hasFocus 可能仍为 false。
 
-首版按键白名单为 `Enter`、`Tab`、`Escape`、`ArrowLeft`、`Shift+ArrowLeft`、`Option+ArrowLeft`、`Control+B`、`Shift+X`，键名区分大小写，使用固定 US 键码。未支持的组合（包括已知未实现全选的 Command+A）在发送前返回 `unsupported_key`。文字整段填写继续使用 fill，不把本接口当作通用打字、快捷键或 IME API。
+按键白名单包含 `Enter`、`Tab`、`Escape`、四个方向键、`Backspace`、`Delete`、`Shift+ArrowLeft`、`Option+ArrowLeft`、`Control+B` 和 `Shift+X`。键名区分大小写，使用固定 US 键码。Command+A 实测能送达修饰键，但无法在隐藏宿主中全选，CLI 返回 `unsupported_key`。整段文字使用 fill。
 
 key 要求该 Tab 已成功 focus，并在发送前核对文档代号和当前主文档焦点；Tab 移焦后跟随同文档的新焦点。focus 失败会清除此前的输入资格。导航进行中、异步检查期间宿主窗口变更或历史缓存恢复后的代号变化返回 `input_target_changed`，新建/重建、休眠或重启后返回 `input_focus_required`，均需重新观察并 focus。发出后再次读取状态，若期间发生导航可能返回错误；输入可能已经生效，超时或错误后先查 state/业务结果，绝不自动重放。
 
