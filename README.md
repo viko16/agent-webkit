@@ -12,17 +12,17 @@ brew install --cask viko16/tap/agent-webkit
 
 在「应用程序」中打开 Agent WebKit。首次打开若被 macOS 拦截，可在「系统设置 → 隐私与安全性」中选择「仍要打开」。
 
-## 给 Codex 或 Pi 安装 Skill
+## 给 Agent 安装 Skill
 
 在项目目录里运行这条命令，即可为当前项目安装 Skill。命令需要 Node.js 和 npm。
 
 ```sh
-npx --yes skills add viko16/agent-webkit --skill agent-webkit --agent codex pi -y
+npx --yes skills add viko16/agent-webkit --skill agent-webkit -y
 ```
 
 在项目里新开一个 Codex 对话，试试这句话（Pi 中把开头换成 `/skill:agent-webkit`）。
 
-> $agent-webkit 用一个新的直连 Space 打开 https://example.com，告诉我页面标题。
+> $agent-webkit 用一个新的直连 Space 打开 <https://example.com>，告诉我页面标题。
 
 Skill 会引导 Agent 读取页面、操作元素并核对结果。如果你想在终端直接操作，Homebrew 也会一并安装 `awb`，运行 `awb help` 即可查看命令。
 
