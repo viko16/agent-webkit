@@ -13,9 +13,17 @@
 
 需要 Apple Silicon（M 系列）Mac、macOS 14+，以及已登录的桌面会话。
 
-从 [GitHub Releases](https://github.com/viko16/agent-webkit/releases) 下载 `AgentWebKit-v版本号-macos-arm64.zip`，解压后将 `Agent WebKit.app` 放入 `/Applications`，双击启动。首次打开若被拦截，可在「系统设置 → 隐私与安全性」中选择「仍要打开」。更新时先退出应用，再替换 `.app`。
+用 Homebrew 安装应用和 `awb` 命令：
 
-将下面这行加入 `~/.zshrc`，并在当前终端执行一次，即可使用 CLI：
+```sh
+brew install --cask viko16/tap/agent-webkit
+```
+
+安装后打开 `Agent WebKit.app`，或在终端运行 `awb daemon`。首次启动若被 macOS 拦截，可在「系统设置 → 隐私与安全性」中选择「仍要打开」。
+
+### 手动安装
+
+从 [GitHub Releases](https://github.com/viko16/agent-webkit/releases) 下载 ZIP，解压后将 `Agent WebKit.app` 放入 `/Applications`。手动更新时先退出应用，再替换 `.app`。要在终端使用 `awb`，将下面这行加入 `~/.zshrc`，并在当前终端执行一次：
 
 ```sh
 export PATH="/Applications/Agent WebKit.app/Contents/MacOS:$PATH"
@@ -35,7 +43,7 @@ awb daemon
 
 ## CLI
 
-设置好 PATH 后，创建专属 Space 并打开页面：
+启动应用后，创建专属 Space 并打开页面：
 
 ```sh
 awb space create work --proxy direct
