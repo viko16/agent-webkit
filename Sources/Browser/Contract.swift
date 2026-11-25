@@ -612,9 +612,22 @@ enum CLIContract {
         case "download.list", "download.wait", "download.cancel": result = "downloads"
         default: result = "page"
         }
+        let outputFormat: [String: String]
+        let resultSchemaScope: [String]
+        if name == "daemon" {
+            outputFormat = ["cli": "process"]
+            resultSchemaScope = []
+        } else if name == "help" {
+            outputFormat = ["cli": "text", "ipc": "json"]
+            resultSchemaScope = ["ipc"]
+        } else {
+            outputFormat = ["cli": "json", "ipc": "json"]
+            resultSchemaScope = ["cli", "ipc"]
+        }
         return ["command": name, "summary": commandSummaries[name] ?? "", "usage": synopsis(name),
                 "args": ["names": arguments[name] ?? [], "minimum": arity.lowerBound, "maximum": arity.upperBound],
                 "options": options, "resultSchema": result,
+                "outputFormat": outputFormat, "resultSchemaScope": resultSchemaScope,
                 "availability": name == "daemon" ? ["cli"] : ["cli", "ipc"],
                 "offline": ["help", "capabilities", "version"].contains(name)]
     }
@@ -633,6 +646,15 @@ enum CLIContract {
             "spaces": ["type": "array", "items": object(["spaceId", "name", "tabIds"], [
                 "spaceId": string, "name": string, "tabIds": ["type": "array", "items": string]])],
             "websiteDataPreserved": ["const": true], "pageMemoryPreserved": ["const": false]])
+        let responseSchema: [String: Any] = [
+            "description": "JSON response envelope for all IPC calls, all CLI failures, and CLI commands with outputFormat.cli == \"json\"",
+            "oneOf": [
+                object(["ok", "result"], ["ok": ["const": true], "result": [:]]),
+                object(["ok", "error"], ["ok": ["const": false], "error": object(["code", "message"], ["code": string, "message": string])])
+            ]
+        ]
+        var helpSchema = object(["usage"], ["usage": string, "commands": ["type": "array"]])
+        helpSchema["description"] = "IPC JSON help result (resultSchemaScope: [\"ipc\"]); successful CLI help outputs plain text while CLI errors use the JSON error response"
         return [
             "schemaVersion": 1, "version": productVersion,
             "commands": Request.arities.keys.sorted().map(command),
@@ -657,10 +679,9 @@ enum CLIContract {
                         "command": ["type": "string", "enum": Request.arities.keys.sorted()],
                         "args": ["type": "array", "items": string],
                         "options": ["type": "object", "additionalProperties": string]]),
-                    "response": ["oneOf": [
-                        object(["ok", "result"], ["ok": ["const": true], "result": [:]]),
-                        object(["ok", "error"], ["ok": ["const": false], "error": object(["code", "message"], ["code": string, "message": string])])]],
-                    "help": object(["usage"]), "capabilities": object(["schemaVersion", "version", "commands", "schemas"]),
+                    "response": responseSchema,
+                    "help": helpSchema,
+                    "capabilities": object(["schemaVersion", "version", "commands", "schemas"]),
                     "version": object(["version"]), "daemon": ["description": "Long-running CLI process; no command result; IPC daemon is unsupported"],
                     "status": object(["version", "pid", "ready", "spaces", "observer", "capabilities", "shutdownImpact", "pendingStores"], ["shutdownImpact": shutdownImpact,
                         "pendingStores": ["type": "array", "items": object(["spaceId", "name"], ["spaceId": string, "name": string])]]),

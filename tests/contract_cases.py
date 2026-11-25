@@ -25,6 +25,13 @@ def verify_offline(cli, cli_text=None, check_bare=True):
         assert command['resultSchema'] in definitions
         assert isinstance(command.get('summary'), str) and command['summary'], name
         assert command['args']['maximum'] == len(command['args']['names'])
+        if name == 'daemon':
+            assert command['outputFormat'] == {'cli': 'process'} and command['resultSchemaScope'] == []
+        elif name == 'help':
+            assert command['outputFormat'] == {'cli': 'text', 'ipc': 'json'} and command['resultSchemaScope'] == ['ipc']
+        else:
+            assert command['outputFormat'] == {'cli': 'json', 'ipc': 'json'} and command['resultSchemaScope'] == ['cli', 'ipc']
+    assert 'IPC JSON help result' in definitions['help']['description']
     if cli_text is not None:
         usage = cli_text('--help')
         assert not usage.lstrip().startswith('{') and '\n' in usage, usage

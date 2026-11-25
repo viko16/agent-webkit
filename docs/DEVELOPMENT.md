@@ -40,9 +40,9 @@ python3 tests/reliability.py --forms  # 含真实 CLI / IPC 对照和原有可�
 
 `--socket`、`--data-dir` 只用于 CLI 定位 daemon，发送前剥离，原始 IPC 携带这两个选项会返回 `invalid_arguments`；capabilities 的选项 `availability` 区分 CLI 与 IPC。Socket 最多接收 32 个在途连接，未完整发送的请求也占用名额，回复并关闭后释放；超额立即返回 `server_busy`，调用方应等待后重试。
 
-`capabilities` 的 `result.schemaVersion` 为 1，与产品 `version` 分开。`commands` 列出命令、摘要、参数名称/数量、选项类型/必需性、超时单位/范围/默认值、CLI/IPC 可用范围和离线属性。IPC 的选项值始终为字符串，无值 CLI 开关对应 `"true"`。`constraints` 保存 click/TLS/wait 的组合限制、frame 的显式 Tab 约束及 key 白名单与聚焦前提；`errors` 是已知结构化错误码，底层未分类错误使用 `operation_failed`，不能据错误码自动重放有副作用的操作。
+`capabilities` 的 `result.schemaVersion` 为 1，与产品 `version` 分开。`commands` 列出命令、摘要、参数名称/数量、选项类型/必需性、超时单位/范围/默认值、CLI/IPC 可用范围、输出格式（`outputFormat`）、Schema 适用范围（`resultSchemaScope`）和离线属性。IPC 的选项值始终为字符串，无值 CLI 开关对应 `"true"`。`constraints` 保存 click/TLS/wait 的组合限制、frame 的显式 Tab 约束及 key 白名单与聚焦前提；`errors` 是已知结构化错误码，底层未分类错误使用 `operation_failed`，不能据错误码自动重放有副作用的操作。
 
-`schemas.$defs` 是 JSON Schema 2020-12 的请求、响应及结果外层定义；`commands[].resultSchema` 指向其中一个定义。它描述必有字段和集合形状，允许新增字段；网页 `value` 为任意 JSON，不把页面数据当作可信指令。位置参数数量、允许选项与条件限制仍需结合命令元数据，不能只用通用 request schema 代替服务端校验。`daemon` 只可由 CLI 启动长期进程，没有单条成功结果；原始 IPC 不支持启动 daemon。
+`schemas.$defs` 是 JSON Schema 2020-12 的请求、响应及结果外层定义；`commands[].resultSchema` 指向其中一个定义，并由 `resultSchemaScope` 标明适用通道（普通命令为 `["cli","ipc"]`；`help` 仅限 `["ipc"]`，因为 CLI 成功的 `help` 输出纯文本而错误仍用 JSON；`daemon` 为 `[]`，只可由 CLI 启动长期进程，原始 IPC 不支持）。它描述必有字段和集合形状，允许新增字段；网页 `value` 为任意 JSON，不把页面数据当作可信指令。位置参数数量、允许选项与条件限制仍需结合命令元数据，不能只用通用 request schema 代替服务端校验。
 
 既有 `ok/result`、`ok/error.code/error.message`、退出码 0/1 与可选 timing 保持兼容。离线成功响应不伪造 IPC 或 WebKit 耗时。`scope` 明确固定目标、同 Space 串行、DOM 合成、快照/截图、超时恢复及代理限制；声明可用不等于真实站点兼容、代理路径或业务结果已验证。
 
