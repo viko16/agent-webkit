@@ -62,12 +62,17 @@ struct Request: Codable {
     }
 
     func validate() throws {
-        guard let arity = Self.arities[command], arity.contains(args.count) else {
-            throw BrowserError("invalid_arguments", "未知命令或参数数量不正确：\(command)；awb help 查看用法")
+        let display = command.replacingOccurrences(of: ".", with: " ")
+        guard let arity = Self.arities[command] else {
+            throw BrowserError("invalid_arguments", "未知命令：\(display)；运行 awb help 查看全部命令")
+        }
+        guard arity.contains(args.count) else {
+            let expected = arity.lowerBound == arity.upperBound ? "\(arity.lowerBound)" : "\(arity.lowerBound)–\(arity.upperBound)"
+            throw BrowserError("invalid_arguments", "\(display) 参数数量不正确（需要 \(expected) 个，实际 \(args.count) 个）；运行 awb help \(display) 查看用法")
         }
         let allowed = Self.allowedOptions(for: command)
         if Self.explicitTabCommands.contains(command), options["tab"]?.isEmpty != false {
-            throw BrowserError("invalid_arguments", "\(command) 必须显式指定 --tab")
+            throw BrowserError("invalid_arguments", "\(display) 必须显式指定 --tab ID（先用 awb tab list --space SPACE 或 space info 获取 Tab UUID）")
         }
         if ["focus", "key"].contains(command), options["frame"] != nil {
             throw BrowserError("invalid_arguments", "focus/key 仅支持主文档和开放 Shadow Root；iframe 可用 fill/click 或手动接管")
@@ -144,7 +149,9 @@ struct Request: Codable {
             }
         }
         if let key = options.keys.sorted().first(where: { !allowed.contains($0) }) {
-            throw BrowserError("invalid_arguments", "\(command) 不支持 --\(key)")
+            let supported = allowed.sorted().map { "--\($0)" }.joined(separator: ", ")
+            let hint = supported.isEmpty ? "该命令不接受命令选项" : "可用选项：\(supported)"
+            throw BrowserError("invalid_arguments", "\(display) 不支持 --\(key)；\(hint)（运行 awb help \(display) 查看详情）")
         }
         for key in Self.flags {
             if let value = options[key], value != "true" { throw BrowserError("invalid_arguments", "--\(key) 是无值开关") }
@@ -176,6 +183,14 @@ func failure(_ error: Error) -> [String: Any] {
 }
 
 struct Options {
+    private static let commandGroups: [String: [String]] = [
+        "space": ["create", "list", "info", "suspend", "resume", "delete"],
+        "tab": ["list", "new", "close", "default"],
+        "frame": ["list"],
+        "dialog": ["list", "respond"],
+        "download": ["list", "wait", "cancel"],
+        "viewport": ["get", "set"]
+    ]
     var request: Request
     var dataDirectory: URL
     var socketPath: String
@@ -184,29 +199,53 @@ struct Options {
         var options: [String: String] = [:]
         var i = 0
         var literal = false
+        var helpRequested = false
         let allowed = Set(["space", "tab", "frame", "proxy", "ca-cert", "out", "timeout", "socket", "data-dir", "url", "url-pattern", "fn", "stable-for", "text", "state", "detail", "inspectable", "element", "scope", "role", "name"])
         while i < arguments.count {
             let arg = arguments[i]
             if arg == "--", !literal { literal = true; i += 1; continue }
-            if !literal, ["--help", "-h", "--version"].contains(arg), arguments.count == 1 {
-                positionals = [arg == "--version" ? "version" : "help"]; break
+            if !literal, arg == "--version", arguments.count == 1 {
+                positionals = ["version"]; break
+            }
+            if !literal, arg == "--help" || arg == "-h" {
+                guard !helpRequested else { throw BrowserError("invalid_arguments", "选项重复：\(arg)（每个选项只能指定一次）") }
+                helpRequested = true
+                i += 1
+                continue
             }
             if arg.hasPrefix("--"), !literal {
                 let key = String(arg.dropFirst(2))
-                if Request.flags.contains(key), options[key] == nil {
+                if Request.flags.contains(key) {
+                    guard options[key] == nil else {
+                        throw BrowserError("invalid_arguments", "选项重复：--\(key)（每个选项只能指定一次）")
+                    }
                     options[key] = "true"; i += 1; continue
                 }
-                guard allowed.contains(key), i + 1 < arguments.count, options[key] == nil else {
-                    throw BrowserError("invalid_arguments", "未知、重复或缺少值的参数：\(arg)")
+                guard allowed.contains(key) else {
+                    throw BrowserError("invalid_arguments", "未知选项：--\(key)；运行 awb help 查看可用选项")
+                }
+                guard options[key] == nil else {
+                    throw BrowserError("invalid_arguments", "选项重复：--\(key)（每个选项只能指定一次）")
+                }
+                guard i + 1 < arguments.count else {
+                    throw BrowserError("invalid_arguments", "选项 --\(key) 缺少值")
                 }
                 i += 1; options[key] = arguments[i]
             } else { positionals.append(arg) }
             i += 1
         }
-        var command = positionals.isEmpty ? "help" : positionals.removeFirst()
-        if ["space", "tab", "frame", "dialog", "download", "viewport"].contains(command) {
-            guard !positionals.isEmpty else { throw BrowserError("invalid_arguments", "需要子命令") }
-            command += "." + positionals.removeFirst()
+        var command: String
+        if helpRequested {
+            if positionals.first == "help", positionals.count > 1 { positionals.removeFirst() }
+            command = "help"
+        } else {
+            command = positionals.isEmpty ? "help" : positionals.removeFirst()
+            if let subcommands = Self.commandGroups[command] {
+                guard !positionals.isEmpty else {
+                    throw BrowserError("invalid_arguments", "\(command) 需要子命令：\(subcommands.joined(separator: ", "))；运行 awb help \(command) 查看用法")
+                }
+                command += "." + positionals.removeFirst()
+            }
         }
         dataDirectory = URL(fileURLWithPath: options["data-dir"] ?? ProcessInfo.processInfo.environment["BROWSER_DATA_DIR"] ??
             FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/AgentWebKit").path)
@@ -217,52 +256,3 @@ struct Options {
     }
 }
 
-let usage = """
-awb help [COMMAND [SUBCOMMAND]] | capabilities
-awb daemon [--data-dir PATH] [--socket PATH]
-awb status | shutdown --all
-awb space create NAME --proxy direct|http://127.0.0.1:<PORT> [--ca-cert PATH | --ignore-certificate-errors]
-  PORT: 1–65535; each Space retains its own proxy across restarts (e.g. 8899).
-awb space list
-awb space info|delete NAME_OR_ID
-awb space suspend|resume NAME_OR_ID
-awb open URL --space NAME_OR_ID [--tab ID] [--fail-on-http-error]
-awb tab new [URL] --space NAME_OR_ID
-awb tab list --space NAME_OR_ID
-awb tab close ID --space NAME_OR_ID
-awb tab default ID --space NAME_OR_ID
-awb reload --space NAME_OR_ID [--tab ID] [--timeout 15000] [--fail-on-http-error]
-awb back|forward --space NAME_OR_ID --tab ID
-awb snapshot --space NAME_OR_ID [--tab ID] [--scope SELECTOR_OR_REF] [--interactive] [--role ROLE --name NAME]
-awb state --space NAME_OR_ID [--tab ID]
-awb frame list --space NAME_OR_ID [--tab ID] [--timeout 15000]
-awb snapshot|click|fill|wait|scroll|select|check|uncheck ... --space NAME_OR_ID --tab ID --frame FRAME_DOCUMENT_ID
-awb diagnostics --space NAME_OR_ID [--tab ID] [--clear] [--detail on|continuous|off [--include-info] | --inspectable on|off]
-awb dialog list --space NAME_OR_ID [--tab ID]
-awb dialog respond ID accept|dismiss --space NAME_OR_ID [--tab ID] [--text PROMPT_VALUE]
-awb download list --space NAME_OR_ID [--tab ID]
-awb download wait|cancel ID --space NAME_OR_ID [--tab ID]
-awb upload SELECTOR_OR_REF FILE_PATH [FILE_PATH ...] --space NAME_OR_ID [--tab ID]
-awb click SELECTOR_OR_REF --space NAME_OR_ID [--tab ID] [--wait-for-navigation | --wait-for-popup] [--timeout 15000]
-awb fill SELECTOR_OR_REF VALUE --space NAME_OR_ID [--tab ID]
-awb scroll DX DY --space NAME_OR_ID --tab ID
-awb select SELECTOR_OR_REF VALUE --space NAME_OR_ID --tab ID
-awb check|uncheck SELECTOR_OR_REF --space NAME_OR_ID --tab ID
-awb focus SELECTOR_OR_REF --space NAME_OR_ID --tab ID [--timeout 15000]
-awb key KEY --space NAME_OR_ID --tab ID [--timeout 15000]
-awb evaluate JAVASCRIPT --space NAME_OR_ID [--tab ID] [--await] [--timeout 15000]
-awb screenshot --space NAME_OR_ID [--tab ID] --out PATH [--element SELECTOR_OR_REF | --full-page]
-awb viewport get --space NAME_OR_ID [--tab ID]
-awb viewport set WIDTH HEIGHT --space NAME_OR_ID --tab ID
-awb wait [SELECTOR_OR_REF] --space NAME_OR_ID [--tab ID] [--timeout 15000]
-awb wait --url EXACT_URL --space NAME_OR_ID
-awb wait --url-pattern GLOB | --fn FUNCTION [--stable-for MS] --space NAME_OR_ID
-awb wait [SELECTOR_OR_REF] --text TEXT --space NAME_OR_ID
-awb wait SELECTOR_OR_REF --state visible|hidden|attached|detached|enabled|disabled --space NAME_OR_ID
-所有命令支持 --socket PATH。页面命令必须指定 Space；默认标签页固定，与 GUI 无关。
-WebKit 操作支持 --timeout 1–60000；--await 等待 Promise；-- 后的参数按字面值处理。
---frame 与 --wait-for-navigation 不能组合；子文档跳转后重新 frame list 确认新文档，再 wait 验证。
-awb --help | --version 无需启动服务。reload 恢复异常页面，保留 Tab ID 和 Space 网站数据。
---wait-for-popup 等待同 Space 新 Tab 并返回 newTabId；DOM 点击不保证可信用户激活或业务成功。
-响应 timing 包含 cliMs、ipcRoundTripMs、serverMs、webkitMs；完整 CLI 进程耗时需由调用方测量。
-"""

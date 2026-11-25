@@ -11,9 +11,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def verify_offline(cli):
-    usage = cli('--help')['usage']
-    assert usage.startswith('awb help ') and 'reload' in usage
+def verify_offline(cli, cli_text=None, check_bare=True):
     version = cli('version')['version']
     assert re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', version), version
     assert cli('--version')['version'] == version
@@ -25,11 +23,28 @@ def verify_offline(cli):
     definitions = contract['schemas']['$defs']
     for name, command in commands.items():
         assert command['resultSchema'] in definitions
-        assert cli('help', *name.split('.'))['commands'] == [command]
+        assert isinstance(command.get('summary'), str) and command['summary'], name
         assert command['args']['maximum'] == len(command['args']['names'])
-    for group in ('space', 'tab', 'dialog', 'frame', 'viewport'):
-        assert {item['command'] for item in cli('help', group)['commands']} == {
-            name for name in commands if name.startswith(group + '.')}
+    if cli_text is not None:
+        usage = cli_text('--help')
+        assert not usage.lstrip().startswith('{') and '\n' in usage, usage
+        assert usage.startswith(f'awb {version} ') and 'reload' in usage and 'snapshot' in usage
+        assert cli_text('-h') == usage and cli_text('help') == usage
+        if check_bare:
+            assert cli_text() == usage
+        for name, command in commands.items():
+            text = cli_text('help', *name.split('.'))
+            assert not text.lstrip().startswith('{') and '\n' in text, (name, text)
+            assert f"awb {name.replace('.', ' ')}" in text and command['summary'] in text and 'Usage:' in text, (name, text)
+            assert cli_text(*name.split('.'), '--help') == text, name
+            assert cli_text(*name.split('.'), '-h') == text, name
+        for group in ('space', 'tab', 'dialog', 'download', 'frame', 'viewport'):
+            group_text = cli_text('help', group)
+            assert not group_text.lstrip().startswith('{') and '\n' in group_text, (group, group_text)
+            assert cli_text(group, '--help') == group_text and cli_text(group, '-h') == group_text, group
+            for name in commands:
+                if name.startswith(group + '.'):
+                    assert f"awb {name.replace('.', ' ')}" in group_text, (group, name, group_text)
     timeout = next(option for option in commands['open']['options'] if option['name'] == 'timeout')
     assert (timeout['minimum'], timeout['maximum'], timeout['default'], timeout['unit']) == (1, 60000, 15000, 'ms')
     for command in commands.values():
@@ -72,7 +87,8 @@ def verify_offline(cli):
     cli('key', 'Enter', '--space', 'work', error='invalid_arguments')
     assert {'stale_ref', 'timeout', 'space_busy', 'tab_not_found', 'operation_failed'} <= set(contract['errors'])
     for args in [('help', 'missing'), ('help', 'space', 'missing'), ('help', 'open', 'extra'),
-                 ('capabilities', 'extra'), ('capabilities', '--space', 'work'), ('help', '--tab', 'id'),
+                 ('missing', '--help'), ('open', '--tab', 'id', '--help'), ('open', '--help', '--help'),
+                 ('space',), ('capabilities', 'extra'), ('capabilities', '--space', 'work'), ('help', '--tab', 'id'),
                  ('shutdown',), ('shutdown', '--all', '--all'), ('status', '--all'), ('shutdown', '--all', '--space', 'work')]:
         cli(*args, error='invalid_arguments')
     return contract
@@ -89,8 +105,13 @@ def verify_live_contract(cli, socket_path):
     before = cli('status')
     spaces = cli('space', 'list')
     contract = cli('capabilities')
+    commands = {item['command']: item for item in contract['commands']}
     assert raw('capabilities')['result'] == contract
-    assert raw('help', ['space', 'create'])['result'] == cli('help', 'space', 'create')
+    assert raw('help')['result']['usage'].startswith(f"awb {before['version']} ")
+    assert raw('help', ['space', 'create'])['result']['commands'] == [commands['space.create']]
+    for group in ('space', 'tab', 'dialog', 'download', 'frame', 'viewport'):
+        assert {item['command'] for item in raw('help', [group])['result']['commands']} == {
+            name for name in commands if name.startswith(group + '.')}
     assert raw('help', ['missing'])['error']['code'] == 'invalid_arguments'
     assert raw('capabilities', options={'tab': 'wrong'})['error']['code'] == 'invalid_arguments'
     for key in ('data-dir', 'socket'):
@@ -128,17 +149,20 @@ def verify_live_contract(cli, socket_path):
         assert set(definitions[name]['required']) <= result.keys(), (name, result)
     cli('fill', '--space', 'work', '--', '#message', '--help')
     assert cli('evaluate', 'document.querySelector("#message").value', '--space', 'work')['value'] == '--help'
+    cli('fill', '--space', 'work', '--', '#message', '-h')
+    assert cli('evaluate', 'document.querySelector("#message").value', '--space', 'work')['value'] == '-h'
     after = cli('status')
     assert after['observer'] == before['observer']
     assert after['frontmostPid'] == before['frontmostPid']
     assert cli('space', 'list') == spaces
-    return 'offline help/capabilities; CLI/IPC parity; actual result schemas; literal --help; fixed targets and observer unchanged'
+    return 'offline plain-text help & capabilities; CLI/IPC parity; actual result schemas; literal --help/-h; fixed targets and observer unchanged'
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--binary', type=Path, default=ROOT / '.build/debug/awb')
     binary = parser.parse_args().binary.resolve()
+    bundled = (binary.parent.parent / 'Info.plist').exists()
     with tempfile.TemporaryDirectory(prefix='aw-contract-') as directory:
         data = Path(directory) / 'unused'
         env = dict(os.environ, BROWSER_DATA_DIR=str(data), BROWSER_SOCKET=str(data / 'missing.sock'))
@@ -155,7 +179,13 @@ def main():
                 return response
             return response['result']
 
-        contract = verify_offline(cli)
+        def cli_text(*args):
+            process = subprocess.run([str(binary), *args], env=env,
+                                     capture_output=True, text=True, timeout=10)
+            assert process.returncode == 0, (args, process.stdout, process.stderr)
+            return process.stdout.rstrip('\n')
+
+        contract = verify_offline(cli, cli_text, check_bare=not bundled)
         assert not data.exists(), 'Offline discovery must not create a registry or start a daemon'
         print(json.dumps(dict(ok=True, offline=True, commands=len(contract['commands']), schemaVersion=contract['schemaVersion'])))
 

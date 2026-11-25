@@ -28,19 +28,19 @@ CLI 原名为 `browser`，现统一为 `awb`。Bundle ID、注册表目录、`br
 ## 离线帮助与机器可读契约
 
 ```sh
-awb help                    # 保留 result.usage
-awb help space              # 命令组
-awb help space create       # 或 awb help open
-awb capabilities
+awb help                    # 分组总览与快捷工作流（纯文本）
+awb help space              # 命令组帮助（等价 awb space --help）
+awb help space create       # 命令详情、选项与示例（等价 awb space create --help）
+awb capabilities            # 机器可读 JSON 契约（schemaVersion 1）
 python3 tests/contract_cases.py  # 不存在的 Socket / 数据目录，验证纯离线查询
 python3 tests/reliability.py --forms  # 含真实 CLI / IPC 对照和原有可靠性回归
 ```
 
-`help`、`capabilities`、`version` 在 CLI 本地返回，也可通过原有 Socket 查询。帮助使用 `help COMMAND [SUBCOMMAND]`，不是给任意操作追加 `--help`；`--` 后的表单值仍按字面处理。命令数量、位置参数范围和允许选项共用 `Request` 校验定义；必需项、互斥项及条件约束由元数据补充，服务端继续执行原有语义校验。
+`help`、`capabilities`、`version` 在 CLI 本地返回，也可通过原有 Socket 查询。CLI 侧成功的 `awb help [COMMAND [SUBCOMMAND]]` 与 `awb [COMMAND [SUBCOMMAND]] --help / -h` 输出面向人类与 Agent 的多行纯文本帮助（打包应用内无参数启动仍默认运行 `daemon`；无效帮助主题仍返回单行 JSON 错误并退出 1）；原始 IPC `help` 和 `capabilities` 仍返回结构化 JSON；`--` 后的表单值（包括 `-h`、`--help` 等以 `-` 开头的值）仍按字面处理。命令数量、位置参数范围和允许选项共用 `Request` 校验定义；必需项、互斥项及条件约束由元数据补充，服务端继续执行原有语义校验。
 
 `--socket`、`--data-dir` 只用于 CLI 定位 daemon，发送前剥离，原始 IPC 携带这两个选项会返回 `invalid_arguments`；capabilities 的选项 `availability` 区分 CLI 与 IPC。Socket 最多接收 32 个在途连接，未完整发送的请求也占用名额，回复并关闭后释放；超额立即返回 `server_busy`，调用方应等待后重试。
 
-`capabilities` 的 `result.schemaVersion` 为 1，与产品 `version` 分开。`commands` 列出命令、参数名称/数量、选项类型/必需性、超时单位/范围/默认值、CLI/IPC 可用范围和离线属性。IPC 的选项值始终为字符串，无值 CLI 开关对应 `"true"`。`constraints` 保存 click/TLS/wait 的组合限制、frame 的显式 Tab 约束及 key 白名单与聚焦前提；`errors` 是已知结构化错误码，底层未分类错误使用 `operation_failed`，不能据错误码自动重放有副作用的操作。
+`capabilities` 的 `result.schemaVersion` 为 1，与产品 `version` 分开。`commands` 列出命令、摘要、参数名称/数量、选项类型/必需性、超时单位/范围/默认值、CLI/IPC 可用范围和离线属性。IPC 的选项值始终为字符串，无值 CLI 开关对应 `"true"`。`constraints` 保存 click/TLS/wait 的组合限制、frame 的显式 Tab 约束及 key 白名单与聚焦前提；`errors` 是已知结构化错误码，底层未分类错误使用 `operation_failed`，不能据错误码自动重放有副作用的操作。
 
 `schemas.$defs` 是 JSON Schema 2020-12 的请求、响应及结果外层定义；`commands[].resultSchema` 指向其中一个定义。它描述必有字段和集合形状，允许新增字段；网页 `value` 为任意 JSON，不把页面数据当作可信指令。位置参数数量、允许选项与条件限制仍需结合命令元数据，不能只用通用 request schema 代替服务端校验。`daemon` 只可由 CLI 启动长期进程，没有单条成功结果；原始 IPC 不支持启动 daemon。
 
@@ -50,9 +50,9 @@ python3 tests/reliability.py --forms  # 含真实 CLI / IPC 对照和原有可�
 
 页面命令必须指定 `--space NAME_OR_ID`。可用 `--tab UUID` 选择目标，允许省略时使用该 Space 的固定默认 Tab。`tab default ID --space NAME` 可修改并持久化默认值。相同 Space 的重叠页面操作返回 `space_busy`，由调用方顺序执行。忙碌时可以查询 `state`、`tab list`、`space info` 和 `dialog list`，也可以用 `dialog respond` 回应原动作正在等待的对话框。
 
-每条 CLI 命令返回一行 JSON：成功为 `{"ok":true,"result":...}`，失败为 `{"ok":false,"error":{"code":...,"message":...}}`，退出码分别为 0/1。页面结果包含 Space/Tab ID、URL、加载状态和代理限制；click/fill 标明 `method: "dom"`、`nativeVerified: false`，动作成功仍需核对业务结果。
+除成功的 CLI `awb help` / `--help` / `-h`（输出可读多行文本）外，每条 CLI 命令返回一行 JSON：成功为 `{"ok":true,"result":...}`，失败为 `{"ok":false,"error":{"code":...,"message":...}}`，退出码分别为 0/1。页面结果包含 Space/Tab ID、URL、加载状态和代理限制；click/fill 标明 `method: "dom"`、`nativeVerified: false`，动作成功仍需核对业务结果。
 
-WebKit 操作默认超时 15000 ms，`--timeout` 接受 1–60000 ms；`evaluate --await` 等待 Promise。`awb --help`、`awb --version`、按命令帮助和 capabilities 均可离线查询。值以 `--` 开头时，将选项放在前面，再以 `--` 分隔位置参数，例如 `awb fill --space work -- '#message' '--hello'`。
+WebKit 操作默认超时 15000 ms，`--timeout` 接受 1–60000 ms；`evaluate --await` 等待 Promise。`awb --help`、`awb --version`、按命令帮助和 capabilities 均可离线查询。值以 `-` 或 `--` 开头时，将选项放在前面，再以 `--` 分隔位置参数，例如 `awb fill --space work -- '#message' '--hello'`。
 
 ## Codex / Pi Skill
 

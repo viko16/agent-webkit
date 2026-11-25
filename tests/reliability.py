@@ -84,6 +84,11 @@ def main():
             return response
         return response['result']
 
+    def cli_text(*args):
+        p = subprocess.run([str(binary), *args], env=env, capture_output=True, text=True, timeout=15)
+        assert p.returncode == 0, (args, p.stdout, p.stderr)
+        return p.stdout.rstrip('\n')
+
     def start(*, executable=app, extra_env=None):
         nonlocal daemon
         log = (out / f'daemon-{len(logs)}.log').open('w')
@@ -118,7 +123,7 @@ def main():
             checks.append(verify_forms(cli, form_url, nonce, out))
 
     try:
-        verify_offline(cli)
+        verify_offline(cli, cli_text)
         cli('open', 'https://example.com', '--space', 'work', '--proxy', 'direct', error='invalid_arguments')
         start()
         if args.forms_only:
