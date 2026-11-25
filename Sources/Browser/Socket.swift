@@ -70,7 +70,10 @@ func sendRequest(_ request: Request, path: String) throws -> Data {
     defer { close(fd) }
     configure(fd)
     var addr = try address(path)
-    guard withAddress(&addr, { Darwin.connect(fd, $0, $1) }) == 0 else { throw socketError("connect; 请先启动 awb daemon") }
+    guard withAddress(&addr, { Darwin.connect(fd, $0, $1) }) == 0 else {
+        let code = errno
+        throw BrowserError("ipc_error", "connect failed (socket: \(path)); 确认 Agent WebKit.app 已运行，或核对 --socket / BROWSER_SOCKET: \(String(cString: strerror(code)))")
+    }
     try writeMessage(fd, JSONEncoder().encode(request))
     return try readMessage(fd)
 }

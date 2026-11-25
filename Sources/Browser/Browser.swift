@@ -1488,7 +1488,7 @@ final class BrowserModel {
             let name = try arg(0)
             guard name.range(of: "^[A-Za-z][A-Za-z0-9_-]{0,63}$", options: .regularExpression) != nil else { throw BrowserError("invalid_name", "名称需为字母开头的 1–64 位字母、数字、下划线或连字符") }
             guard !records.contains(where: { $0.name == name && !$0.deleting }) else { throw BrowserError("space_exists", "Space 已存在") }
-            guard let proxy = r.options["proxy"] else { throw BrowserError("proxy_required", "创建 Space 必须显式指定 --proxy") }
+            guard let proxy = r.options["proxy"] else { throw BrowserError("proxy_required", "创建 Space 必须显式指定 --proxy direct 或 --proxy http://127.0.0.1:<PORT>") }
             guard r.options["ca-cert"] == nil || r.options["ignore-certificate-errors"] == nil else {
                 throw BrowserError("invalid_arguments", "--ca-cert 和 --ignore-certificate-errors 不能同时使用")
             }
@@ -1503,7 +1503,7 @@ final class BrowserModel {
             return space.summary
         }
         let target = command.hasPrefix("space.") ? try arg(0) : r.options["space"]
-        guard let target else { throw BrowserError("space_required", "所有页面操作必须指定 --space") }
+        guard let target else { throw BrowserError("space_required", "缺少 --space NAME_OR_ID；先用 awb space list 查看已有 Space 或 awb space create 创建") }
         var deletionID: UUID?
         if command == "space.delete" {
             if let uuid = UUID(uuidString: target), records.contains(where: { $0.id == uuid }) {
@@ -1517,7 +1517,7 @@ final class BrowserModel {
             }
         }
         guard let id = deletionID ?? spaces.first(where: { $0.record.name == target || $0.record.id.uuidString.lowercased() == target.lowercased() })?.record.id else {
-            throw BrowserError("space_not_found", "Space 不存在：\(target)")
+            throw BrowserError("space_not_found", "Space 不存在：\(target)；运行 awb space list 核对名称或 UUID")
         }
         if command == "space.delete" {
             // Avoid retaining the Space/DataStore across the asynchronous removal API.
@@ -1560,7 +1560,7 @@ final class BrowserModel {
         if space.suspended, ["state", "diagnostics", "dialog.list", "dialog.respond", "download.list", "download.wait", "download.cancel"].contains(command) {
             let tabID = r.options["tab"] ?? space.record.defaultTab.uuidString
             guard let state = space.tabStates.first(where: { ($0["tabId"] as? String)?.lowercased() == tabID.lowercased() }) else {
-                throw BrowserError("tab_not_found", "Space 中不存在该标签页")
+                throw BrowserError("tab_not_found", "Space 中不存在该标签页；运行 awb tab list --space \(space.record.id.uuidString) 核对 Tab UUID")
             }
             guard command == "state" else { throw BrowserError("space_suspended", "Space 已休眠；使用 space resume 显式恢复") }
             return ["spaceId": id.uuidString, "space": space.record.name, "proxy": space.record.proxy,
@@ -1569,7 +1569,7 @@ final class BrowserModel {
         if command == "state" || command == "diagnostics" || command.hasPrefix("dialog.") || command.hasPrefix("download.") {
             let tabID = r.options["tab"] ?? space.record.defaultTab.uuidString
             guard let tab = space.tabs.first(where: { $0.id.uuidString.lowercased() == tabID.lowercased() }) else {
-                throw BrowserError("tab_not_found", "Space 中不存在该标签页")
+                throw BrowserError("tab_not_found", "Space 中不存在该标签页；运行 awb tab list --space \(space.record.id.uuidString) 核对 Tab UUID")
             }
             if command.hasPrefix("download.") {
                 if command == "download.list" { return ["spaceId": id.uuidString, "tabId": tab.id.uuidString, "value": tab.downloads.snapshot()] }
@@ -1613,7 +1613,7 @@ final class BrowserModel {
             return ["spaceId": id.uuidString, "space": space.record.name, "proxy": space.record.proxy,
                     "network": space.networkState, "page": tab.state, "busy": space.busy, "value": NSNull()] as [String: Any]
         }
-        guard !space.busy else { throw BrowserError("space_busy", "同一 Space 已有操作；请在该 Agent 内顺序执行") }
+        guard !space.busy else { throw BrowserError("space_busy", "同一 Space 已有操作执行中；先用 state 和 dialog list 检查是否正在等待 JS 对话框，否则等待原操作完成后再顺序执行") }
         space.busy = true; changed?()
         defer { space.busy = false; changed?() }
         if !["tab.close", "tab.default"].contains(command), let error = space.networkError { throw error }
@@ -1622,11 +1622,11 @@ final class BrowserModel {
             guard let value = Int(raw), (1...60000).contains(value) else { throw BrowserError("invalid_timeout", "timeout 必须为 1–60000 ms") }; timeout = value
         } else { timeout = 15000 }
         if let tabID = r.options["tab"], !space.record.tabs.contains(where: { $0.id.uuidString.lowercased() == tabID.lowercased() }) {
-            throw BrowserError("tab_not_found", "Space 中不存在该标签页")
+            throw BrowserError("tab_not_found", "Space 中不存在该标签页；运行 awb tab list --space \(space.record.id.uuidString) 核对 Tab UUID")
         }
         if ["tab.close", "tab.default"].contains(command) {
             guard space.record.tabs.contains(where: { $0.id.uuidString.lowercased() == r.args[0].lowercased() }) else {
-                throw BrowserError("tab_not_found", "标签页不存在")
+                throw BrowserError("tab_not_found", "标签页不存在；运行 awb tab list --space \(space.record.id.uuidString) 核对 Tab UUID")
             }
             if command == "tab.close", space.record.tabs.count == 1 { throw BrowserError("last_tab", "不能关闭最后一个标签页；可删除 Space") }
         }
@@ -1676,7 +1676,9 @@ final class BrowserModel {
             return tab.state
         }
         let tabID = r.options["tab"] ?? space.record.defaultTab.uuidString
-        guard var tab = space.tabs.first(where: { $0.id.uuidString.lowercased() == tabID.lowercased() }) else { throw BrowserError("tab_not_found", "Space 中不存在该标签页") }
+        guard var tab = space.tabs.first(where: { $0.id.uuidString.lowercased() == tabID.lowercased() }) else {
+            throw BrowserError("tab_not_found", "Space 中不存在该标签页；运行 awb tab list --space \(space.record.id.uuidString) 核对 Tab UUID")
+        }
         // Replace a stalled view only on explicit navigation. Never replay an Agent action.
         if ["open", "reload"].contains(command), tab.terminated || tab.unresponsive {
             let index = space.tabs.firstIndex(where: { $0 === tab })!
