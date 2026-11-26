@@ -2,10 +2,12 @@
 import hashlib
 import json
 import platform
+import ssl
 import subprocess
 import time
 
 from runtime_checks import ROOT, Runtime, build_host
+from fixtures import origin
 
 
 def main():
@@ -23,23 +25,26 @@ def main():
                         '-out', str(out / 'ca.pem')], check=True, capture_output=True, timeout=15)
         runtime.start(host, str(runtime.state), str(out))
         cases = {
-            'system': ((), '直连 · 系统证书校验', False),
-            'custom-ca': (('--ca-cert', str(out / 'ca.pem')), '直连 · 自定义 CA', False),
-            'insecure': (('--ignore-certificate-errors',), '直连 · 未校验证书', True),
+            'system': ((), '系统证书校验'),
+            'custom-ca': (('--ca-cert', str(out / 'ca.pem')), '系统证书及自定义 CA'),
+            'insecure': (('--ignore-certificate-errors',), '忽略证书错误'),
         }
         created = {}
-        for name, (options, _, _) in cases.items():
+        for name, (options, _) in cases.items():
             created[name] = runtime.command('space', 'create', name, '--proxy', 'direct', *options)
             runtime.page(name, created[name]['tabs'][0]['tabId'], 'open', runtime.base)
 
-        def check(name, phase, select=True):
+        def check(name, phase, select=True, https=False):
             current = runtime.command('space', 'info', name)
             assert current['tls']['policy'] == name and current['id'] == created[name]['id'], current
             assert current['tabs'][0]['tabId'] == created[name]['tabs'][0]['tabId'], current
+            # A restored URL is not the current connection until WebKit commits it.
+            runtime.page(name, current['tabs'][0]['tabId'], 'wait', '#message')
             gui = runtime.gui('select', space=name, capture='true') if select else runtime.gui(capture='true')
             assert gui['observer']['spaceId'] == current['id'], gui
             assert gui['observer']['tabId'] == current['tabs'][0]['tabId'], gui
-            assert gui['security'] == cases[name][1] and gui['securityWarning'] == cases[name][2], gui
+            assert gui['security'] == ('HTTPS · 允许证书错误' if https else 'HTTP（未加密）'), gui
+            assert gui['securityWarning'] == https and cases[name][1] in gui['securityHelp'], gui
             report['checks'].append(dict(phase=phase, policy=name, gui=gui, image=f'gui-{gui["id"]}.png'))
 
         for name in ['system', 'custom-ca', 'insecure', 'system', 'insecure']:
@@ -50,6 +55,15 @@ def main():
         check('insecure', 'restored-selection', select=False)
         for name in ['custom-ca', 'system', 'insecure']:
             check(name, 'after-restart')
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(out / 'ca.pem', out / 'ca.key')
+        secure_site, _ = origin(tls_context=context)
+        try:
+            runtime.page('insecure', created['insecure']['tabs'][0]['tabId'], 'open',
+                         f'https://127.0.0.1:{secure_site.server_address[1]}/index.html')
+            check('insecure', 'https', https=True)
+        finally:
+            secure_site.shutdown(); secure_site.server_close()
         report['runtimePassed'] = True
     except BaseException as error:
         report['error'] = repr(error)

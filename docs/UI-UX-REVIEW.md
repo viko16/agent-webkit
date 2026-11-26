@@ -1,6 +1,6 @@
 # Agent WebKit 界面问题与验证记录
 
-基线为 `6651d9f`。下表保留每项问题的修复前证据，并在验收后补充实测结果和截图。
+基线为 `6651d9f`。共 27 项，分五批修复和验收。用户指出的表单边距列为第 26 项，随第一批修复；标签页关闭按钮列为第 27 项，随第二批修复。截图保留各批验收时的界面，第五批包含表单的最终布局。
 
 ## 第一批 · 操作中断、数据和目标
 
@@ -20,7 +20,7 @@
 | 7 | **标签标题过早截断**。单标签也仅显示省略号，多标签溢出后难以寻找。让短标题完整显示，并提供完整标题列表。 | [截图](ui-ux-evidence/before/03-working.png) | 已验证 | [完整标题列表](ui-ux-evidence/after/07-tab-list.png) · [窄窗标签栏](ui-ux-evidence/after/07-tab-strip.png) |
 | 8 | **地址栏隐藏端口和协议**。本地不同端口在常态下都显示同一主机名。保留非默认端口，区分明文连接。 | [截图](ui-ux-evidence/before/03-working.png) | 已验证 | [常态地址](ui-ux-evidence/after/08-http-origin.png) |
 | 9 | **手动打开的弹窗没有反馈**。前台点击授权型按钮后子页在后台打开。应切换到子页或提供查看入口。 | [截图](ui-ux-evidence/before/23-manual-popup.png) | 已验证 | [父页查看入口](ui-ux-evidence/after/09-popup-notice.png) |
-| 10 | **手动浏览缺少导航与查找入口**。工具栏和菜单缺少后退、前进、页内查找。 | [应用菜单](../Sources/Browser/main.swift) | 已验证 | [页内命中和历史按钮](ui-ux-evidence/after/10-page-find.png) |
+| 10 | **手动浏览缺少导航与查找入口**。工具栏和菜单缺少后退、前进、页内查找。 | [工具栏](ui-ux-evidence/before/03-working.png) · [基线应用菜单](https://github.com/viko16/agent-webkit/blob/6651d9fa6b9cdb7d3b00d9739788ce4257928c38/Sources/Browser/main.swift) | 已验证 | [页内命中和历史按钮](ui-ux-evidence/after/10-page-find.png) |
 | 11 | **关闭确认缺少页名**。确认框只显示 Space 名称，应显示目标页标题和主机，并解释最后一页为何不可关闭。 | [截图](ui-ux-evidence/before/11-close-recent.png) | 已验证 | [关闭目标与主机](ui-ux-evidence/after/11-close-target.png) |
 
 ## 第三批 · Agent 交接和执行状态
@@ -46,11 +46,11 @@
 
 | 编号 | 问题与预期 | 修复前证据 | 状态 | 修复后证据 |
 | --- | --- | --- | --- | --- |
-| 21 | **窄窗口隐藏核心动作**。地址栏挤占空间，交接和新标签被收入溢出菜单。 | [截图](ui-ux-evidence/before/27-dark-narrow.png) | 待修复 | 待补 |
-| 22 | **深色外观底栏文字难读**。切换外观后底栏出现深底深字，应跟随系统语义颜色。 | [截图](ui-ux-evidence/before/26-dark-wide.png) | 待修复 | 待补 |
-| 23 | **侧栏截掉环境名和状态**。同前缀名称难区分，休眠或暂停信息可能被截断。 | [截图](ui-ux-evidence/before/14-popup.png) | 待修复 | 待补 |
-| 24 | **新建表单缺少常驻标签**。填写后看不到字段用途，CA 路径要求手输。应保留字段标签并提供文件选择。 | [截图](ui-ux-evidence/before/05-create.png) | 待修复 | 待补 |
-| 25 | **Space 策略与当前连接混淆**。明文 HTTP 页底部仍显示系统证书校验，信息面板重复网络信息。应区分当前连接和证书策略。 | [截图](ui-ux-evidence/before/28-space-info.png) | 待修复 | 待补 |
+| 21 | **窄窗口隐藏核心动作**。地址栏挤占空间，交接和新标签被收入溢出菜单。 | [截图](ui-ux-evidence/before/27-dark-narrow.png) | 已验证 | [760 pt 工具栏](ui-ux-evidence/after/21-dark-narrow.png) · [活动窗口对照](ui-ux-evidence/after/22-dark-wide.png) |
+| 22 | **深色外观底栏文字难读**。切换外观后底栏出现深底深字，应跟随系统语义颜色。 | [截图](ui-ux-evidence/before/26-dark-wide.png) | 已验证 | [深色宽窗](ui-ux-evidence/after/22-dark-wide.png) · [浅色对照](ui-ux-evidence/after/23-sidebar.png) |
+| 23 | **侧栏截掉环境名和状态**。同前缀名称难区分，休眠或暂停信息可能被截断。 | [截图](ui-ux-evidence/before/14-popup.png) | 已验证 | [同前缀的两个环境](ui-ux-evidence/after/23-sidebar.png) |
+| 24 | **新建表单缺少常驻标签**。填写后看不到字段用途，CA 路径要求手输。应保留字段标签并提供文件选择。 | [截图](ui-ux-evidence/before/05-create.png) | 已验证 | [折叠表单](ui-ux-evidence/after/24-form-basic.png) · [高级选项及错误状态](ui-ux-evidence/after/24-form-advanced.png) |
+| 25 | **Space 策略与当前连接混淆**。明文 HTTP 页底部仍显示系统证书校验，信息面板重复网络信息。应区分当前连接和证书策略。 | [截图](ui-ux-evidence/before/28-space-info.png) | 已验证 | [Space 策略与底栏当前连接](ui-ux-evidence/after/25-space-policy.png) |
 
 ## 补充 · 本次随第一批修复
 
@@ -96,3 +96,13 @@
 - 另用延迟 18 秒的页面触发等待超时。同一次导航最终成功后横幅自动消失。粘贴 `mailto:` 或 `tel:` 会保留输入并提示修正；单词形式的内网主机如需指定端口，可写完整的 `http://主机名:端口`。
 - 点击不支持的外部链接后选择「忽略」，原页面仍在。仅对测试进程模拟系统代理冲突，横幅和底栏均显示已暂停。重新检查时代理仍开启会继续提示，解除模拟冲突后恢复。
 - 有两个标签页时停留在「评审记录」，确认休眠后，中央显示两个标签页及原页名，侧栏和中央都能「恢复 Space」。恢复后核对原标签 ID 和实际网址；旧记录缺少标题时回退到可读网址或「新标签页」。
+
+## 第五批验收
+
+- 将窗口缩到 760 pt，通过原生工具栏的可见项目核对「交给 Agent」、新建标签页和地址栏。分别触发两个工具栏动作，观察到「已复制」反馈和标签数从一变二。窄窗图截取非活动窗口的完整工具栏，宽窗图可对照活动状态。同一窗口从浅色切到深色后，底栏的系统文字颜色随之改变。[Apple HIG · Toolbars](https://developer.apple.com/design/human-interface-guidelines/toolbars) · [Dark Mode](https://developer.apple.com/design/human-interface-guidelines/dark-mode)
+- 两个 Space 名只有环境后缀不同，收窄侧栏后仍可区分，休眠状态排在连接方式和页数之前。悬停和辅助功能保留完整名称及状态。[Apple HIG · Sidebars](https://developer.apple.com/design/human-interface-guidelines/sidebars)
+- HTTP 页面底栏显示「HTTP（未加密）」，打开信息面板可以分别读到 Space 的连接方式与证书策略。连接类型取自已提交的当前文档。
+- 展开新建表单并触发名称错误后，名称、连接方式、代理地址、证书策略、CA 证书五行的左右外边距分别为 20 / 20 pt。字段标签和已填内容均保留，点击 CA 证书旁的「选择…」会打开系统文件选择器。[Apple HIG · Text fields](https://developer.apple.com/design/human-interface-guidelines/text-fields)
+- 系统选择器实测进入指定的测试目录，取消后保留原路径。用 AppKit 测试面板返回选中的 PEM 文件，经生产回调核对表单和创建请求中的证书路径一致。系统文件列表内的双击未实测。
+
+最终版本通过调试构建、164 个原生窗口回归步骤、34 项导航检查和 10 项连接状态检查。连接检查覆盖三种 Space 证书策略、服务重启后恢复选中页，以及通过 HTTPS 加载测试页时的证书警示。

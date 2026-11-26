@@ -355,11 +355,11 @@ GUI 的 selectedSpace / selectedTabs 只决定观察哪一个 WebView，并按�
 
 手动关闭页、删除 Space、替换无响应 WebView、退出应用均会提示将中断的活跃下载及待处理的网页对话框。普通地址栏导航和重载也会先提示待处理的网页对话框，同一 WebView 的下载可以继续。手动休眠在释放页面前要求确认，提示表单草稿会丢失，并列出待处理的网页对话框。存在活跃下载时拒绝休眠。每次确认重读目标、忙碌状态及受影响资源的 ID，关闭标签页还检查最后一页和近期活动；同样数量的新资源也需重新确认。CLI/IPC 保留原来的显式操作语义。活动只在 daemon 内存中记录，重启后清空。
 
-地址栏省略协议时使用 HTTPS，本地 HTTP 页面需显式输入 `http://`。底部显示代理和证书策略，忽略证书错误时显示橙色提示。⌘T 新建 Tab，⌘L 聚焦地址栏，⌃⌘S 切换侧栏，⇧⌘F 搜索 Space，⇧⌘[ / ⇧⌘] 切换标签页，⌘W 关闭当前标签页，⇧⌘W 隐藏观察窗口，⌘Q 退出服务。
+地址栏省略协议时使用 HTTPS，本地 HTTP 页面需显式输入 `http://`。底部显示当前页面连接，HTTP 标明未加密，允许证书错误的 HTTPS 页面显示橙色提示。Space 信息面板列出连接方式和证书策略。⌘T 新建 Tab，⌘L 聚焦地址栏，⌃⌘S 切换侧栏，⇧⌘F 搜索 Space，⇧⌘[ / ⇧⌘] 切换标签页，⌘W 关闭当前标签页，⇧⌘W 隐藏观察窗口，⌘Q 退出服务。
 
 `python3 tests/search_selection_cases.py` 构建独立测试应用，用 ×、菜单快捷键和原生确认按钮验证关闭、相邻页选择、后台下载与对话框保护。默认宿主禁止激活前台，菜单分发时提供 key-window 条件。指定 `BROWSER_TEST_FOREGROUND=1` 会在快捷键阶段激活测试窗口，用实际 key window 分发 AppKit 菜单事件；此选项会占用桌面焦点。两种方式均不发送系统级键盘输入。
 
-运行 `zsh scripts/build.sh release` 后，可用 `python3 tests/gui_security_cases.py` 检查原生证书提示。测试复用正式源码构建独立签名宿主，在三个 Direct Space 间切换，核对系统证书、自定义 CA、忽略证书错误的文字和警告颜色，并验证重启后的策略、选择与 Tab ID 保留、前台不变。需要已登录的 macOS 桌面；临时 CA 不导入钥匙串，退出清理自有 Space 和服务。报告与窗口截图保存在 `.artifacts/gui-security-*/`。本项验证 GUI 策略展示，TLS 网络信任判定仍由证书专项覆盖。
+运行 `zsh scripts/build.sh release` 后，可用 `python3 tests/gui_security_cases.py` 检查原生证书提示。测试复用正式源码构建独立签名宿主，在三个 Direct Space 间切换，核对各策略下的 HTTP 连接标签、HTTPS 忽略证书错误时的警告颜色以及策略说明，并验证重启后的策略、选择与 Tab ID 保留、前台不变。需要已登录的 macOS 桌面；临时 CA 不导入钥匙串，退出清理自有 Space 和服务。报告与窗口截图保存在 `.artifacts/gui-security-*/`。本项验证 GUI 策略展示，TLS 网络信任判定仍由证书专项覆盖。
 
 本地 RPC 每连接传输一条换行分隔的 JSON 请求和响应。操作已有页时，将示例中的 `TAB_ID` 替换为 `tab list` 返回的 UUID。
 

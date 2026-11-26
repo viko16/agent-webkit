@@ -67,7 +67,8 @@ final class TerminationHost: NSObject, NSApplicationDelegate {
             let progress = try field("progress", as: NSProgressIndicator.self)
             let security = try field("security", as: NSTextField.self)
             let result: [String: Any] = ["id": id, "ok": true, "status": status.stringValue,
-                "security": security.stringValue, "securityWarning": security.textColor == NSColor.systemOrange,
+                "security": security.stringValue, "securityHelp": security.toolTip ?? "",
+                "securityWarning": security.textColor == NSColor.systemOrange,
                 "banner": text.stringValue, "bannerVisible": !banner.isHiddenOrHasHiddenAncestor,
                 "retryEnabled": retry.isEnabled,
                 "progressVisible": !progress.isHiddenOrHasHiddenAncestor && progress.alphaValue > 0,

@@ -48,7 +48,7 @@ final class NavigationSpanProbe: NSObject, NSApplicationDelegate {
         let base = CommandLine.arguments[1]
         let privateURL = URL(string: "https://user:password@example.test:8443/failed")!
         let target = Tab.NavigationTarget(url: privateURL, isGET: true)
-        try check(target.displayAddress == "https://example.test:8443/failed" && target.url == privateURL,
+        try check(target.url.observerDisplayAddress == "https://example.test:8443/failed" && target.url == privateURL,
                   "Banner omits credentials without modifying the retry target")
         var addresses = Set<String>(), reusedAddresses = 0, cancelledCallbacks = 0
         for batch in 0..<5 {

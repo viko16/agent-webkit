@@ -167,7 +167,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         split.addSplitViewItem(item)
         let heading = NSTextField(labelWithString: "Spaces")
         heading.font = .systemFont(ofSize: 11, weight: .semibold); heading.textColor = .secondaryLabelColor
-        search.placeholderAttributedString = NSAttributedString(string: "搜索 Space", attributes: [.foregroundColor: NSColor.labelColor.withAlphaComponent(0.7)])
+        search.placeholderString = "搜索 Space"
         search.textColor = .labelColor; search.font = .systemFont(ofSize: 13)
         search.delegate = self
         search.setAccessibilityLabel("搜索 Space")
@@ -270,7 +270,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         footer.orientation = .horizontal; footer.edgeInsets = NSEdgeInsets(top: 6, left: 14, bottom: 6, right: 14)
         footer.heightAnchor.constraint(equalToConstant: 32).isActive = true
         for label in [status, security] {
-            label.font = .systemFont(ofSize: 12); label.textColor = .labelColor.withAlphaComponent(0.7)
+            label.font = .systemFont(ofSize: 12); label.textColor = .secondaryLabelColor
             label.lineBreakMode = .byTruncatingTail; label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         }
         dialogArea.orientation = .vertical
@@ -364,7 +364,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
                 reloadButton.widthAnchor.constraint(equalToConstant: 24),
                 reloadButton.heightAnchor.constraint(equalToConstant: 26)
             ])
-            item.view = field; item.label = "页面地址"; item.visibilityPriority = .high
+            item.view = field; item.label = "页面地址"
         } else if id == .copyCommand {
             handoff.target = self; handoff.action = #selector(copyCommand)
             handoff.bezelStyle = .texturedRounded
@@ -385,6 +385,11 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
             item.image = NSImage(systemSymbolName: values.1, accessibilityDescription: values.0)
             item.action = values.2; item.isBordered = true
         }
+        switch id {
+        case .address, .copyCommand, .newTab: item.visibilityPriority = .high
+        case .details, .downloads: item.visibilityPriority = .low
+        default: break
+        }
         return item
     }
 
@@ -398,11 +403,18 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         icon.contentTintColor = waiting ? .systemOrange : .controlAccentColor
         icon.symbolConfiguration = .init(pointSize: 15, weight: .regular)
         let title = NSTextField(labelWithString: space.record.name); title.font = .systemFont(ofSize: 13, weight: .medium)
-        let route = space.record.proxy == "direct" ? (space.networkError == nil ? "直连" : "直连已暂停") : "HTTP Proxy"
-        let subtitle = NSTextField(labelWithString: (waiting ? "网页等待回复 · " : "") + "\(route) · \(space.tabStates.count) 个标签页\(space.suspended ? " · 已休眠" : space.busy ? " · 运行中" : "")")
+        let route = space.record.proxy == "direct" ? "直连" : "HTTP 代理"
+        let state = [waiting ? "等待回复" : nil, space.networkError != nil ? "网络已暂停" : nil,
+                     space.suspended ? "已休眠" : space.busy ? "运行中" : nil].compactMap { $0 }
+        let summary = (state + [route, "\(space.tabStates.count) 个标签页"]).joined(separator: " · ")
+        let subtitle = NSTextField(labelWithString: summary)
         subtitle.font = .systemFont(ofSize: 11); subtitle.textColor = .secondaryLabelColor
-        for label in [title, subtitle] { label.lineBreakMode = .byTruncatingTail }
+        title.lineBreakMode = .byTruncatingMiddle; subtitle.lineBreakMode = .byTruncatingTail
         let labels = NSStackView(views: [title, subtitle]); labels.orientation = .vertical; labels.alignment = .leading; labels.spacing = 3
+        for label in [title, subtitle] {
+            label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            label.widthAnchor.constraint(equalTo: labels.widthAnchor).isActive = true
+        }
         [icon, labels].forEach { $0.translatesAutoresizingMaskIntoConstraints = false; cell.addSubview($0) }
         NSLayoutConstraint.activate([
             icon.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 8), icon.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
@@ -410,7 +422,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
             labels.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8), labels.centerYAnchor.constraint(equalTo: cell.centerYAnchor)
         ])
         cell.textField = title; cell.imageView = icon
-        cell.toolTip = "\(space.record.name)\n\(space.record.id.uuidString)\n\(space.record.proxy)"
+        cell.toolTip = "\(space.record.name)\n\(summary)\n\(space.record.id.uuidString)\n\(space.record.proxy)"
         return cell
     }
     func controlTextDidChange(_ notification: Notification) {
@@ -705,8 +717,6 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         handoff.isEnabled = tab != nil
         handoff.title = copiedTab != nil && copiedTab == tab?.id ? "已复制 ✓" : "交给 Agent"
         handoff.setAccessibilityLabel(copiedTab != nil && copiedTab == tab?.id ? "已复制接管命令" : "交给 Agent，复制当前页面的接管命令")
-        let insecure = space?.record.tls?.ignoreCertificateErrors == true
-        let tls = insecure ? "未校验证书" : space?.record.tls == nil ? "系统证书校验" : "自定义 CA"
         let networkError = space?.networkError
         let proxyState = proxyRecovery(networkError)
         let recheckProxy = proxyState != .ready
@@ -723,8 +733,18 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         else if tab?.webView.isLoading == true { status.stringValue = "正在加载…" }
         else { status.stringValue = "准备就绪" }
         status.toolTip = status.stringValue
-        security.stringValue = space.map { "\($0.record.proxy == "direct" ? "直连" : "HTTP Proxy")\(networkPaused ? "已暂停" : "") · \(tls)" } ?? ""
-        security.textColor = insecure || networkPaused ? .systemOrange : .labelColor.withAlphaComponent(0.7)
+        let scheme = tab.flatMap { URL(string: $0.committedDocumentURL)?.scheme?.lowercased() }
+        let connection: String
+        switch scheme {
+        case "http": connection = "HTTP（未加密）"
+        case "https": connection = "HTTPS"
+        default: connection = "无网页连接"
+        }
+        let insecureHTTPS = scheme == "https" && space?.record.tls?.ignoreCertificateErrors == true
+        let warning = networkPaused ? "网络已暂停" : insecureHTTPS ? "允许证书错误" : nil
+        security.stringValue = space == nil ? "" : [connection, warning].compactMap { $0 }.joined(separator: " · ")
+        security.textColor = warning == nil ? .secondaryLabelColor : .systemOrange
+        security.toolTip = space.map { "当前页：\(connection)\nSpace 证书策略：\(certificatePolicy(of: $0))" }
         reloadButton.isEnabled = canReload
         if let notice = pageActionError, notice.tab != tab?.id || notice.navigation != tab?.navigationSequence ||
             (notice.clearsAfterLoad && tab?.navigationPending == false && tab?.webView.isLoading == false) {
@@ -1078,12 +1098,17 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
             self?.copiedTab = nil; self?.updateStatus()
         }
     }
+    private func certificatePolicy(of space: Space) -> String {
+        if space.record.tls?.ignoreCertificateErrors == true { return "忽略证书错误" }
+        return space.record.tls == nil ? "系统证书校验" : "系统证书及自定义 CA"
+    }
     @objc private func showDetails(_ sender: Any?) {
         guard let space = currentSpace else { return }
         downloadsPopover.close()
         if infoPopover.isShown { infoPopover.close(); return }
         let title = NSTextField(labelWithString: space.record.name); title.font = .systemFont(ofSize: 17, weight: .semibold)
-        let details = NSTextField(wrappingLabelWithString: "Space ID\n\(space.record.id.uuidString)\n\n网络\n\(space.record.proxy)\n\n证书\n\(security.stringValue)\n\n网站数据保存在此 Space 中，关闭窗口后服务继续运行。")
+        let route = space.record.proxy == "direct" ? "直连" : space.record.proxy
+        let details = NSTextField(wrappingLabelWithString: "Space ID\n\(space.record.id.uuidString)\n\n连接方式\n\(route)\n\n证书策略\n\(certificatePolicy(of: space))\n\n网站数据保存在此 Space 中，关闭窗口后服务继续运行。")
         details.font = .systemFont(ofSize: 12); details.isSelectable = true
         let stack = NSStackView(views: [title, details]); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 14
         stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)

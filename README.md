@@ -36,7 +36,7 @@ Skill 会引导 Agent 读取页面、操作元素并核对结果。如果你想�
 
 工具栏的「下载」按标签页列出当前 Space 的任务，可以取消下载或在访达中查看已完成的文件。Agent 固定页面尺寸后，点击窗口底部的「预览」可查看完整视口。
 
-侧栏可搜索、新建、休眠、恢复和删除 Space。搜索时保留当前页面，点击结果或按回车切换。新建时填写名称，选择 Direct 或 HTTP Proxy。折叠 TLS 高级选项会保留已选策略。手动休眠前会提醒你保存草稿，有活跃下载时须先等待或取消下载。休眠会保留地址、Cookie 和 LocalStorage。删除会清除登录和网站数据，若显示数据容器待清理，可从 `awb status` 的 `pendingStores` 查看进度。
+侧栏可搜索、新建、休眠、恢复和删除 Space。搜索时保留当前页面，点击结果或按回车切换。新建时填写名称，选择直连或 HTTP 代理。折叠 TLS 高级选项会保留已选策略。手动休眠前会提醒你保存草稿，有活跃下载时须先等待或取消下载。休眠会保留地址、Cookie 和 LocalStorage。删除会清除登录和网站数据，若显示数据容器待清理，可从 `awb status` 的 `pendingStores` 查看进度。
 
 **CLI / IPC 破坏性变更（契约 v2）**　对已有页面的操作必须同时提供 `--space` 和 `--tab`，即使 Space 只有一页。创建 Space 后从 `tabs[0].tabId` 取得初始页 ID；`tab new --space SPACE` 直接返回 `tabId`。关闭使用 `tab close --space SPACE --tab ID`。旧的 `tab default` 命令及 `defaultTabId` 字段已移除。现有注册表继续加载，Space、标签页和网站数据沿用原 ID。形如 UUID 的 Space 参数始终按 ID 查找；名称本身是 UUID 的 Space 请使用它自己的 ID。
 
