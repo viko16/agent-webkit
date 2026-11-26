@@ -20,6 +20,10 @@ def frame_site(host):
 
         def do_GET(self):
             role = urlsplit(self.path).path.strip('/') or 'root'
+            if role == 'disconnect':
+                # Fail before response headers, while the prior frame documents are still live.
+                self.connection.shutdown(socket.SHUT_RDWR)
+                return
             children = (f'<iframe id="one" src="{origins["B"]}/child"></iframe>'
                         f'<iframe id="two" src="{origins["B"]}/child"></iframe>') if role == 'root' else (
                         f'<iframe id="nested" src="{origins["A"]}/leaf"></iframe>' if role == 'child' else '')
@@ -189,10 +193,7 @@ def verify_frames(cli, out, restart):
                         snapshot = command('snapshot', frame=item['frameId'], target=target, space=space)['value']
                         assert next(e['value'] for e in snapshot['elements'] if e['tag'] == 'input') == ''
                 # A failed provisional top-level navigation leaves the old documents alive.
-                with socket.socket() as unavailable:
-                    unavailable.bind(('127.0.0.1', 0))
-                    unavailable_port = unavailable.getsockname()[1]
-                    command('open', f'http://127.0.0.1:{unavailable_port}/unreachable', error='operation_failed')
+                command('open', origins['B'] + '/disconnect', error='operation_failed')
                 surviving = documents()
                 assert {f['frameId'] for f in surviving} == {f['frameId'] for f in frames}, 'Failed navigation lost live frame targets'
                 command('wait', '#same', frame=child)
