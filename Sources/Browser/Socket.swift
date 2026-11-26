@@ -74,7 +74,18 @@ func sendRequest(_ request: Request, path: String) throws -> Data {
         let code = errno
         throw BrowserError("ipc_error", "connect failed (socket: \(path)); 确认 Agent WebKit.app 已运行，或核对 --socket / BROWSER_SOCKET: \(String(cString: strerror(code)))")
     }
-    try writeMessage(fd, JSONEncoder().encode(request))
+    return try exchange(request, on: fd)
+}
+
+private func exchange(_ request: Request, on fd: Int32) throws -> Data {
+    do {
+        try writeMessage(fd, JSONEncoder().encode(request))
+    } catch let error as BrowserError {
+        // At capacity the server can send its refusal and close before the client writes.
+        // Only consume an already-buffered reply. Never resend a request.
+        var byte: UInt8 = 0
+        guard error.code == "ipc_error", recv(fd, &byte, 1, MSG_PEEK | MSG_DONTWAIT) > 0 else { throw error }
+    }
     return try readMessage(fd)
 }
 

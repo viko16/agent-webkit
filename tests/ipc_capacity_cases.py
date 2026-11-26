@@ -23,7 +23,11 @@ def verify_capacity(cli, path):
         with socket.socket(socket.AF_UNIX) as client:
             client.settimeout(5)
             client.connect(str(path))
-            client.sendall(json.dumps(dict(command=command, args=args or [], options=options or {})).encode() + b'\n')
+            try:
+                client.sendall(json.dumps(dict(command=command, args=args or [], options=options or {})).encode() + b'\n')
+            except BrokenPipeError:
+                # A capacity refusal can arrive before the request write.
+                pass
             return json.loads(client.makefile('rb').readline())
 
     with ThreadPoolExecutor(1) as pool, ExitStack() as stack:
@@ -42,6 +46,7 @@ def verify_capacity(cli, path):
             client.sendall(b'{')
         busy = raw('status')
         assert busy['ok'] is False and busy['error']['code'] == 'server_busy', busy
+        cli('status', error='server_busy')
         response = accepted.result(timeout=5)
         assert response['ok'] and response['result']['value'] == 'accepted', response
         assert raw('status')['ok'], 'Completed request did not release its connection slot'
@@ -97,7 +102,7 @@ def main():
                     return response
                 return response['result']
             contract = verify_live_contract(contract_cli, state / 'browser.sock')
-            result = verify_capacity(cli, state / 'browser.sock')
+            result = verify_capacity(contract_cli, state / 'browser.sock')
         finally:
             failed = sys.exc_info()[0] is not None
             errors = cleanup_test_services(cli, daemon, site)

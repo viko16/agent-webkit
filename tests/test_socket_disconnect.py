@@ -47,6 +47,15 @@ class SocketDisconnectTests(unittest.TestCase):
         try writeMessage(healthy[0], Data("healthy".utf8))
         let reply = try readMessage(healthy[1])
         precondition(reply == Data("healthy".utf8))
+        var refused: [Int32] = [-1, -1]
+        precondition(socketpair(AF_UNIX, SOCK_STREAM, 0, &refused) == 0)
+        defer { close(refused[0]) }
+        configure(refused[0])
+        let busy = try jsonData(failure(BrowserError("server_busy", "capacity reached")))
+        try writeMessage(refused[1], busy)
+        close(refused[1])
+        let refusal = try exchange(Request(command: "status", args: [], options: [:]), on: refused[0])
+        precondition(refusal == busy)
         print("{\"disconnectedWriteFailed\":true,\"healthyWriteSucceeded\":true}")
     }
 }
