@@ -57,7 +57,17 @@ final class Application: NSObject, NSApplicationDelegate {
         edit.addItem(withTitle: "拷贝", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         edit.addItem(withTitle: "粘贴", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         edit.addItem(withTitle: "全选", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        edit.addItem(.separator())
+        for (title, action, key) in [("在页面中查找…", NSTextFinder.Action.showFindInterface, "f"),
+                                     ("查找下一个", .nextMatch, "g"), ("查找上一个", .previousMatch, "G")] {
+            let item = edit.addItem(withTitle: title, action: #selector(ObserverWindow.findInPage(_:)), keyEquivalent: key)
+            item.tag = action.rawValue; item.target = observer
+            if action == .previousMatch { item.keyEquivalentModifierMask = [.command, .shift] }
+        }
         let view = section("显示")
+        for (title, action, key) in [("后退", #selector(ObserverWindow.goBack), "["), ("前进", #selector(ObserverWindow.goForward), "]")] {
+            view.addItem(withTitle: title, action: action, keyEquivalent: key).target = observer
+        }
         let reload = view.addItem(withTitle: "重新加载页面", action: #selector(ObserverWindow.reloadPage), keyEquivalent: "r")
         reload.target = observer
         let sidebar = view.addItem(withTitle: "显示／隐藏侧边栏", action: #selector(ObserverWindow.toggleSidebar(_:)), keyEquivalent: "s")

@@ -16,12 +16,12 @@
 
 | 编号 | 问题与预期 | 修复前证据 | 状态 | 修复后证据 |
 | --- | --- | --- | --- | --- |
-| 6 | **首次启动地址栏不可输入**。地址栏提示输入网址，却需要先点击中央按钮。允许首次直接输入并打开。 | [截图](ui-ux-evidence/before/01-first-launch.png) | 待修复 | 待补 |
-| 7 | **标签标题过早截断**。单标签也仅显示省略号，多标签溢出后难以寻找。让短标题完整显示，并提供完整标题列表。 | [截图](ui-ux-evidence/before/03-working.png) | 待修复 | 待补 |
-| 8 | **地址栏隐藏端口和协议**。本地不同端口在常态下都显示同一主机名。保留非默认端口，区分明文连接。 | [截图](ui-ux-evidence/before/03-working.png) | 待修复 | 待补 |
-| 9 | **手动打开的弹窗没有反馈**。前台点击授权型按钮后子页在后台打开。应切换到子页或提供查看入口。 | [截图](ui-ux-evidence/before/23-manual-popup.png) | 待修复 | 待补 |
-| 10 | **手动浏览缺少导航与查找入口**。工具栏和菜单缺少后退、前进、页内查找。 | [应用菜单](../Sources/Browser/main.swift) | 待修复 | 待补 |
-| 11 | **关闭确认缺少页名**。确认框只显示 Space 名称，应显示目标页标题和主机，并解释最后一页为何不可关闭。 | [截图](ui-ux-evidence/before/11-close-recent.png) | 待修复 | 待补 |
+| 6 | **首次启动地址栏不可输入**。地址栏提示输入网址，却需要先点击中央按钮。允许首次直接输入并打开。 | [截图](ui-ux-evidence/before/01-first-launch.png) | 已验证 | [首次输入](ui-ux-evidence/after/06-first-address.png) |
+| 7 | **标签标题过早截断**。单标签也仅显示省略号，多标签溢出后难以寻找。让短标题完整显示，并提供完整标题列表。 | [截图](ui-ux-evidence/before/03-working.png) | 已验证 | [完整标题列表](ui-ux-evidence/after/07-tab-list.png) · [窄窗标签栏](ui-ux-evidence/after/07-tab-strip.png) |
+| 8 | **地址栏隐藏端口和协议**。本地不同端口在常态下都显示同一主机名。保留非默认端口，区分明文连接。 | [截图](ui-ux-evidence/before/03-working.png) | 已验证 | [常态地址](ui-ux-evidence/after/08-http-origin.png) |
+| 9 | **手动打开的弹窗没有反馈**。前台点击授权型按钮后子页在后台打开。应切换到子页或提供查看入口。 | [截图](ui-ux-evidence/before/23-manual-popup.png) | 已验证 | [父页查看入口](ui-ux-evidence/after/09-popup-notice.png) |
+| 10 | **手动浏览缺少导航与查找入口**。工具栏和菜单缺少后退、前进、页内查找。 | [应用菜单](../Sources/Browser/main.swift) | 已验证 | [页内命中和历史按钮](ui-ux-evidence/after/10-page-find.png) |
+| 11 | **关闭确认缺少页名**。确认框只显示 Space 名称，应显示目标页标题和主机，并解释最后一页为何不可关闭。 | [截图](ui-ux-evidence/before/11-close-recent.png) | 已验证 | [关闭目标与主机](ui-ux-evidence/after/11-close-target.png) |
 
 ## 第三批 · Agent 交接和执行状态
 
@@ -69,3 +69,16 @@
 - **创建与边距**。中文名称和无效证书分别触发创建失败，原表单仍可编辑。改用有效设置后创建成功并选中新 Space。测量可见输入框到表单两侧的距离，折叠时为 20 / 20 pt，展开及显示错误时三个输入框均为 20 / 20 pt。
 
 审查后再次构建并完成上述窗口验收。原生前台回归通过 127 个交互步骤，导航专项通过 34 项检查。回归覆盖多结果搜索时回车选择高亮行、长 prompt 直接确认保留完整默认值，以及失败网址隐藏登录凭据。
+
+## 第二批验收
+
+- 从空数据目录直接输入本机网址，只创建一个 personal Space 和一个标签页。常态地址能看到 HTTP 和实际端口。先后打开两个测试页，点后退、前进后分别核对实际 URL。
+- 从编辑菜单查找 `Popup`，网页高亮匹配文字，查找栏显示「已找到」。改为不存在的词后显示「未找到」。采用 macOS 的查找、下一处和上一处快捷键。[Apple HIG · Designing for macOS](https://developer.apple.com/design/human-interface-guidelines/designing-for-macos)
+- 点击网页上要求真实鼠标操作的按钮后，父页显示「查看新标签页」。点击提示才切换至 Popup Child。提示紧邻网页，后台创建子页保留观察目标。[Apple HIG · Feedback](https://developer.apple.com/design/human-interface-guidelines/feedback)
+- 在 760 pt 窗口创建六个标签。常态地址栏仍显示协议和端口，从完整标题列表选中最后一项，核对了目标 ID。只剩一页时，悬停标题可读到保留原因。关闭确认包含目标页名、主机和需要确认的原因，取消后目标仍在。
+
+### 第 27 项 · 标签页关闭按钮
+
+原先只有标题按钮绘制背景，× 在标签右侧独立占位。[修复前](ui-ux-evidence/before/03-working.png)
+
+参照用户提供的 Safari 截图，将 × 放进标签左侧，图标和页名一起居中。选中页显示 ×，其他页移入指针时才显示，只剩一页时收起。通过窗口鼠标事件点击后台标签的 ×，确认框指出后台页名，取消后原选中页保持不变。[选中状态](ui-ux-evidence/after/27-tabs-selected.png) · [后台页悬停](ui-ux-evidence/after/27-tabs-hover.png) · [Apple · 在 Mac 上的 Safari 中关闭标签页](https://support.apple.com/zh-cn/guide/safari/ibrw27660e60/mac)

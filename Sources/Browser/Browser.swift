@@ -123,6 +123,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     var createPopup: ((WKWebViewConfiguration, URL) throws -> Tab)?
     var closeRequested: (() -> Void)?
     var openerTabID: UUID?
+    var hasUnreadPopupNotice = false
     var lastNavigationRejection: BrowserError?
     private(set) var popupSequence = 0
     private var lastPopupID: UUID?
@@ -1199,7 +1200,8 @@ final class Space {
         }
         let live = tabs.filter { ids.contains($0.id) }
         // Ordinary navigation dismisses dialogs but leaves WKDownload instances alone.
-        let preservesDownloads = ["open", "reload"].contains(command) && !live.contains { $0.terminated || $0.unresponsive }
+        let preservesDownloads = ["back", "forward"].contains(command)
+            || (["open", "reload"].contains(command) && !live.contains { $0.terminated || $0.unresponsive })
         let downloads = preservesDownloads ? [] : Set(live.flatMap { $0.downloads.activeIDs })
         let dialogs = Set(live.flatMap { $0.dialogs.pendingIDs })
         let closing = tabID.flatMap { activity[$0] }
@@ -1371,6 +1373,7 @@ final class BrowserModel {
                 let popup = Tab(record: TabRecord(id: UUID(), url: url.absoluteString), store: configuration.websiteDataStore,
                                 tls: space.record.tls, configuration: configuration)
                 popup.openerTabID = tab.id
+                popup.hasUnreadPopupNotice = true
                 space.tabs.append(popup); self.bind(space)
                 do { try self.save(space) }
                 catch { space.tabs.removeAll { $0 === popup }; popup.close(); throw error }
@@ -1849,7 +1852,9 @@ final class BrowserModel {
         }
         // Replace a stalled view only on explicit navigation. Never replay an Agent action.
         let navigating = command == "open" || command == "reload"
-        if navigating { try space.checkObserverImpact(command, tabID: tab.id, origin: origin) }
+        if navigating || command == "back" || command == "forward" {
+            try space.checkObserverImpact(command, tabID: tab.id, origin: origin)
+        }
         if navigating, tab.terminated || tab.unresponsive {
             let index = space.tabs.firstIndex(where: { $0 === tab })!
             let record = TabRecord(id: tab.id, url: tab.persistedURL, openerTabID: tab.openerTabID)

@@ -71,6 +71,19 @@ def verify_observer_protection(cli, native, binary, env, base, events):
     poll()
     assert not probe()['probe']['recent']
 
+    # An Agent popup stays with its opener. Only the native view action selects the child.
+    click('pick', second)
+    cmd(first, 'open', urljoin(base, '/popups'))
+    child = cmd(first, 'click', '#blank', '--wait-for-popup')['value']['newTabId']
+    background = probe()
+    assert background['displayedTabId'] == second and background['probe']['popupNoticeTabId'] is None, background
+    parent = click('pick', first)
+    assert parent['displayedTabId'] == first and parent['probe']['popupNoticeTabId'] == child, parent
+    assert click('view-popup')['displayedTabId'] == child
+    assert click('pick', first)['probe']['popupNoticeTabId'] is None
+    cmd(child, 'tab', 'close')
+    cmd(first, 'open', base)
+
     # An interrupted GET leaves its old document intact. The banner and toolbar have different targets.
     click('pick', first)
     failed_path = '/diagnostic-drop?observer-retry'
@@ -135,6 +148,7 @@ def verify_observer_protection(cli, native, binary, env, base, events):
     probe('expire-history')
     warning = click('close')
     assert '对话框' in warning['probe']['sheetText'] and '5 分钟' not in warning['probe']['sheetText'], warning
+    assert 'Agent WebKit Fixture' in warning['probe']['sheetText'] and '127.0.0.1' in warning['probe']['sheetText'], warning
     cmd(first, 'dialog', 'respond', initial, 'dismiss')
     successor = until(lambda: dialogs(first))[0]['id']
     assert successor != initial
@@ -216,7 +230,9 @@ def verify_observer_protection(cli, native, binary, env, base, events):
     assert probe()['displayedTabId'] == right
     click('cmd-w', right)
     assert sheet('关闭标签页')['displayedTabId'] == first
-    assert not probe('close', first)['probe']['dispatched']
+    last = probe('close', first)['probe']
+    assert not last['dispatched'] and '至少保留一个标签页' in last['lastTabHelp'], last
+    assert last['tabButtonWidth'] >= 140, last
     middle, right = new_tab(), new_tab()
     assert click('pick', middle)['displayedTabId'] == middle
     cmd(middle, 'tab', 'close')

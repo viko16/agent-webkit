@@ -32,8 +32,8 @@ extension ObserverWindow {
 
     func probeControls(_ action: String, request: [String: String]) async -> [String: Any] {
         let tabID = request["tab"].flatMap(UUID.init(uuidString:))
-        let row = tabStack.arrangedSubviews.compactMap { $0 as? NSStackView }.first {
-            $0.arrangedSubviews.last?.identifier?.rawValue == tabID?.uuidString
+        let row = tabStack.arrangedSubviews.compactMap { $0 as? PageTabView }.first {
+            $0.closeButton.identifier?.rawValue == tabID?.uuidString
         }
         var dispatched = false
         var simulatedKey = false
@@ -47,6 +47,24 @@ extension ObserverWindow {
             return [view] + view.subviews.flatMap { controls($0) }
         }
         switch action {
+        case "submit-address":
+            guard address.isEnabled, let url = request["url"] else { break }
+            focusAddress(nil)
+            address.stringValue = url
+            controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: address))
+            dispatched = address.sendAction(address.action, to: address.target)
+        case "type-find":
+            if let field = controls(pageFind).compactMap({ $0 as? NSSearchField }).first {
+                field.stringValue = request["text"] ?? ""
+                field.delegate?.controlTextDidChange?(Notification(name: NSControl.textDidChangeNotification, object: field))
+                dispatched = true
+            }
+        case "history-back", "history-forward", "show-find":
+            let selector = action == "show-find" ? #selector(findInPage(_:)) : action == "history-back" ? #selector(goBack) : #selector(goForward)
+            let items = NSApp.mainMenu?.items.compactMap(\.submenu).flatMap(\.items) ?? []
+            if let item = items.first(where: { $0.action == selector }), validateMenuItem(item) {
+                dispatched = NSApp.sendAction(selector, to: item.target, from: item)
+            }
         case "search-return":
             guard await (window as? ObserverProbeWindow)?.prepareForegroundShortcut() == true,
                   window.makeFirstResponder(search) else { break }
@@ -58,7 +76,9 @@ extension ObserverWindow {
             dispatched = true
         case "expire-history":
             if let tabID { currentSpace?.activity[tabID]?.agentFinishedAt = .now.advanced(by: .seconds(-301)); refresh() }
-        case "pick": click(row?.arrangedSubviews.first as? NSButton)
+        case "pick": click(row?.titleButton)
+        case "view-popup":
+            if !popupNotice.isHidden { click(controls(popupNotice).compactMap { $0 as? NSButton }.first { $0.title == "查看新标签页" }) }
         case "edit-prompt":
             let prompt = controls(dialogArea).compactMap { $0 as? NSTextField }.first { $0.isEditable }
             if let prompt {
@@ -67,7 +87,7 @@ extension ObserverWindow {
             }
         case "answer-dialog":
             click(controls(dialogArea).compactMap { $0 as? NSButton }.first { $0.title == request["button"] })
-        case "close": click(row?.arrangedSubviews.last as? NSButton)
+        case "close": click(row?.closeButton)
         case "reload": click(reloadButton)
         case "retry-navigation":
             if !retry.isHiddenOrHasHiddenAncestor { click(retry) }
@@ -101,9 +121,15 @@ extension ObserverWindow {
         let sheet = controls(window.attachedSheet?.contentView)
         let dialog = dialogArea.arrangedSubviews.first as? PageDialogView
         return ["dispatched": dispatched, "simulatedKey": simulatedKey, "visible": window.isVisible,
+                "addressEnabled": address.isEnabled, "addressDisplay": addressDisplay.stringValue,
+                "findVisible": !pageFind.isHidden, "canGoForward": canTraverse(back: false),
+                "findFeedback": controls(pageFind).compactMap { ($0 as? NSTextField)?.stringValue },
+                "popupNoticeTabId": popupNotice.isHidden ? NSNull() as Any : announcedPopup?.id.uuidString as Any? ?? NSNull(),
                 "dialogID": dialog?.dialogID as Any? ?? NSNull(),
                 "promptText": controls(dialog).compactMap { $0 as? NSTextField }.first { $0.isEditable }?.stringValue as Any? ?? NSNull(),
-                "tabWaiting": row?.arrangedSubviews.first?.toolTip?.contains("网页等待回复") == true,
+                "tabWaiting": row?.titleButton.toolTip?.contains("网页等待回复") == true,
+                "tabButtonWidth": row?.bounds.width ?? 0,
+                "lastTabHelp": row?.closeButton.toolTip ?? "",
                 "bannerText": bannerText.stringValue, "retryVisible": !retry.isHiddenOrHasHiddenAncestor,
                 "buttons": sheet.compactMap { ($0 as? NSButton)?.title },
                 "sheetText": sheet.compactMap { ($0 as? NSTextField)?.stringValue }.joined(separator: " "),

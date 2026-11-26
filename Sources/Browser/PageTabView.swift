@@ -1,0 +1,91 @@
+import AppKit
+
+private final class CenteredTabCell: NSButtonCell {
+    override func drawInterior(withFrame cellFrame: NSRect, in controlView: NSView) {
+        super.drawInterior(withFrame: cellFrame.insetBy(dx: 27, dy: 0), in: controlView)
+    }
+}
+
+final class PageTabButton: NSButton {
+    override class var cellClass: AnyClass? {
+        get { CenteredTabCell.self }
+        set {}
+    }
+}
+
+final class PageTabView: NSView {
+    let titleButton: NSButton
+    let closeButton: NSButton
+    private var tracking: NSTrackingArea?
+    private var hovered = false
+    private let isSelected: Bool
+
+    init(titleButton: NSButton, closeButton: NSButton) {
+        self.titleButton = titleButton
+        self.closeButton = closeButton
+        isSelected = titleButton.state == .on
+        super.init(frame: .zero)
+        for button in [titleButton, closeButton] {
+            button.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(button)
+        }
+        titleButton.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        titleButton.imageHugsTitle = true
+        closeButton.symbolConfiguration = .init(pointSize: 10, weight: .medium)
+        closeButton.contentTintColor = .secondaryLabelColor
+        closeButton.bezelStyle = .accessoryBarAction
+        NSLayoutConstraint.activate([
+            titleButton.leadingAnchor.constraint(equalTo: leadingAnchor),
+            titleButton.trailingAnchor.constraint(equalTo: trailingAnchor),
+            titleButton.topAnchor.constraint(equalTo: topAnchor),
+            titleButton.bottomAnchor.constraint(equalTo: bottomAnchor),
+            closeButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
+            closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            closeButton.widthAnchor.constraint(equalToConstant: 22),
+            closeButton.heightAnchor.constraint(equalToConstant: 22),
+            heightAnchor.constraint(equalToConstant: 30)
+        ])
+        if closeButton.isEnabled {
+            let action = NSAccessibilityCustomAction(name: "关闭标签页") { [weak closeButton] in
+                guard let closeButton, closeButton.isEnabled else { return false }
+                closeButton.performClick(nil)
+                return true
+            }
+            titleButton.setAccessibilityCustomActions([action])
+        }
+        updateCloseButton()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(rect: .zero, options: [.inVisibleRect, .activeInKeyWindow, .mouseEnteredAndExited], owner: self)
+        addTrackingArea(area)
+        tracking = area
+        if let window {
+            hovered = visibleRect.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil))
+            updateCloseButton()
+        }
+    }
+
+    override func mouseEntered(with event: NSEvent) { hovered = true; updateCloseButton() }
+    override func mouseExited(with event: NSEvent) { hovered = false; updateCloseButton() }
+
+    private func updateCloseButton() {
+        closeButton.isHidden = !closeButton.isEnabled || !(isSelected || hovered)
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let rect = bounds.insetBy(dx: 1, dy: 1)
+        let surface = NSBezierPath(roundedRect: rect, xRadius: rect.height / 2, yRadius: rect.height / 2)
+        if isSelected {
+            NSColor.controlBackgroundColor.setFill(); surface.fill()
+            NSColor.separatorColor.setStroke(); surface.lineWidth = 1; surface.stroke()
+        } else if hovered {
+            NSColor.quaternaryLabelColor.setFill(); surface.fill()
+        }
+    }
+}

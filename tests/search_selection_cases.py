@@ -220,6 +220,38 @@ def main():
                 form = native('', policy=str(policy))['form']
                 assert form['options'] == dict(proxy='direct', **options), form
                 assert form['enabledWithoutCA'] == (policy != 1), form
+            assert native('')['probe']['addressEnabled']
+            assert native('', 'submit-address', url=base)['probe']['dispatched']
+            personal = cli('space', 'info', 'personal')
+            assert personal['proxy'] == 'direct' and personal['tls']['policy'] == 'system' and len(personal['tabs']) == 1, personal
+            tab_id = personal['tabs'][0]['tabId']
+            def wait_display(url):
+                for _ in range(80):
+                    result = native('')
+                    state = cli('space', 'info', 'personal')
+                    if result['displayedURL'] == url and not state['busy'] and not state['tabs'][0]['loading']:
+                        return result
+                    time.sleep(.05)
+                raise AssertionError((url, result, state))
+            first_page = wait_display(base)
+            assert first_page['displayedTabId'] == tab_id and first_page['probe']['addressDisplay'] == base.rsplit('/', 1)[0], first_page
+            second_url = base + '?second'
+            assert native('', 'submit-address', url=second_url)['probe']['dispatched']
+            wait_display(second_url)
+            assert native('', 'history-back')['probe']['dispatched']
+            assert wait_display(base)['probe']['canGoForward']
+            assert native('', 'history-forward')['probe']['dispatched']
+            wait_display(second_url)
+            find = native('', 'show-find')['probe']
+            assert find['dispatched'] and find['findVisible'], find
+            for query, expected in [('Save', '已找到'), ('nonexistent-phrase-for-page-search', '未找到')]:
+                feedback = native('', 'type-find', text=query)['probe']['findFeedback']
+                deadline = time.monotonic() + 5
+                while expected not in feedback and time.monotonic() < deadline:
+                    feedback = native('')['probe']['findFeedback']
+                assert expected in feedback, (query, feedback)
+            cli('space', 'delete', personal['id'])
+            assert not native('')['probe']['findVisible']
             first = cli('space', 'create', 'search-a', '--proxy', 'direct')
             second = cli('space', 'create', 'search-b', '--proxy', 'direct')
             for space in (first, second):
