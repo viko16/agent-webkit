@@ -31,7 +31,7 @@ CLI 原名为 `browser`，现统一为 `awb`。Bundle ID、注册表目录、`br
 awb help                    # 分组总览与快捷工作流（纯文本）
 awb help space              # 命令组帮助（等价 awb space --help）
 awb help space create       # 命令详情、选项与示例（等价 awb space create --help）
-awb capabilities            # 机器可读 JSON 契约（schemaVersion 1）
+awb capabilities            # 机器可读 JSON 契约（schemaVersion 2）
 python3 tests/contract_cases.py  # 不存在的 Socket / 数据目录，验证纯离线查询
 python3 tests/reliability.py --forms  # 含真实 CLI / IPC 对照和原有可靠性回归
 ```
@@ -40,7 +40,7 @@ python3 tests/reliability.py --forms  # 含真实 CLI / IPC 对照和原有可�
 
 `--socket`、`--data-dir` 只用于 CLI 定位 daemon，发送前剥离，原始 IPC 携带这两个选项会返回 `invalid_arguments`；capabilities 的选项 `availability` 区分 CLI 与 IPC。Socket 最多接收 32 个在途连接，未完整发送的请求也占用名额，回复并关闭后释放；超额立即返回 `server_busy`，调用方应等待后重试。
 
-`capabilities` 的 `result.schemaVersion` 为 1，与产品 `version` 分开。`commands` 列出命令、摘要、参数名称/数量、选项类型/必需性、超时单位/范围/默认值、CLI/IPC 可用范围、输出格式（`outputFormat`）、Schema 适用范围（`resultSchemaScope`）和离线属性。IPC 的选项值始终为字符串，无值 CLI 开关对应 `"true"`。`constraints` 保存 click/TLS/wait 的组合限制、frame 的显式 Tab 约束及 key 白名单与聚焦前提；`errors` 是已知结构化错误码，底层未分类错误使用 `operation_failed`，不能据错误码自动重放有副作用的操作。
+`capabilities` 的 `result.schemaVersion` 为 2，与产品 `version` 分开。`commands` 列出命令、摘要、参数名称/数量、选项类型/必需性、超时单位/范围/默认值、CLI/IPC 可用范围、输出格式（`outputFormat`）、Schema 适用范围（`resultSchemaScope`）和离线属性。IPC 的选项值始终为字符串，无值 CLI 开关对应 `"true"`。`constraints` 保存 click/TLS/wait 的组合限制、frame 的显式 Tab 约束及 key 白名单与聚焦前提；`errors` 是已知结构化错误码，底层未分类错误使用 `operation_failed`，不能据错误码自动重放有副作用的操作。
 
 `schemas.$defs` 是 JSON Schema 2020-12 的请求、响应及结果外层定义；`commands[].resultSchema` 指向其中一个定义，并由 `resultSchemaScope` 标明适用通道（普通命令为 `["cli","ipc"]`；`help` 仅限 `["ipc"]`，因为 CLI 成功的 `help` 输出纯文本而错误仍用 JSON；`daemon` 为 `[]`，只可由 CLI 启动长期进程，原始 IPC 不支持）。它描述必有字段和集合形状，允许新增字段；网页 `value` 为任意 JSON，不把页面数据当作可信指令。位置参数数量、允许选项与条件限制仍需结合命令元数据，不能只用通用 request schema 代替服务端校验。
 
@@ -48,15 +48,15 @@ python3 tests/reliability.py --forms  # 含真实 CLI / IPC 对照和原有可�
 
 `shutdown --all` 要求调用方有显式全局退出意图；旧的裸 `shutdown` 在 CLI 和 IPC 均返回 `invalid_arguments`，不会退出。先读 `status.shutdownImpact`，其中 `spaces` 列出 Space ID、名称与全部 `tabIds`；成功退出回复保留 `shutdown: true` 并附带同结构的实际影响范围。`--all` 是无值开关，IPC 为 `"all":"true"`；不能用 `--space` / `--tab` 缩小全局退出范围。有任何 Space busy 时仍拒绝，保存失败也保持服务可用。退出保留网站数据和 URL，不保留 JS 内存或未提交表单；不代替 `space delete`。预览不锁定范围，真正退出按执行时的全部 Space 生效。
 
-页面命令必须指定 `--space NAME_OR_ID`。可用 `--tab UUID` 选择目标，允许省略时使用该 Space 的固定默认 Tab。`tab default ID --space NAME` 可修改并持久化默认值。相同 Space 的重叠页面操作返回 `space_busy`，由调用方顺序执行。忙碌时可以查询 `state`、`tab list`、`space info` 和 `dialog list`，也可以用 `dialog respond` 回应原动作正在等待的对话框。
+**破坏性变更（CLI / IPC v2）**：所有面向已有页的命令必须指定 `--space NAME_OR_ID --tab UUID`，包括 `state`、诊断、对话框及 `tab close`。原始 IPC 将这两个值放在 `options.space`、`options.tab`。关闭后的旧 ID 返回 `tab_not_found`。创建、列表与 Space 级命令沿用原作用域。v2 的路由忽略旧注册表的 `defaultTab`。写盘为 v1 保留仍存在的旧默认页，否则写入首个现存页；缺失或无效的旧字段也可载入。GUI 切页不改变该回退信息。版本切换须先正常退出正在使用同一目录的 daemon，并配套更换 CLI。客户端应从 `space create` 的 `tabs[0].tabId` 或 `tab new` 的 `tabId` 保存目标。移除 `tab default` 与 `defaultTabId`。相同 Space 的重叠页面操作返回 `space_busy`，由调用方顺序执行。忙碌时可以查询 `state`、`tab list`、`space info` 和 `dialog list`，也可以用 `dialog respond` 回应原动作正在等待的对话框。
 
 除成功的 CLI `awb help` / `--help` / `-h`（输出可读多行文本）外，每条 CLI 命令返回一行 JSON：成功为 `{"ok":true,"result":...}`，失败为 `{"ok":false,"error":{"code":...,"message":...}}`，退出码分别为 0/1。页面结果包含 Space/Tab ID、URL、加载状态和代理限制；click/fill 标明 `method: "dom"`、`nativeVerified: false`，动作成功仍需核对业务结果。
 
-WebKit 操作默认超时 15000 ms，`--timeout` 接受 1–60000 ms；`evaluate --await` 等待 Promise。`awb --help`、`awb --version`、按命令帮助和 capabilities 均可离线查询。值以 `-` 或 `--` 开头时，将选项放在前面，再以 `--` 分隔位置参数，例如 `awb fill --space work -- '#message' '--hello'`。
+WebKit 操作默认超时 15000 ms，`--timeout` 接受 1–60000 ms；`evaluate --await` 等待 Promise。`awb --help`、`awb --version`、按命令帮助和 capabilities 均可离线查询。值以 `-` 或 `--` 开头时，将选项放在前面，再以 `--` 分隔位置参数，例如 `awb fill --space work --tab ID -- '#message' '--hello'`。
 
 ## Codex / Pi Skill
 
-`skills/agent-webkit/SKILL.md` 是对应 `awb` / 契约 v1 的单文件 Skill，直接调用现有 CLI；无安装脚本、MCP 或另一套浏览器客户端。版本、参数和返回结构查当前二进制的 `version` / `capabilities` / `help`，Skill 只保留目标归属、动作与业务验证、失败恢复、弹窗/人工接管和共享服务清理约定。
+`skills/agent-webkit/SKILL.md` 是对应 `awb` / 契约 v2 的单文件 Skill，直接调用现有 CLI；无安装脚本、MCP 或另一套浏览器客户端。版本、参数和返回结构查当前二进制的 `version` / `capabilities` / `help`，Skill 只保留目标归属、动作与业务验证、失败恢复、弹窗/人工接管和共享服务清理约定。
 
 用户确认安装后，可将整个 `skills/agent-webkit` 目录复制或链接到 `~/.agents/skills/agent-webkit`（个人范围）或使用项目的 `.agents/skills/agent-webkit`（项目范围）。这两种位置由 [Codex 官方文档](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills)和 [Pi 官方文档](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/skills.md#add-it-to-pi)说明；同一位置可能被两个 Agent 发现。已有同名目录时先核对，不覆盖既有内容。仓库中的 `skills/` 只是发布源，构建/测试不会自动安装到发现目录或改动用户配置。
 
@@ -66,7 +66,7 @@ Codex 可显式调用 `$agent-webkit`，Pi 使用 `/skill:agent-webkit`；也可
 python3 tests/skill_workflow.py
 ```
 
-这是可选的真实 Codex CLI 集成测试，需要已有 Codex 登录和正常模型访问，可能消耗账户额度。它使用临时工作目录、独立注册表/Socket、Direct 本地 fixture、两个 Space 与非默认目标 Tab，通过 `codex --no-daemon ... exec --ephemeral` 显式读取仓库 Skill。仅对这次进程开启 sandbox 的网络访问以连接本机服务，不写配置文件；不安装 Skill、Pi 或修改系统代理。场景要求处理已失效按钮引用、保存一次、等待永不出现的确认标记，宿主独立核对保存计数/值、另一 Space、固定默认 Tab、GUI 与前台。逐条 Agent 事件、最终回答、宿主命令和报告保存在 `.artifacts/skill-codex-*/`，退出删除自有 Space 并停止测试服务。
+这是可选的真实 Codex CLI 集成测试，需要已有 Codex 登录和正常模型访问，可能消耗账户额度。它使用临时工作目录、独立注册表/Socket、Direct 本地 fixture、两个 Space 与新建的目标 Tab，通过 `codex --no-daemon ... exec --ephemeral` 显式读取仓库 Skill。仅对这次进程开启 sandbox 的网络访问以连接本机服务，不写配置文件；不安装 Skill、Pi 或修改系统代理。场景要求处理已失效按钮引用、保存一次、等待永不出现的确认标记，宿主独立核对保存计数/值、另一 Space、初始 Tab、GUI 与前台。逐条 Agent 事件、最终回答、宿主命令和报告保存在 `.artifacts/skill-codex-*/`，退出删除自有 Space 并停止测试服务。
 
 失败清理逐项尝试删除自有 Space，IPC 或删除错误不会跳过后续清理；daemon 优先正常退出，有界等待失败后仅终止自己的进程，HTTP 服务始终独立关闭。清理错误保存为 `cleanup-errors.json`，原测试异常继续上抛；若只有清理失败，整轮仍失败，不生成成功报告。此时数据删除可能未完成，不能把停止进程当作删除 Space。`python3 -m unittest discover -s tests -p test_skill_cleanup.py -v` 注入断连、删除/退出失败、有界终止及 HTTP 关闭错误，不调用模型或操作已有服务。
 
@@ -94,7 +94,7 @@ python3 tests/skill_workflow.py
 
 `space suspend NAME_OR_ID` 先保存元数据，再关闭并释放该 Space 全部 Tab/WebView；不删除网站数据。同进程保留轻量 DataStore 协调对象以维持 Cookie 会话；没有 WebView 不代表 WebKit 的共享网络进程立即退出。`space info/list` 返回 `lifecycle: active|suspended` 和 `liveWebViews`，`status.liveWebViews` 为宿主当前持有的总数，不是 OS 进程或内存统计。`tab list` / `state` 可读休眠元数据，不唤醒；休眠时 diagnostics/dialog 返回 `space_suspended`。
 
-`space resume NAME_OR_ID` 幂等地创建原 ID、URL、代理/TLS 的页面并开始加载，须再 `wait` 确认就绪。页面动作按需恢复并在原期限内等待目标页面载入；CLI 默认 Tab 不变。休眠状态持久化，重启不创建这些 Space 的 DataStore/WebView；活跃 Space 仍沿用既有启动恢复行为。优化限于显式休眠的 Space，不宣称所有启动都更快或恢复完整页面内存。
+`space resume NAME_OR_ID` 幂等地创建原 ID、URL、代理/TLS 的页面并开始加载，须再 `wait` 确认就绪。页面动作按需恢复并在原期限内等待目标页面载入。休眠状态持久化，重启不创建这些 Space 的 DataStore/WebView；活跃 Space 仍沿用既有启动恢复行为。优化限于显式休眠的 Space，不宣称所有启动都更快或恢复完整页面内存。
 
 busy 时拒绝休眠/恢复；自主对话框随页面关闭安全结束，原 ID 不可重用。保存失败保持原生命周期，恢复保存失败释放新页面。JS 卡死后也可显式休眠再恢复，不重放动作。`tab close` 关闭单个标签页，`space delete` 删除网站数据，`shutdown --all` 停止整个服务，含义不同。
 
@@ -174,7 +174,7 @@ example.com enable://capture
 
 Vite 8 的服务配置使用 `allowedHosts: ['example.com']` 和 `ws: { protocol: 'wss', host: 'example.com', clientPort: 443 }`，然后在代理 Space 打开 `https://example.com`。客户端 WSS 仍访问该域名的 443，经 Whistle 转成 Vite 的本地 WS；不依赖 HMR 客户端回退到 loopback。应用不修改系统代理；localhost/127.0.0.1 目标的 WebKit 代理限制仍保留。
 
-验收并发打开两个隔离 Space，核对页面、fetch nonce、Cookie/LocalStorage 隔离，三次真实文件修改后文档实例 ID 与各自计数不变。切换 CLI 默认 Tab 到空白页后仍显式操作原 Tab；跨 Space Tab ID 和旧引用被拒绝，等待不存在的版本超时而不重放动作。随后重新导航并重启 daemon，核对 ID、代理、TLS、持久数据及新一轮 HMR。Direct 访问相同公网 URL 必须显示 Example Domain，不能新增 Whistle 会话或 Vite 来源请求。所有 Agent 操作检查前台 PID 不变；本专项不操作 GUI 选择。
+验收并发打开两个隔离 Space，核对页面、fetch nonce、Cookie/LocalStorage 隔离，三次真实文件修改后文档实例 ID 与各自计数不变。新建空白页后仍显式操作原 Tab；跨 Space Tab ID 和旧引用被拒绝，等待不存在的版本超时而不重放动作。随后重新导航并重启 daemon，核对 ID、代理、TLS、持久数据及新一轮 HMR。Direct 访问相同公网 URL 必须显示 Example Domain，不能新增 Whistle 会话或 Vite 来源请求。所有 Agent 操作检查前台 PID 不变；本专项不操作 GUI 选择。
 
 `vite-workflow/` 保存复制后的项目、Vite 日志、HTTP/upgrade/HMR 回执来源日志、Whistle 会话、页面截图和详细报告。必须同时看到实际 HTTPS 模块/fetch 请求、WSS `101` 及本地端口/规则匹配、每版本来自两个文档的 HMR 回执，不能只凭页面脚本或截图认定代理成功。退出或失败时删除测试 Space、停止自有 Whistle/Vite；原有服务与源码不变。`--vite-only` 不与其他专项或复用代理模式混用，`--vite` 的完整验收仍可使用原有参数。
 
@@ -191,7 +191,7 @@ python3 tests/acceptance.py --real-sites --vite --direct-conflicts
 
 默认套件不依赖这些外部站点；`--real-sites` 在完整验收前追加，`--real-sites-only` 单独运行。网络、站点布局或脚本加载发生变化时保存失败，不跳过断言，也不替换成本地页面。使用 Direct、默认系统证书校验和新建的独立 Space，不读取用户已有会话。
 
-SPA 目标是 [Vue 官方文档](https://vuejs.org/guide/introduction.html)。等待真实应用 hydration 后，用 snapshot 引用操作页面计数按钮和侧栏路由；两个独立 CLI 工作流并发切换 Introduction、Reactivity Fundamentals、Computed Properties，核对 URL、标题和文档标记。标记仅用于观察文档是否重载，不改 DOM、应用状态或路由；`performance.timeOrigin` 仅作诊断，因为本机同文档读数曾有 1 ms 浮动。随后再次交互、验证缺失元素等待超时，并分别后台截图。CLI 始终显式绑定 Space/Tab，第二个 Tab 不改变默认目标。
+SPA 目标是 [Vue 官方文档](https://vuejs.org/guide/introduction.html)。等待真实应用 hydration 后，用 snapshot 引用操作页面计数按钮和侧栏路由；两个独立 CLI 工作流并发切换 Introduction、Reactivity Fundamentals、Computed Properties，核对 URL、标题和文档标记。标记仅用于观察文档是否重载，不改 DOM、应用状态或路由；`performance.timeOrigin` 仅作诊断，因为本机同文档读数曾有 1 ms 浮动。随后再次交互、验证缺失元素等待超时，并分别后台截图。CLI 始终显式绑定 Space/Tab，新建第二个 Tab 后仍可操作原 ID。
 
 登录/弹窗目标是 [The Internet](https://the-internet.herokuapp.com/login)，仅使用网页公开的演示账号，不读取用户凭据。两个 Space 同时验证成功登录和错误密码，未登录 Space 访问 `/secure` 必须被服务器重定向；由 `/windows` 的实际链接打开子 Tab 后，在其中访问 `/secure`，核对继承会话及系统 TLS 策略。从子 Tab 退出，父 Tab 重载后也必须失去会话；另一 Space 的登录独立有效，再反向验证登录/退出。覆盖有界等待、后台截图、关闭子 Tab、重启后的 ID/URL 与未登录 Space 不凭空获得会话。登录、退出只在明确测试步骤执行一次，失败/超时不自动重放。
 
@@ -199,13 +199,13 @@ SPA 目标是 [Vue 官方文档](https://vuejs.org/guide/introduction.html)。�
 
 重启后的登录状态按实际页面记录为 `authenticated` 或已回到登录页，可能受 Cookie 生命周期和服务端策略影响；不承诺会话 Cookie 等同带有效期的持久 Cookie，已退出的 Space 则必须仍未登录。测试不读取或保存服务端 Cookie/token 的值，只有网站公开的演示密码会出现在测试参数和该站帮助文字中。测试失败时保存主 Tab snapshot 和错误，便于区分站点变动、环境不可达与实现问题。
 
-GUI 模式复制一个独立 Bundle ID 的测试应用，打印原生操作检查点；操作者实际完成界面选择或关窗后，输入 `confirmed` 继续。它会激活测试窗口，检查点明确标记 `requiresForeground: true`，普通 CLI 操作仍检查前台 PID 不变。选中 A 的非默认 Tab 后操作默认 Tab，随后切换到 B；程序用 `status.observer` 断言观察目标未被 CLI 切走，并在关窗后继续并发操作、截图，确认窗口保持隐藏。GUI 工具若查询隐藏应用可能重新激活窗口，关窗后应直接读取 CLI 状态。拒绝检查点或状态不符均失败，不能仅凭输入确认认定通过。没有 GUI 实查的普通运行返回 `guiVerified: false`。
+GUI 模式复制一个独立 Bundle ID 的测试应用，打印原生操作检查点；操作者实际完成界面选择或关窗后，输入 `confirmed` 继续。它会激活测试窗口，检查点明确标记 `requiresForeground: true`，普通 CLI 操作仍检查前台 PID 不变。选中 A 的第二个 Tab 后按 ID 操作第一个 Tab，随后切换到 B；程序用 `status.observer` 断言观察目标未被 CLI 切走，并在关窗后继续并发操作、截图，确认窗口保持隐藏。GUI 工具若查询隐藏应用可能重新激活窗口，关窗后应直接读取 CLI 状态。拒绝检查点或状态不符均失败，不能仅凭输入确认认定通过。没有 GUI 实查的普通运行返回 `guiVerified: false`。
 
-登录 GUI 检查先观察未登录的 B，A 的登录和弹窗不应切走 GUI 或改变 CLI 默认 Tab；随后选择 A 的认证子 Tab、核对 Secure Area 并关窗，继续在后台完成跨 Tab 退出和 B 登录。普通 GUI 检查点需要人工或原生 UI 工具实际执行；脚本不会自动代替操作者确认。
+登录 GUI 检查先观察未登录的 B，A 的登录和弹窗不应切走 GUI；随后选择 A 的认证子 Tab、核对 Secure Area 并关窗，继续在后台完成跨 Tab 退出和 B 登录。普通 GUI 检查点需要人工或原生 UI 工具实际执行；脚本不会自动代替操作者确认。
 
 两组流程通过同一个 `site_gui_checks` 绑定各自的回调、Space 映射和报告，沿用相同的目标/可见性断言及成功记录逻辑。操作者拒绝确认或宿主状态不符时仍直接失败；没有 GUI 回调时检查点不查询或写入 GUI 状态。上述 `test_workflow_guards.py` 同时覆盖这些辅助逻辑，不能据此声称完成新的原生 GUI 实查。
 
-`status.observer` 是只读宿主快照：`visible` 为原生观察窗口可见性，`spaceId`、`tabId` 为 GUI 正在观察的目标（空选择为 null）。它不执行网页脚本、不激活窗口、不改变 CLI 默认目标，也不持久化新状态。测试报告、逐条命令、GUI 检查点和截图写入该次输出目录；退出时删除自有测试 Space 并停止测试 daemon。
+`status.observer` 是只读宿主快照：`visible` 为原生观察窗口可见性，`spaceId`、`tabId` 为 GUI 正在观察的目标（空选择为 null）。它不执行网页脚本、不激活窗口、不改变请求目标，也不持久化新状态。测试报告、逐条命令、GUI 检查点和截图写入该次输出目录；退出时删除自有测试 Space 并停止测试 daemon。
 
 ## 临时详细诊断
 
@@ -247,8 +247,8 @@ awb diagnostics --space work --tab TAB_ID --inspectable off
 ## Console 与网络诊断
 
 ```sh
-awb diagnostics --space work [--tab ID]
-awb diagnostics --space work --clear
+awb diagnostics --space work --tab ID
+awb diagnostics --space work --tab ID --clear
 python3 tests/reliability.py --diagnostics-only
 python3 tests/reliability.py --forms  # 含诊断、原有可靠性和框架回归
 ```
@@ -313,7 +313,7 @@ B 的两个 Space 访问同一个含随机 nonce 的 HTTPS URL。代理端必须
 
 HTTP、HTTPS、SOCKS（含嵌套接口）、PAC、自动发现各自经历已有 Direct + Whistle Space 的重启、查询、拒绝导航、真实 Whistle 请求、关闭冲突、原 Cookie/LocalStorage/Tab ID/URL 恢复，以及页面自主导航拒绝。它验证真实应用对设置变化的处理，但**不等于真实操作系统代理切换或动态子资源路由实测**；后者需要独立 macOS 测试环境，不能在用户机器上自动切换代理来凑验收。
 
-Direct 冲突不在 `Space.init` 抛出；恢复跳过受阻导航，数据容器仍保留。只读查询、修改默认标签页、关闭标签页及删除 Space 仍可用。关闭系统代理后显式 reload/open 恢复，避免自动重放页面操作。
+Direct 冲突不在 `Space.init` 抛出；恢复跳过受阻导航，数据容器仍保留。只读查询、关闭标签页及删除 Space 仍可用。关闭系统代理后显式 reload/open 恢复，避免自动重放页面操作。
 
 ## Space 证书策略
 
@@ -343,13 +343,13 @@ Whistle 2.10.2 动态证书的 SAN 存在，但缺少 EKU `serverAuth`。如果�
 
 Socket 建立后，`status.ready` 表示元数据恢复与待删除存储的清理尝试是否完成。恢复期间只有 status/help/capabilities/version 可用，其他命令返回 `not_ready`，避免 Agent 与恢复任务同时修改会话。ready 不表示全部网页加载完成；页面仍用 `wait` 等待。
 
-注册表保存 Space UUID、名称、代理、固定默认 Tab UUID、各 Tab UUID/URL 和待删除标记。Cookie、LocalStorage 等由命名 WKWebsiteDataStore 持久化，不手工导入导出。重启恢复的是标签页 URL，不是 DOM、JavaScript 堆、表单草稿或完整后退历史。Cookie 是否跨重启仍服从过期 / 会话属性；验收使用带 Max-Age 的 Cookie。
+注册表保存 Space UUID、名称、代理、各 Tab UUID/URL 和待删除标记。Cookie、LocalStorage 等由命名 WKWebsiteDataStore 持久化，不手工导入导出。重启恢复的是标签页 URL，不是 DOM、JavaScript 堆、表单草稿或完整后退历史。Cookie 是否跨重启仍服从过期 / 会话属性；验收使用带 Max-Age 的 Cookie。
 
 默认注册表目录为 `~/Library/Application Support/AgentWebKit`。`BROWSER_DATA_DIR` 或 `--data-dir` 可指定独立目录，`BROWSER_SOCKET` 或 `--socket` 可指定 Socket；daemon 与客户端必须使用相同配置。WebKit 网站数据由系统管理，指定注册表目录不会搬移这些数据；`space delete` 才会删除对应 Space 的网站数据。
 
-GUI 的 selectedSpace / selectedTabs 只决定观察哪一个 WebView，并按数据目录记住选择。窗口采用 NSSplitViewController、原生 sidebar、NSToolbar 和系统语义颜色。关闭观察窗口不终止服务。后台 Tab 使用隐藏 NSPanel 持有视图；DOM、Evaluate 和截图不调用 activate / makeKey。GUI 新建、地址栏导航和重新加载都走同一条命令处理路径，遵守 Space 锁及代理检查。没有 Space 时，首次新建显式使用 direct 创建 personal；其余新建沿用当前 Space。分享按钮复制带 Space UUID 和 Tab UUID 的 snapshot 命令，既不新建页面，也不修改默认标签页。地址栏编辑期间，后台刷新不会覆盖输入。
+GUI 的 selectedSpace / selectedTabs 只决定观察哪一个 WebView，并按数据目录记住选择。窗口采用 NSSplitViewController、原生 sidebar、NSToolbar 和系统语义颜色。关闭观察窗口不终止服务。后台 Tab 使用隐藏 NSPanel 持有视图；DOM、Evaluate 和截图不调用 activate / makeKey。GUI 新建、地址栏导航和重新加载都走同一条命令处理路径，遵守 Space 锁及代理检查。没有 Space 时，首次新建显式使用 direct 创建 personal；其余新建沿用当前 Space。分享按钮复制带 Space UUID 和 Tab UUID 的 snapshot 命令。地址栏编辑期间，后台刷新不会覆盖输入。
 
-地址栏省略协议时使用 HTTPS，本地 HTTP 页面需显式输入 `http://`。图钉标记 CLI 默认 Tab，底部显示代理和证书策略，忽略证书错误时显示橙色提示。⌘T 新建 Tab，⌘L 聚焦地址栏，⌃⌘S 切换侧栏，⇧⌘F 搜索 Space，⇧⌘[ / ⇧⌘] 切换标签页，⌘W 隐藏观察窗口，⌘Q 退出服务。
+地址栏省略协议时使用 HTTPS，本地 HTTP 页面需显式输入 `http://`。底部显示代理和证书策略，忽略证书错误时显示橙色提示。⌘T 新建 Tab，⌘L 聚焦地址栏，⌃⌘S 切换侧栏，⇧⌘F 搜索 Space，⇧⌘[ / ⇧⌘] 切换标签页，⌘W 隐藏观察窗口，⌘Q 退出服务。
 
 运行 `zsh scripts/build.sh release` 后，可用 `python3 tests/gui_security_cases.py` 检查原生证书提示。测试复用正式源码构建独立签名宿主，在三个 Direct Space 间切换，核对系统证书、自定义 CA、忽略证书错误的文字和警告颜色，并验证重启后的策略、选择与 Tab ID 保留、前台不变。需要已登录的 macOS 桌面；临时 CA 不导入钥匙串，退出清理自有 Space 和服务。报告与窗口截图保存在 `.artifacts/gui-security-*/`。本项验证 GUI 策略展示，TLS 网络信任判定仍由证书专项覆盖。
 
@@ -363,7 +363,7 @@ GUI 的 selectedSpace / selectedTabs 只决定观察哪一个 WebView，并按�
 
 Snapshot 覆盖主 frame、同源 frame 与开放 Shadow Root 中的可见交互元素，最多 1000 个；文本摘要仅取主 frame，最多 20000 字，达到上限返回 `truncated`。引用只保留最新 Snapshot 遍历登记的节点；同一节点再次出现时 ID 保持稳定，未在最新 Snapshot 登记、导航、刷新、frame 文档替换或元素被移除后的旧引用返回 `stale_ref`。CSS selector 必须恰好命中一个元素，跨作用域使用 `>>>` 或完整引用，边界见下文。Snapshot 包含控件标签、checkbox/radio 状态、select 选项，并隐藏 password 值。`fill` 使用原生 value setter 和非 trusted input/change 事件；拒绝 disabled fieldset、只读字段、无效 select 值以及文件、checkbox、radio 的文字填写。`wait` 默认等待页面加载或唯一元素可见，也可显式等待 URL、文本或 DOM 状态；选择器错误不会被吞掉当成普通超时。
 
-Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 等待表达式返回的 Promise（同样在 page world）。返回不能被 JSON 表示的值时明确失败。alert/confirm/prompt 通过上述 dialog list/respond 显式处理；网站新窗口转为同 Space Tab，不改变 CLI 默认 Tab 或自动抢前台。外部 URL scheme 被明确拒绝，不启动其他应用；弹窗、opener 和合成点击的边界见下文。
+Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 等待表达式返回的 Promise（同样在 page world）。返回不能被 JSON 表示的值时明确失败。alert/confirm/prompt 通过上述 dialog list/respond 显式处理；网站新窗口转为同 Space Tab，由调用方显式使用新 ID。外部 URL scheme 被明确拒绝，不启动其他应用；弹窗、opener 和合成点击的边界见下文。
 
 `fill` 支持输入框、textarea、select 和 contenteditable；对 contenteditable 只做整段纯文本替换，会移除原有格式。不模拟逐键输入、输入法、光标、原生剪贴板或复杂编辑器协议，旧节点引用失效后需重新 snapshot。
 
@@ -379,7 +379,7 @@ Evaluate 默认使用 evaluateJavaScript；`--await` 使用 callAsyncJavaScript 
 
 故障恢复后立即删除 Space，实测 WebKit 可能仍持有没有活动页面的网络会话，`remove(forIdentifier:)` 返回 `Data store is in use (by network process)`。流程先调用 `removeData` 清理全部公开网站数据类型，再用 `fetchDataRecords` 验证为空，并有限重试容器删除。容器未释放时返回 `websiteDataRemoved: true`、`dataStoreRemoved: false`、`cleanupPending: true`，保留 tombstone；不会把容器删除当成成功。重启后会再次清理，`status.pendingStoreCleanup` 返回数量，`status.pendingStores` 列出全部待清理记录的 `spaceId` 和 `name`，包括运行中删除失败或仍待回调的记录。同名活跃 Space 从 `space list` 查询；按名称删除有歧义时，核对两处 UUID，再按旧 UUID 清理。同名重建使用新 UUID，测试验证它读不到旧 LocalStorage，并验证重启后旧容器和 tombstone 清除。
 
-删除按 Store UUID 独立占用，同一 Store 的重复请求返回 `space_busy`，其他 Store 可以继续使用或删除。同名 tombstone 与新 Space 并存时，按名称删除返回 `space_ambiguous`，须明确 UUID；同名重建仍可用，旧 Store 重试不会选择新 Space。删除或清理验证超时后仍保留 tombstone 和尚未完成的回调占用；实际回调结束前不允许重试，回调一直未到时需重启恢复。客户端提前断连不会取消已经开始的删除。`--cleanup-only` 同时运行真实并发删除及生成源码中的回调闸门/故障注入，覆盖失败、同名重建/UUID 重试/重启隔离、删除/清理/回退重试超时、迟到回调和断连；测试钩子不进入生产构建。
+形如 UUID 的 Space 参数严格按 ID 解析；目标已移除时返回 `space_not_found`。若 Space 名称恰为 UUID，使用其实际 ID。删除按 Store UUID 独立占用，同一 Store 的重复请求返回 `space_busy`，其他 Store 可以继续使用或删除。同名 tombstone 与新 Space 并存时，按名称删除返回 `space_ambiguous`，须明确 UUID；同名重建仍可用，旧 Store 重试不会选择新 Space。删除或清理验证超时后仍保留 tombstone 和尚未完成的回调占用；实际回调结束前不允许重试，回调一直未到时需重启恢复。客户端提前断连不会取消已经开始的删除。`--cleanup-only` 同时运行真实并发删除及生成源码中的回调闸门/故障注入，覆盖失败、同名重建/UUID 重试/重启隔离、删除/清理/回退重试超时、迟到回调和断连；测试钩子不进入生产构建。
 
 所有 Store 删除入口先初始化一个临时 `WKWebsiteDataStore.nonPersistent()`，并持有到删除及回退清理完成，避免在尚未初始化 Store 的进程中首次静态删除触发本机 WebKit 的 WebsiteDataStoreIO 崩溃。该保护同时覆盖启动 tombstone 清理，以及全部 Space 休眠或配置异常时的普通删除。没有打开用户默认 Store、创建额外 WebView 或发起导航。`python3 tests/reliability.py --cleanup-only` 用真实 Store 和测试自产注册表验证这些路径，包括“删除标记已写入、清理前进程退出”；完整可靠性套件也包含它。这里只模拟中断位置，不宣称执行过真实断电或强杀删除过程。
 

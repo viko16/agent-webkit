@@ -83,8 +83,8 @@ def verify_frames(cli, out, restart):
         with frame_site(host) as (origins, requests, nonce):
             a = cli('space', 'create', 'frames-a', '--proxy', 'direct')
             b = cli('space', 'create', 'frames-b', '--proxy', 'direct')
-            tab = a['defaultTabId']
-            peer = b['defaultTabId']
+            tab = a['tabs'][0]['tabId']
+            peer = b['tabs'][0]['tabId']
 
             def command(*args, frame=None, target=tab, space='frames-a', **kwargs):
                 options = ['--space', space, '--tab', target]
@@ -270,7 +270,7 @@ def verify_frames(cli, out, restart):
                     assert capacity['truncated'] and capacity['evictedDocuments'] >= 5
                     # Surviving targets remain usable when the registry is full.
                     command('fill', '#same', 'bounded', frame=capacity['frames'][-1]['frameId'])
-                cli('tab', 'close', second_tab, '--space', 'frames-a')
+                cli('tab', 'close', '--tab', second_tab, '--space', 'frames-a')
                 command('snapshot', frame=child, target=second_tab, error='tab_not_found')
                 assert len(requests) == 2, 'Inputs or submissions were replayed'
                 after = cli('status')

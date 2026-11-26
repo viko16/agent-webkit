@@ -41,9 +41,10 @@ def pending_navigation_site():
 
 
 def verify_keyboard(cli, base, out, restart, site_events, nonce):
+    event_start = len(site_events.items)
     work = cli('space', 'create', 'keyboard-work', '--proxy', 'direct')
     peer = cli('space', 'create', 'keyboard-peer', '--proxy', 'direct')
-    tab, peer_tab = work['defaultTabId'], peer['defaultTabId']
+    tab, peer_tab = work['tabs'][0]['tabId'], peer['tabs'][0]['tabId']
     page = urljoin(base, '/keyboard')
     evidence = []
 
@@ -150,13 +151,13 @@ def verify_keyboard(cli, base, out, restart, site_events, nonce):
                 keys = [e for e in actual['events'] if e['type'] == 'keydown']
                 assert [e['key'] for e in keys] == ['ArrowDown', 'ArrowDown', 'ArrowUp', 'Enter'] and all(e['trusted'] for e in keys)
                 assert actual['value'] == 'apple' and js('document.querySelector("#suggestions").hidden')
-                assert not [e for e in site_events.items if e['kind'] == 'keyboard-save' and e['epoch'] == actual['epoch']]
+                assert not [e for e in site_events.items[event_start:] if e['kind'] == 'keyboard-save' and e['epoch'] == actual['epoch']]
                 evidence.append(dict(suggestions=actual))
             prepare(target=target, space=space)
             before = read(target=target, space=space)
             command('key', 'Enter', target=target, space=space)
             command('wait', '#ack', '--text', nonce, target=target, space=space)
-            posts = [e for e in site_events.items if e['kind'] == 'keyboard-save' and e['epoch'] == before['epoch']]
+            posts = [e for e in site_events.items[event_start:] if e['kind'] == 'keyboard-save' and e['epoch'] == before['epoch']]
             assert len(posts) == 1 and posts[0]['value'] == before['value'] and posts[0]['nonce'] == nonce
         ref = next(e['ref'] for e in command('snapshot')['value']['elements'] if e['tag'] == 'input')
         command('reload')
@@ -197,12 +198,12 @@ def verify_keyboard(cli, base, out, restart, site_events, nonce):
             assert js('document.querySelector("#first").value') == 'new-document'
             command('key', 'Shift+X', error='input_focus_required')
         command('open', page)
-        cli('tab', 'close', other, '--space', 'keyboard-work')
+        cli('tab', 'close', '--tab', other, '--space', 'keyboard-work')
         command('key', 'Enter', target=other, error='tab_not_found')
         after = cli('status')
         assert after['frontmostPid'] == initial['frontmostPid']
         assert after['observer'] == initial['observer']
-        assert len([e for e in site_events.items if e['kind'] == 'keyboard-save']) == 2
+        assert len([e for e in site_events.items[event_start:] if e['kind'] == 'keyboard-save']) == 2
         # Exercise the real observer's address editor; this cannot be faked with page JS.
         root = Path(__file__).resolve().parents[1]
         app = out / 'Input Host Probe.app'

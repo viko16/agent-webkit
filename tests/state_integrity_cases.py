@@ -14,7 +14,7 @@ def verify_state_integrity(cli, base, out, start, stop, state):
     try:
         for name in names:
             created.append(cli('space', 'create', name, '--proxy', 'direct'))
-        flags = ('--space', names[0])
+        flags = ('--space', names[0], '--tab', created[0]['tabs'][0]['tabId'])
         original_url = base + '?identity=original'
         cli('open', original_url, *flags)
         cli('evaluate', 'document.querySelector("#result").textContent="Document A survives";true', *flags)
@@ -87,11 +87,11 @@ def verify_state_integrity(cli, base, out, start, stop, state):
         cli('evaluate', 'document.querySelector("#save").remove();true', *flags)
         cli('click', old_ref, *flags, error='stale_ref')
 
-        cli('open', base + '?configuration=healthy', '--space', names[1])
-        cli('open', base + '?configuration=bad', '--space', names[2])
+        cli('open', base + '?configuration=healthy', '--space', names[1], '--tab', created[1]['tabs'][0]['tabId'])
+        cli('open', base + '?configuration=bad', '--space', names[2], '--tab', created[2]['tabs'][0]['tabId'])
         cli('tab', 'new', base + '?configuration=bad-extra', '--space', names[2])
         cli('tab', 'new', base + '?configuration=bad-third', '--space', names[2])
-        cli('open', base + '?configuration=suspended', '--space', names[3])
+        cli('open', base + '?configuration=suspended', '--space', names[3], '--tab', created[3]['tabs'][0]['tabId'])
         cli('space', 'suspend', names[3])
         expected_tabs = {name: [(tab['tabId'], tab['url']) for tab in cli('tab', 'list', '--space', name)]
                          for name in names[2:]}
@@ -106,8 +106,8 @@ def verify_state_integrity(cli, base, out, start, stop, state):
         os.replace(temporary, registry)
         start(); running = True
         assert cli('status')['ready']
-        cli('wait', '#message', '--space', names[1])
-        assert cli('evaluate', 'location.href', '--space', names[1])['value'] == base + '?configuration=healthy'
+        cli('wait', '#message', '--space', names[1], '--tab', created[1]['tabs'][0]['tabId'])
+        assert cli('evaluate', 'location.href', '--space', names[1], '--tab', created[1]['tabs'][0]['tabId'])['value'] == base + '?configuration=healthy'
         for name in names[2:]:
             info = cli('space', 'info', name)
             assert info['configurationError']['code'] == 'invalid_proxy', info
@@ -116,8 +116,8 @@ def verify_state_integrity(cli, base, out, start, stop, state):
             assert [(tab['tabId'], tab['url']) for tab in tabs] == expected_tabs[name], tabs
             impact = next(space for space in cli('status')['shutdownImpact']['spaces'] if space['spaceId'] == info['id'])
             assert impact['tabIds'] == [tab_id for tab_id, _ in expected_tabs[name]], impact
-            cli('snapshot', '--space', name, error='invalid_proxy')
-            cli('open', base, '--space', name, error='invalid_proxy')
+            cli('snapshot', '--space', name, '--tab', tabs[0]['tabId'], error='invalid_proxy')
+            cli('open', base, '--space', name, '--tab', tabs[0]['tabId'], error='invalid_proxy')
             cli('space', 'resume', name, error='invalid_proxy')
             assert cli('space', 'info', name)['liveWebViews'] == 0
             assert cli('space', 'delete', name)['websiteDataRemoved']

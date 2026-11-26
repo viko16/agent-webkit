@@ -32,7 +32,7 @@ final class InputHostProbe: NSObject, NSApplicationDelegate {
         }
         let peerBefore = try jsonData(peerState)
         let options = ["space": space.record.id.uuidString, "tab": tab.id.uuidString]
-        let viewport = await model.handle(Request(command: "viewport.set", args: ["1440", "900"], options: options))
+        let viewport = await model.handle(Request(command: "viewport.set", args: ["1440", "900"], options: options), origin: .agent)
         guard viewport["ok"] as? Bool == true else { throw BrowserError("probe_failed", "viewport set failed: \(viewport)") }
         _ = try await tab.runJS("""
             const marks = [['left:0;top:0','red'],['right:0;top:0','lime'],
@@ -59,7 +59,7 @@ final class InputHostProbe: NSObject, NSApplicationDelegate {
             let path = directory.appendingPathComponent("viewport-\(phase).png")
             var screenshotOptions = options
             screenshotOptions["out"] = path.path
-            let result = await model.handle(Request(command: "screenshot", args: [], options: screenshotOptions))
+            let result = await model.handle(Request(command: "screenshot", args: [], options: screenshotOptions), origin: .agent)
             guard let payload = result["result"] as? [String: Any], let shot = payload["value"] as? [String: Any],
                   let bitmap = NSBitmapImageRep(data: try Data(contentsOf: path)),
                   let css = shot["cssViewport"] as? [String: Double], css["width"] == 1440, css["height"] == 900,
@@ -192,16 +192,16 @@ final class InputHostProbe: NSObject, NSApplicationDelegate {
                 try jsonData(["ok": empty, "pendingStoreCleanup": browser.records.count]).write(to: output, options: .atomic)
                 exit(empty ? 0 : 1)
             }
-            let created = await browser.handle(Request(command: "space.create", args: ["input-host"], options: ["proxy": "direct"]))
+            let created = await browser.handle(Request(command: "space.create", args: ["input-host"], options: ["proxy": "direct"]), origin: .agent)
             guard created["ok"] as? Bool == true, let space = browser.spaces.first, let tab = space.tabs.first else {
                 throw BrowserError("probe_failed", "cannot create test Space")
             }
-            let sibling = await browser.handle(Request(command: "space.create", args: ["input-next"], options: ["proxy": "direct"]))
+            let sibling = await browser.handle(Request(command: "space.create", args: ["input-next"], options: ["proxy": "direct"]), origin: .agent)
             guard sibling["ok"] as? Bool == true else { throw BrowserError("probe_failed", "cannot create sidebar peer") }
             tab.load(URL(string: CommandLine.arguments[1])!)
             try await tab.wait(selector: nil, timeout: 5000)
             try await tab.wait(selector: "#first", timeout: 5000)
-            let newTab = await browser.handle(Request(command: "tab.new", args: [CommandLine.arguments[1]], options: ["space": space.record.id.uuidString]))
+            let newTab = await browser.handle(Request(command: "tab.new", args: [CommandLine.arguments[1]], options: ["space": space.record.id.uuidString]), origin: .agent)
             guard newTab["ok"] as? Bool == true, let peer = space.tabs.last, peer !== tab else {
                 throw BrowserError("probe_failed", "cannot create GUI Tab peer")
             }
@@ -343,7 +343,7 @@ final class InputHostProbe: NSObject, NSApplicationDelegate {
         } catch { report["error"] = error.localizedDescription }
         if let model {
             for space in model.spaces {
-                let deleted = await model.handle(Request(command: "space.delete", args: [space.record.id.uuidString], options: [:]))
+                let deleted = await model.handle(Request(command: "space.delete", args: [space.record.id.uuidString], options: [:]), origin: .agent)
                 if deleted["ok"] as? Bool != true { report["ok"] = false; report["cleanupError"] = deleted }
             }
         }

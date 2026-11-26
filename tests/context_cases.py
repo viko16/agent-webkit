@@ -189,7 +189,7 @@ def verify_scoped_actions(command, js):
 
 def verify_contexts(cli, base):
     name = 'contexts'
-    tab = cli('space', 'create', name, '--proxy', 'direct')['defaultTabId']
+    tab = cli('space', 'create', name, '--proxy', 'direct')['tabs'][0]['tabId']
 
     def command(*args, **kwargs):
         return cli(*args, '--space', name, '--tab', tab, **kwargs)

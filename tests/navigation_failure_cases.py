@@ -179,7 +179,7 @@ def verify_same_url_races(command, js, base, out, origin_events):
 def verify_navigation_failures(cli, base, out, events):
     name = 'navigation-failures'
     space = cli('space', 'create', name, '--proxy', 'direct')
-    flags = ('--space', space['id'], '--tab', space['defaultTabId'])
+    flags = ('--space', space['id'], '--tab', space['tabs'][0]['tabId'])
     evidence = []
 
     def command(*args, **kwargs):

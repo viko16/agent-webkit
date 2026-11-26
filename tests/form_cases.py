@@ -49,7 +49,7 @@ def verify_forms(cli, base, nonce, out):
     def command(*args, **kwargs):
         if args[0] == 'wait' and '--timeout' not in args:
             args = (*args, '--timeout', '5000')
-        return cli(*args, '--space', space['id'], '--tab', space['defaultTabId'], **kwargs)
+        return cli(*args, '--space', space['id'], '--tab', space['tabs'][0]['tabId'], **kwargs)
 
     def js(source):
         return command('evaluate', source)['value']

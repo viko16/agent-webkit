@@ -30,15 +30,15 @@ def main():
         created = {}
         for name, (options, _, _) in cases.items():
             created[name] = runtime.command('space', 'create', name, '--proxy', 'direct', *options)
-            runtime.page(name, created[name]['defaultTabId'], 'open', runtime.base)
+            runtime.page(name, created[name]['tabs'][0]['tabId'], 'open', runtime.base)
 
         def check(name, phase, select=True):
             current = runtime.command('space', 'info', name)
             assert current['tls']['policy'] == name and current['id'] == created[name]['id'], current
-            assert current['defaultTabId'] == created[name]['defaultTabId'], current
+            assert current['tabs'][0]['tabId'] == created[name]['tabs'][0]['tabId'], current
             gui = runtime.gui('select', space=name, capture='true') if select else runtime.gui(capture='true')
             assert gui['observer']['spaceId'] == current['id'], gui
-            assert gui['observer']['tabId'] == current['defaultTabId'], gui
+            assert gui['observer']['tabId'] == current['tabs'][0]['tabId'], gui
             assert gui['security'] == cases[name][1] and gui['securityWarning'] == cases[name][2], gui
             report['checks'].append(dict(phase=phase, policy=name, gui=gui, image=f'gui-{gui["id"]}.png'))
 

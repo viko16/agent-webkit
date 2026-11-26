@@ -25,11 +25,11 @@ try:
             break
         time.sleep(.1)
     proxy_url = f'http://127.0.0.1:{relay.server_address[1]}'
-    print(cli('space','create','probe','--proxy',proxy_url), flush=True)
+    tab = cli('space','create','probe','--proxy',proxy_url)['result']['tabs'][0]['tabId']
     port = server.server_address[1]
     for url in [f'http://127.0.0.1:{port}',f'http://localhost:{port}',f'https://127.0.0.1:{port}',f'https://localhost:{port}', 'https://example.com']:
         before = len(events.items)
-        result = cli('open',url,'--space','probe','--timeout','3000')
+        result = cli('open',url,'--space','probe','--tab',tab,'--timeout','3000')
         print(json.dumps({'url':url,'response':result,'proxyEvents':events.items[before:]}, ensure_ascii=False), flush=True)
 finally:
     print(cli('space','delete','probe'), flush=True)

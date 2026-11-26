@@ -5,10 +5,10 @@ import time
 
 def verify_waits(cli, base):
     name = 'conditions'
-    cli('space', 'create', name, '--proxy', 'direct')
+    tab = cli('space', 'create', name, '--proxy', 'direct')['tabs'][0]['tabId']
 
     def command(*args, **kwargs):
-        return cli(*args, '--space', name, **kwargs)
+        return cli(*args, '--space', name, '--tab', tab, **kwargs)
 
     def js(source):
         return command('evaluate', source)['value']
@@ -61,10 +61,9 @@ def verify_waits(cli, base):
         command('fill', '#frame >>> #same', 'frame result')
         command('click', '#frame >>> #save')
         command('wait', '#frame >>> #result', '--text', 'frame result')
-        tab_id = command('state')['page']['tabId']
-        frames = command('frame', 'list', '--tab', tab_id)['value']['frames']
+        frames = command('frame', 'list')['value']['frames']
         same_frame = next(frame['frameId'] for frame in frames if '/context-frame' in frame['url'] and frame['url'].startswith(base.split('/index.html')[0]))
-        command('wait', '--tab', tab_id, '--frame', same_frame, '--fn', '() => document.querySelector("#result").textContent === "frame result"')
+        command('wait', '--frame', same_frame, '--fn', '() => document.querySelector("#result").textContent === "frame result"')
         command('fill', '#host >>> input', 'shadow result')
         command('click', '#host >>> button')
         command('wait', '#host >>> output', '--text', 'shadow result')

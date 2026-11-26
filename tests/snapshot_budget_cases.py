@@ -8,11 +8,12 @@ def verify_snapshot_budget(cli, base, out):
     created = []
     cases = []
     try:
+        tabs = {}
         for name in names:
-            cli('space', 'create', name, '--proxy', 'direct')
+            tabs[name] = cli('space', 'create', name, '--proxy', 'direct')['tabs'][0]['tabId']
             created.append(name)
-            cli('open', base, '--space', name)
-        flags = ('--space', names[0])
+            cli('open', base, '--space', name, '--tab', tabs[name])
+        flags = ('--space', names[0], '--tab', tabs[names[0]])
 
         def evaluate(source, await_result=False):
             return cli('evaluate', source, *(['--await'] if await_result else []), '--timeout', '10000', *flags)['value']
@@ -29,7 +30,7 @@ def verify_snapshot_budget(cli, base, out):
                 assert len(element.get('options', [])) <= 100
                 for option in element.get('options', []):
                     assert len(option['value']) <= 200 and len(option['label']) <= 200, option
-            assert cli('evaluate', 'document.title', '--space', names[1])['value'] == 'Agent WebKit Fixture'
+            assert cli('evaluate', 'document.title', '--space', names[1], '--tab', tabs[names[1]])['value'] == 'Agent WebKit Fixture'
             cases.append(dict(case=name, bytes=size, elements=len(value['elements']), truncated=value['truncated']))
             return value
 

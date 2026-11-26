@@ -397,9 +397,12 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
             tabStack.arrangedSubviews.forEach { $0.removeFromSuperview() }; tabSignature = ""
             updateStatus(); return
         }
-        let selected = selectedTabs[space.record.id] ?? space.record.defaultTab
-        let tab = space.tabs.first { $0.id == selected } ?? space.tabs.first { $0.id == space.record.defaultTab }
-        if !space.suspended { selectedTabs[space.record.id] = tab?.id }
+        let selected = selectedTabs[space.record.id]
+        let tab = space.tabs.first { $0.id == selected } ?? space.tabs.first
+        if let tab, selected != tab.id {
+            selectedTabs[space.record.id] = tab.id
+            saveSelection()
+        }
         let blank = space.suspended || tab?.persistedURL == "about:blank"
         empty.isHidden = !blank
         if space.suspended {
@@ -409,7 +412,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
             emptyTitle.stringValue = "新标签页"
             emptyText.stringValue = "在地址栏输入网址，按回车打开。\n准备好后，点工具栏的分享按钮复制 Agent 接管命令。"
         }
-        let signature = space.tabs.map { "\($0.id)|\($0.webView.title ?? "")|\($0.persistedURL)" }.joined() + "\(tab?.id.uuidString ?? "")\(space.record.defaultTab)"
+        let signature = space.tabs.map { "\($0.id)|\($0.webView.title ?? "")|\($0.persistedURL)" }.joined() + "\(tab?.id.uuidString ?? "")"
         if signature != tabSignature {
             tabSignature = signature; tabStack.arrangedSubviews.forEach { $0.removeFromSuperview() }; tabWidths = []
             for (index, candidate) in space.tabs.enumerated() {
@@ -424,10 +427,10 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
                 button.setAccessibilityValue(candidate === tab ? 1 : 0)
                 button.contentTintColor = candidate === tab ? .labelColor : .secondaryLabelColor
                 button.cell?.lineBreakMode = .byTruncatingTail
-                button.image = NSImage(systemSymbolName: candidate.id == space.record.defaultTab ? "pin" : "globe", accessibilityDescription: nil)
+                button.image = NSImage(systemSymbolName: "globe", accessibilityDescription: nil)
                 button.imagePosition = .imageLeading
-                button.toolTip = "\(title)\n\(candidate.persistedURL)\n\(candidate.id == space.record.defaultTab ? "CLI 默认标签页 · " : "")\(candidate.id.uuidString)"
-                button.setAccessibilityLabel("\(title)\(candidate.id == space.record.defaultTab ? "，CLI 默认标签页" : "")")
+                button.toolTip = "\(title)\n\(candidate.persistedURL)\n\(candidate.id.uuidString)"
+                button.setAccessibilityLabel(title)
                 let width = button.widthAnchor.constraint(equalToConstant: 220)
                 width.isActive = true; tabWidths.append(width)
                 button.heightAnchor.constraint(equalToConstant: 30).isActive = true; tabStack.addArrangedSubview(button)
@@ -467,7 +470,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         address.isEnabled = tab != nil && !model.restoring && !creatingTab
         progress.doubleValue = tab?.webView.isLoading == true ? max(0.03, tab?.webView.estimatedProgress ?? 0) : 0
         progress.alphaValue = tab?.webView.isLoading == true ? 1 : 0
-        status.stringValue = model.restoring ? "正在恢复会话…" : transientMessage ?? (tab == nil ? "准备就绪" : space?.busy == true ? "正在处理页面…" : tab?.webView.isLoading == true ? "正在加载…" : tab?.id == space?.record.defaultTab ? "Agent 默认标签页" : "可通过分享按钮交给 Agent")
+        status.stringValue = model.restoring ? "正在恢复会话…" : transientMessage ?? (tab == nil ? "准备就绪" : space?.busy == true ? "正在处理页面…" : tab?.webView.isLoading == true ? "正在加载…" : "可通过分享按钮交给 Agent")
         let insecure = space?.record.tls?.ignoreCertificateErrors == true
         let tls = insecure ? "未校验证书" : space?.record.tls == nil ? "系统证书校验" : "自定义 CA"
         let networkError = space?.networkError
@@ -505,7 +508,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     @objc private func startBrowsing(_ sender: Any?) {
         if let space = currentSpace, space.suspended {
             Task { @MainActor in
-                let result = await model.handle(Request(command: "space.resume", args: [space.record.id.uuidString], options: [:]))
+                let result = await model.handle(Request(command: "space.resume", args: [space.record.id.uuidString], options: [:]), origin: .observer)
                 if result["ok"] as? Bool != true { presentFailure(result) }
                 refresh()
             }
@@ -525,14 +528,14 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
             } else {
                 request = Request(command: "space.create", args: ["personal"], options: ["proxy": "direct"])
             }
-            let response = await model.handle(request)
+            let response = await model.handle(request, origin: .observer)
             guard response["ok"] as? Bool == true, let result = response["result"] as? [String: Any] else {
                 presentFailure(response); return
             }
             if let spaceID, let value = result["tabId"] as? String, let tabID = UUID(uuidString: value) {
                 selectedSpace = spaceID; selectedTabs[spaceID] = tabID
             } else if let space = model.spaces.first(where: { $0.record.name == "personal" }) {
-                selectedSpace = space.record.id; selectedTabs[space.record.id] = space.record.defaultTab
+                selectedSpace = space.record.id; selectedTabs[space.record.id] = space.tabs.first?.id
             }
             search.stringValue = ""; transientMessage = nil; saveSelection()
             refresh()
@@ -553,7 +556,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         Task { @MainActor in
             window.endEditing(for: address)
             window.makeFirstResponder(tab.webView)
-            let result = await model.handle(Request(command: "open", args: [url], options: ["space": space.record.id.uuidString, "tab": tab.id.uuidString]))
+            let result = await model.handle(Request(command: "open", args: [url], options: ["space": space.record.id.uuidString, "tab": tab.id.uuidString]), origin: .observer)
             if result["ok"] as? Bool != true { presentFailure(result) }
             refresh()
         }
@@ -567,7 +570,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     @objc func reloadPage() {
         guard canReload, let space = currentSpace, let tab = displayed else { NSSound.beep(); return }
         Task { @MainActor in
-            let result = await model.handle(Request(command: "reload", args: [], options: ["space": space.record.id.uuidString, "tab": tab.id.uuidString]))
+            let result = await model.handle(Request(command: "reload", args: [], options: ["space": space.record.id.uuidString, "tab": tab.id.uuidString]), origin: .observer)
             if result["ok"] as? Bool != true, selectedSpace == space.record.id { transientMessage = (result["error"] as? [String: Any])?["message"] as? String }
             refresh()
         }
@@ -591,7 +594,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         guard let space = currentSpace else { return }
         if infoPopover.isShown { infoPopover.close(); return }
         let title = NSTextField(labelWithString: space.record.name); title.font = .systemFont(ofSize: 17, weight: .semibold)
-        let details = NSTextField(wrappingLabelWithString: "Space ID\n\(space.record.id.uuidString)\n\n网络\n\(space.record.proxy)\n\n证书\n\(security.stringValue)\n\nCLI 默认标签页\n\(space.record.defaultTab.uuidString)\n\n切换窗口中的标签页不会改变 CLI 的默认目标。网站数据保存在此 Space 中，关闭窗口后服务继续运行。")
+        let details = NSTextField(wrappingLabelWithString: "Space ID\n\(space.record.id.uuidString)\n\n网络\n\(space.record.proxy)\n\n证书\n\(security.stringValue)\n\n网站数据保存在此 Space 中，关闭窗口后服务继续运行。")
         details.font = .systemFont(ofSize: 12); details.isSelectable = true
         let stack = NSStackView(views: [title, details]); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 14
         stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)

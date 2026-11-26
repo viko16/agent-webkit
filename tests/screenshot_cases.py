@@ -68,7 +68,7 @@ def verify_screenshots(cli, base, out, restart):
         command('screenshot', '--element', '#target', '--out', str(out / 'rejected.png'), '--timeout', '25', error='timeout')
         assert scrolls() == original
         cli('screenshot', '--space', peer, '--tab', target, '--element', '#target', '--out', str(out / 'rejected.png'), error='tab_not_found')
-        assert cli('space', 'info', name)['defaultTabId'] == work['defaultTabId']
+        assert cli('space', 'info', name)['tabs'][0]['tabId'] == work['tabs'][0]['tabId']
         assert cli('status')['frontmostPid'] == before['frontmostPid']
         original_viewport = command('viewport', 'get')['value']['cssViewport']
         assert (original_viewport['width'], original_viewport['height']) == (1000, 700)
@@ -88,7 +88,7 @@ def verify_screenshots(cli, base, out, restart):
         capture('#target', 'element-restarted.png', [220,30,40])
         report = dict(elementScreenshots=True, pixelsVerified=True, scrollRestored=True,
                       clipping=True, sameOriginFrame=True, openShadow=True, errors=True,
-                      nondefaultTab=True, restart=True, foregroundUnchanged=True)
+                      secondTab=True, restart=True, foregroundUnchanged=True)
         (out / 'screenshots.json').write_text(json.dumps(report, indent=2))
         return report
     finally:
@@ -139,7 +139,7 @@ def verify_fullpage(cli, base, out, restart):
         command('screenshot', '--full-page', '--out', str(out / 'full-rejected.png'), '--timeout', '25', error='timeout')
         command('screenshot', '--full-page', '--element', '#red', '--out', str(out / 'full-rejected.png'), error='invalid_arguments')
         assert not (out / 'full-rejected.png').exists()
-        assert cli('space', 'info', name)['defaultTabId'] == work['defaultTabId']
+        assert cli('space', 'info', name)['tabs'][0]['tabId'] == work['tabs'][0]['tabId']
         assert cli('status')['frontmostPid'] == before['frontmostPid']
         restart();command('wait')
         capture('full-restarted.png')

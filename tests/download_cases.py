@@ -5,34 +5,34 @@ import time
 from urllib.parse import urljoin
 
 
-def verify_download_tls(cli, page_url, destination, space, accepted):
-    cli('open', page_url, '--space', space)
-    previous = {d['id'] for d in cli('download', 'list', '--space', space)['value']['downloads']}
-    cli('evaluate', f'document.querySelector("#download").href={json.dumps(destination)};true', '--space', space)
-    cli('click', '#download', '--space', space)
+def verify_download_tls(cli, page_url, destination, space, tab, accepted):
+    cli('open', page_url, '--space', space, '--tab', tab)
+    previous = {d['id'] for d in cli('download', 'list', '--space', space, '--tab', tab)['value']['downloads']}
+    cli('evaluate', f'document.querySelector("#download").href={json.dumps(destination)};true', '--space', space, '--tab', tab)
+    cli('click', '#download', '--space', space, '--tab', tab)
     for _ in range(100):
-        items = [d for d in cli('download', 'list', '--space', space)['value']['downloads'] if d['id'] not in previous]
+        items = [d for d in cli('download', 'list', '--space', space, '--tab', tab)['value']['downloads'] if d['id'] not in previous]
         if items:
             break
         time.sleep(.02)
     else:
         raise AssertionError('No native TLS download')
-    result = cli('download', 'wait', items[0]['id'], '--space', space)['value']
+    result = cli('download', 'wait', items[0]['id'], '--space', space, '--tab', tab)['value']
     assert result['status'] == ('completed' if accepted else 'failed'), result
     if accepted:
         assert Path(result['path']).read_text().startswith('download-')
     else:
         assert result['error'] and result['path'] is None
     # Download trust failures must not poison an intact document's navigation state.
-    cli('wait', '#single', '--space', space)
-    assert cli('state', '--space', space)['page']['lastTLSChallenge'] == {}
+    cli('wait', '#single', '--space', space, '--tab', tab)
+    assert cli('state', '--space', space, '--tab', tab)['page']['lastTLSChallenge'] == {}
     return dict(status=result['status'], pageWaitUnaffected=True)
 
 
 def verify_downloads(cli, base, out, restart, state):
     name, peer = 'file-work', 'file-peer'
     work = cli('space', 'create', name, '--proxy', 'direct')
-    cli('space', 'create', peer, '--proxy', 'direct')
+    peer_tab = cli('space', 'create', peer, '--proxy', 'direct')['tabs'][0]['tabId']
     target = cli('tab', 'new', urljoin(base, '/files'), '--space', name)['tabId']
     flags = ('--space', name, '--tab', target)
 
@@ -67,8 +67,8 @@ def verify_downloads(cli, base, out, restart, state):
             assert denied['status'] == 'failed' and denied['error'] and denied['path'] is None, denied
         finally:
             folder.chmod(0o700)
-        cli('download', 'wait', first, '--space', peer, error='download_not_found')
-        cli('download', 'wait', first, '--space', name, error='download_not_found')
+        cli('download', 'wait', first, '--space', peer, '--tab', peer_tab, error='download_not_found')
+        cli('download', 'wait', first, '--space', name, '--tab', work['tabs'][0]['tabId'], error='download_not_found')
         slow = begin('#slow')
         command('download', 'wait', slow, '--timeout', '50', error='timeout')
         cli('space', 'suspend', name, error='space_busy')
@@ -97,7 +97,7 @@ def verify_downloads(cli, base, out, restart, state):
         assert chooser['requiresForeground'] and chooser['status'] == 'requires_foreground', chooser
         assert cli('status')['frontmostPid'] == before['frontmostPid']
         active = begin('#slow')
-        cli('tab', 'close', target, '--space', name)
+        cli('tab', 'close', '--tab', target, '--space', name)
         cli('download', 'wait', active, *flags, error='tab_not_found')
         assert path.exists()
         for _ in range(100):

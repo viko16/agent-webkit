@@ -111,10 +111,10 @@ def verify_concurrent_store_deletion(cli, start, stop, state, base, out):
     cases = []
     for mode in ('success', 'failure', 'remove-timeout', 'clear-timeout', 'retry-timeout', 'disconnect'):
         target = cli('space', 'create', 'delete-race', '--proxy', 'direct')
-        cli('space', 'create', 'delete-healthy', '--proxy', 'direct')
+        healthy_tab = cli('space', 'create', 'delete-healthy', '--proxy', 'direct')['tabs'][0]['tabId']
         peer = cli('space', 'create', 'delete-peer', '--proxy', 'direct')
-        cli('open', base, '--space', 'delete-healthy')
-        cli('evaluate', 'localStorage.deleteRace="preserved";true', '--space', 'delete-healthy')
+        cli('open', base, '--space', 'delete-healthy', '--tab', healthy_tab)
+        cli('evaluate', 'localStorage.deleteRace="preserved";true', '--space', 'delete-healthy', '--tab', healthy_tab)
         stop()
         events = out / f'{mode}-events.txt'
         events.write_text('')
@@ -122,7 +122,7 @@ def verify_concurrent_store_deletion(cli, start, stop, state, base, out):
         start(executable=executable, extra_env={
             'BROWSER_TEST_STORE_ID': target['id'], 'BROWSER_TEST_STORE_MODE': mode,
             'BROWSER_TEST_STORE_EVENTS': str(events), 'BROWSER_TEST_STORE_RELEASE': str(release)})
-        cli('wait', '#message', '--space', 'delete-healthy')
+        cli('wait', '#message', '--space', 'delete-healthy', '--tab', healthy_tab)
 
         def wait_event(prefix):
             deadline = time.monotonic() + 10
@@ -150,15 +150,15 @@ def verify_concurrent_store_deletion(cli, start, stop, state, base, out):
                 cli('space', 'delete', target['id'].lower(), error='space_busy')
                 # Test by name too, while the UUID survives only in the tombstone.
                 cli('space', 'delete', 'delete-race', error='space_busy')
-                assert cli('evaluate', 'localStorage.deleteRace', '--space', 'delete-healthy')['value'] == 'preserved'
+                assert cli('evaluate', 'localStorage.deleteRace', '--space', 'delete-healthy', '--tab', healthy_tab)['value'] == 'preserved'
                 assert cli('space', 'delete', peer['id'])['websiteDataRemoved']
                 if mode.endswith('timeout'):
                     first.result(timeout=10)
                     cli('space', 'delete', target['id'], error='space_busy')
                     if mode == 'remove-timeout':
                         replacement = cli('space', 'create', 'delete-race', '--proxy', 'direct')
-                        cli('open', base, '--space', replacement['id'])
-                        cli('evaluate', 'localStorage.sameName="new";true', '--space', replacement['id'])
+                        cli('open', base, '--space', replacement['id'], '--tab', replacement['tabs'][0]['tabId'])
+                        cli('evaluate', 'localStorage.sameName="new";true', '--space', replacement['id'], '--tab', replacement['tabs'][0]['tabId'])
                     records = json.loads((state / 'spaces.json').read_text())
                     assert next(r for r in records if r['id'] == target['id'])['deleting']
                 attempts = [line for line in events.read_text().splitlines() if line.startswith('attempt:')]
@@ -179,16 +179,16 @@ def verify_concurrent_store_deletion(cli, start, stop, state, base, out):
                 assert cli('space', 'delete', discovered)['websiteDataRemoved']
                 if mode == 'remove-timeout':
                     assert cli('space', 'info', 'delete-race')['id'] == replacement['id']
-                    assert cli('evaluate', 'localStorage.sameName', '--space', replacement['id'])['value'] == 'new'
+                    assert cli('evaluate', 'localStorage.sameName', '--space', replacement['id'], '--tab', replacement['tabs'][0]['tabId'])['value'] == 'new'
             elif mode == 'disconnect':
                 wait_event('result:')
             elif mode == 'failure':
                 assert any(r['id'] == target['id'] and r['deleting']
                            for r in json.loads((state / 'spaces.json').read_text()))
                 replacement = cli('space', 'create', 'delete-race', '--proxy', 'direct')
-                cli('open', base, '--space', replacement['id'])
+                cli('open', base, '--space', replacement['id'], '--tab', replacement['tabs'][0]['tabId'])
                 cli('evaluate', 'document.cookie="sameName=new; Max-Age=3600; Path=/";localStorage.sameName="new";true',
-                    '--space', replacement['id'])
+                    '--space', replacement['id'], '--tab', replacement['tabs'][0]['tabId'])
                 extra_tab = cli('tab', 'new', base, '--space', replacement['id'])['tabId']
                 before = cli('tab', 'list', '--space', replacement['id'])
                 cli('space', 'delete', 'delete-race', error='space_ambiguous')
@@ -201,22 +201,22 @@ def verify_concurrent_store_deletion(cli, start, stop, state, base, out):
                 cli('space', 'delete', pending[0]['spaceId'].lower(), error='data_removal_failed')
                 assert cli('tab', 'list', '--space', replacement['id']) == before
                 assert cli('evaluate', '[document.cookie,localStorage.sameName]',
-                           '--space', replacement['id'])['value'] == ['sameName=new', 'new']
+                           '--space', replacement['id'], '--tab', replacement['tabs'][0]['tabId'])['value'] == ['sameName=new', 'new']
         stop(); start()
         assert cli('status')['pendingStoreCleanup'] == 0
         if mode == 'failure':
             restored = cli('space', 'info', 'delete-race')
-            assert restored['id'] == replacement['id'] and restored['defaultTabId'] == replacement['defaultTabId']
-            assert {t['tabId'] for t in cli('tab', 'list', '--space', replacement['id'])} == {extra_tab, replacement['defaultTabId']}
-            cli('wait', '#message', '--space', replacement['id'])
+            assert restored['id'] == replacement['id'] and restored['tabs'][0]['tabId'] == replacement['tabs'][0]['tabId']
+            assert {t['tabId'] for t in cli('tab', 'list', '--space', replacement['id'])} == {extra_tab, replacement['tabs'][0]['tabId']}
+            cli('wait', '#message', '--space', replacement['id'], '--tab', replacement['tabs'][0]['tabId'])
             assert cli('evaluate', '[document.cookie,localStorage.sameName]',
-                       '--space', replacement['id'])['value'] == ['sameName=new', 'new']
+                       '--space', replacement['id'], '--tab', replacement['tabs'][0]['tabId'])['value'] == ['sameName=new', 'new']
             assert cli('space', 'delete', replacement['id'].lower())['spaceId'] == replacement['id']
         elif mode == 'remove-timeout':
             assert cli('space', 'info', 'delete-race')['id'] == replacement['id']
             cli('space', 'delete', replacement['id'])
-        cli('wait', '#message', '--space', 'delete-healthy')
-        assert cli('evaluate', 'localStorage.deleteRace', '--space', 'delete-healthy')['value'] == 'preserved'
+        cli('wait', '#message', '--space', 'delete-healthy', '--tab', healthy_tab)
+        assert cli('evaluate', 'localStorage.deleteRace', '--space', 'delete-healthy', '--tab', healthy_tab)['value'] == 'preserved'
         cli('space', 'delete', 'delete-healthy')
         stop(); start()
         assert json.loads((state / 'spaces.json').read_text()) == []

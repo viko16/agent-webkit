@@ -30,11 +30,11 @@ def verify_proxy_summary(cli, start, stop, out, base):
         assert status['systemProxy'] == dict(enabled=True, enabledTypes=['ProxyAutoConfigEnable']), status
         encoded = json.dumps(status)
         assert all(secret not in encoded for secret in ('internal-sensitive-host', 'pac.internal', 'proxy-secret'))
-        cli('space', 'create', 'summary-direct', '--proxy', 'direct')
-        cli('open', base, '--space', 'summary-direct', error='direct_system_proxy_conflict')
+        tab = cli('space', 'create', 'summary-direct', '--proxy', 'direct')['tabs'][0]['tabId']
+        cli('open', base, '--space', 'summary-direct', '--tab', tab, error='direct_system_proxy_conflict')
         settings.write_text('{}')
-        cli('open', base, '--space', 'summary-direct')
-        assert cli('evaluate', 'location.href', '--space', 'summary-direct')['value'] == base
+        cli('open', base, '--space', 'summary-direct', '--tab', tab)
+        assert cli('evaluate', 'location.href', '--space', 'summary-direct', '--tab', tab)['value'] == base
     finally:
         settings.write_text('{}')
         remaining = cli('space', 'list')
@@ -51,12 +51,12 @@ def verify_direct_conflicts(cli, start, stop, settings, base, target, nonce, whi
         os.replace(temporary, settings)
 
     # Persist both routes and data before introducing a conflict at the CFNetwork boundary.
-    cli('space', 'create', 'conflict-direct', '--proxy', 'direct')
-    cli('space', 'create', 'conflict-proxy', '--proxy', whistle.url, '--ignore-certificate-errors')
-    cli('open', base, '--space', 'conflict-direct')
-    cli('open', target, '--space', 'conflict-proxy')
-    cli('evaluate', 'localStorage.setItem("conflict","saved"); document.cookie="conflict=kept; max-age=3600; path=/"', '--space', 'conflict-direct')
-    original = cli('state', '--space', 'conflict-direct')['page']
+    direct_tab = cli('space', 'create', 'conflict-direct', '--proxy', 'direct')['tabs'][0]['tabId']
+    proxy_tab = cli('space', 'create', 'conflict-proxy', '--proxy', whistle.url, '--ignore-certificate-errors')['tabs'][0]['tabId']
+    cli('open', base, '--space', 'conflict-direct', '--tab', direct_tab)
+    cli('open', target, '--space', 'conflict-proxy', '--tab', proxy_tab)
+    cli('evaluate', 'localStorage.setItem("conflict","saved"); document.cookie="conflict=kept; max-age=3600; path=/"', '--space', 'conflict-direct', '--tab', direct_tab)
+    original = cli('state', '--space', 'conflict-direct', '--tab', direct_tab)['page']
     checks = []
     try:
         for key in ['HTTPEnable', 'HTTPSEnable', 'SOCKSEnable', 'ProxyAutoConfigEnable', 'ProxyAutoDiscoveryEnable']:
@@ -74,29 +74,29 @@ def verify_direct_conflicts(cli, start, stop, settings, base, target, nonce, whi
             info = cli('space', 'info', 'conflict-direct')
             assert info['id'] in status['blockedSpaces'] and info['network']['blocked']
             assert info['network']['error']['code'] == 'direct_system_proxy_conflict'
-            diagnostics = cli('diagnostics', '--space', 'conflict-direct')
+            diagnostics = cli('diagnostics', '--space', 'conflict-direct', '--tab', direct_tab)
             assert diagnostics['networkBlocked'] and diagnostics['networkErrorCode'] == 'direct_system_proxy_conflict'
             assert any(s['name'] == 'conflict-proxy' for s in cli('space', 'list'))
-            page = cli('state', '--space', 'conflict-direct')['page']
+            page = cli('state', '--space', 'conflict-direct', '--tab', direct_tab)['page']
             assert page['tabId'] == original['tabId'] and page['restoreURL'] == original['url']
             assert page['url'] == 'about:blank'
             for command in [('reload',), ('open', base), ('evaluate', 'document.title')]:
-                assert cli(*command, '--space', 'conflict-direct', ok=False)['code'] == 'direct_system_proxy_conflict'
+                assert cli(*command, '--space', 'conflict-direct', '--tab', direct_tab, ok=False)['code'] == 'direct_system_proxy_conflict'
             assert not any(e.get('path') == '/index.html' for e in events.items[before:]), 'Blocked Direct restoration sent a request'
-            cli('open', target, '--space', 'conflict-proxy')
-            assert cli('evaluate', 'window.fixtureNonce', '--space', 'conflict-proxy')['value'] == nonce
+            cli('open', target, '--space', 'conflict-proxy', '--tab', proxy_tab)
+            assert cli('evaluate', 'window.fixtureNonce', '--space', 'conflict-proxy', '--tab', proxy_tab)['value'] == nonce
             assert any(s.get('url') == target for s in whistle.sessions())
             set_settings({})
             assert not cli('space', 'info', 'conflict-direct')['network']['blocked']
-            cli('reload', '--space', 'conflict-direct')
-            restored = cli('evaluate', '({saved:localStorage.getItem("conflict"),cookie:document.cookie})', '--space', 'conflict-direct')
+            cli('reload', '--space', 'conflict-direct', '--tab', direct_tab)
+            restored = cli('evaluate', '({saved:localStorage.getItem("conflict"),cookie:document.cookie})', '--space', 'conflict-direct', '--tab', direct_tab)
             assert restored['page']['tabId'] == original['tabId']
             assert restored['value']['saved'] == 'saved' and 'conflict=kept' in restored['value']['cookie']
             # Page-initiated navigation is checked too, even without a new CLI navigation command.
-            cli('evaluate', 'setTimeout(()=>location.href="/blocked-navigation",500); true', '--space', 'conflict-direct')
+            cli('evaluate', 'setTimeout(()=>location.href="/blocked-navigation",500); true', '--space', 'conflict-direct', '--tab', direct_tab)
             set_settings(value)
             for _ in range(50):
-                error = cli('state', '--space', 'conflict-direct')['page']['lastError']
+                error = cli('state', '--space', 'conflict-direct', '--tab', direct_tab)['page']['lastError']
                 if error and error['code'] == 'direct_system_proxy_conflict':
                     break
                 time.sleep(.05)
@@ -104,7 +104,7 @@ def verify_direct_conflicts(cli, start, stop, settings, base, target, nonce, whi
                 raise AssertionError('Page navigation was not rejected')
             assert not any(e.get('path') == '/blocked-navigation' for e in events.items)
             set_settings({})
-            cli('reload', '--space', 'conflict-direct')
+            cli('reload', '--space', 'conflict-direct', '--tab', direct_tab)
             checks.append(key)
         return {'passed': True, 'settings': checks,
                 'method': 'process-local CFNetwork interpose + real WKWebView and Whistle; no OS proxy settings changed',

@@ -83,7 +83,7 @@ def main():
                   f'WebKit {measured("webkitMs")}', flush=True)
 
     def page(label, *command):
-        return run(label, *command, '--space', args.space)['result']
+        return run(label, *command, '--space', space['id'], '--tab', tab)['result']
 
     def element(snapshot, predicate, description):
         candidates = [e for e in snapshot['elements'] if not e['disabled'] and predicate(e)]
@@ -102,6 +102,10 @@ def main():
             space = existing['result']
         if space['proxy'] != 'direct' or space['tls']['policy'] != 'system':
             raise RuntimeError('演示 Space 必须使用 direct 和系统证书校验；请指定另一个 --space 名称。')
+        if existing['ok']:
+            tab = run('tab-new', 'tab', 'new', '--space', space['id'], phase='setup')['result']['tabId']
+        else:
+            tab = space['tabs'][0]['tabId']
         page('open-google', 'open', 'https://www.google.com/?hl=zh-CN', '--timeout', '30000')
         home = page('home-structure', 'snapshot')['value']
         page('home-screenshot', 'screenshot', '--out', str(out / 'home.png'))

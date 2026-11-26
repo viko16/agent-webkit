@@ -9,11 +9,12 @@ from urllib.parse import urljoin
 def verify_detailed_diagnostics(cli, base, out, restart, verify_expiry=False):
     name, peer = 'details', 'details-peer'
     work = cli('space', 'create', name, '--proxy', 'direct')
-    cli('space', 'create', peer, '--proxy', 'direct')
+    peer_tab = cli('space', 'create', peer, '--proxy', 'direct')['tabs'][0]['tabId']
     url = urljoin(base, '/diagnostics?token=diagnostic-secret#diagnostic-secret')
 
     def command(*args, **kwargs):
-        return cli(*args, '--space', name, **kwargs)
+        target = () if args[0] == 'tab' or '--tab' in args else ('--tab', work['tabs'][0]['tabId'])
+        return cli(*args, '--space', name, *target, **kwargs)
 
     def logs(*args):
         response = command('diagnostics', *args)
@@ -33,17 +34,17 @@ def verify_detailed_diagnostics(cli, base, out, restart, verify_expiry=False):
         focus = cli('status')['frontmostPid']
         command('diagnostics', '--detail', 'yes', error='invalid_arguments')
         command('state', '--detail', 'on', error='invalid_arguments')
-        assert logs('--tab', work['defaultTabId'], '--detail', 'continuous')['detail']['enabled']
-        logs('--tab', work['defaultTabId'], '--detail', 'off')
+        assert logs('--tab', work['tabs'][0]['tabId'], '--detail', 'continuous')['detail']['enabled']
+        logs('--tab', work['tabs'][0]['tabId'], '--detail', 'off')
         command('open', url)
-        cli('open', url, '--space', peer)
+        cli('open', url, '--space', peer, '--tab', peer_tab)
         assert not logs()['inspectable']
         command('diagnostics', '--inspectable', 'yes', error='invalid_arguments')
         command('state', '--inspectable', 'on', error='invalid_arguments')
         command('diagnostics', '--inspectable', 'on', '--detail', 'on', error='invalid_arguments')
         assert logs('--inspectable', 'on')['inspectable']
         assert not logs()['detail']['enabled']
-        assert not cli('diagnostics', '--space', peer)['value']['inspectable']
+        assert not cli('diagnostics', '--space', peer, '--tab', peer_tab)['value']['inspectable']
         assert not logs()['detail']['enabled']
         command('evaluate', 'console.error("diagnostic-secret"); true')
         until(lambda v: any(e['kind'] == 'console' for e in v['events']))
@@ -63,7 +64,7 @@ def verify_detailed_diagnostics(cli, base, out, restart, verify_expiry=False):
         assert len({e['requestId'] for e in requests}) == len(requests) >= 7
         assert len({e['navigationId'] for e in requests}) == 1
         assert all('?' not in e.get('resource', '') and '#' not in e.get('resource', '') for e in requests)
-        assert not any('detail' in e for e in cli('diagnostics', '--space', peer)['value']['events'])
+        assert not any('detail' in e for e in cli('diagnostics', '--space', peer, '--tab', peer_tab)['value']['events'])
         # Retain useful safe text, redact form values, credential labels, URL credentials/query and long tokens.
         command('evaluate', '''console.error(new Error('Inventory failed diagnostic-secret password=hidden-password Authorization=Bearer hidden-token https://user:pass@example.com/api/12345?token=hidden-query#hidden-fragment file:///private/local?token=hidden-local abcdefghijklmnopqrstuvwxyz123456')); true''')
         message = until(lambda v: any('Inventory failed' in e.get('detail', {}).get('message', '') for e in v['events']))
@@ -129,13 +130,13 @@ def verify_detailed_diagnostics(cli, base, out, restart, verify_expiry=False):
         (out / 'diagnostics-xhr-delayed.json').write_text(json.dumps(delayed, indent=2))
         # Popup content controllers may be shared, but detail opt-in is never inherited.
         command('evaluate', 'Boolean(window.open("about:blank"))')
-        child = next(tab['tabId'] for tab in command('tab', 'list') if tab['tabId'] != work['defaultTabId'])
+        child = next(tab['tabId'] for tab in command('tab', 'list') if tab['tabId'] != work['tabs'][0]['tabId'])
         assert not logs('--tab', child)['detail']['enabled']
         assert not logs('--tab', child)['inspectable']
         command('evaluate', 'console.warn("diagnostic-secret"); true', '--tab', child)
         until(lambda v: any(e['kind'] == 'console' for e in v['events']), '--tab', child)
         assert not any('detail' in e for e in logs('--tab', child)['events'])
-        command('tab', 'close', child)
+        command('tab', 'close', '--tab', child)
         (out / 'diagnostics-detailed.json').write_text(json.dumps(logs(), indent=2))
         # The disabled host rejects even a saved generation and an already queued detail batch.
         stopped = logs('--detail', 'off')
@@ -163,7 +164,7 @@ def verify_detailed_diagnostics(cli, base, out, restart, verify_expiry=False):
         command('reload', '--timeout', '5000')
         assert not logs()['inspectable']
         assert not logs()['detail']['enabled']
-        tab = ('--tab', work['defaultTabId'])
+        tab = ('--tab', work['tabs'][0]['tabId'])
         logs(*tab, '--detail', 'continuous', '--clear')
         recovered = command('open', urljoin(base, '/diagnostics?startup=recovered'), *tab)['page']
         until(lambda v: any(e.get('navigationId') == recovered['navigationId'] and
@@ -190,7 +191,7 @@ def verify_detailed_diagnostics(cli, base, out, restart, verify_expiry=False):
         child_frame = next(f['frameId'] for f in command('frame', 'list', *tab)['value']['frames']
                            if not f['mainFrame'] and 'startup=frame' in f['url'])
         command('wait', '--frame', child_frame, '--fn', '() => document.documentElement.dataset.nativeFetch === "true"', *tab)
-        command('diagnostics', '--detail', 'continuous', error='invalid_arguments')
+        cli('diagnostics', '--space', name, '--detail', 'continuous', error='invalid_arguments')
         enabled = logs(*tab, '--detail', 'continuous', '--include-info', '--clear')
         assert enabled['detail']['scope'] == 'tab-across-navigation'
         navigation_ids = set()
@@ -225,8 +226,8 @@ def verify_detailed_diagnostics(cli, base, out, restart, verify_expiry=False):
         child = next(t['tabId'] for t in command('tab', 'list') if t['tabId'] != tab[1])
         popup = until(lambda v: any(e['kind'] == 'exception' for e in v['events']), '--tab', child)
         assert not popup['detail']['enabled'] and not any('detail' in e for e in popup['events'])
-        command('tab', 'close', child)
-        assert not any('detail' in e for e in cli('diagnostics', '--space', peer)['value']['events'])
+        command('tab', 'close', '--tab', child)
+        assert not any('detail' in e for e in cli('diagnostics', '--space', peer, '--tab', peer_tab)['value']['events'])
         stopped = logs(*tab, '--detail', 'off')
         assert not stopped['detail']['enabled'] and not any('detail' in e for e in stopped['events'])
         logs(*tab, '--detail', 'continuous', '--clear')

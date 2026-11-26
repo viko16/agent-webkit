@@ -9,12 +9,44 @@ struct SpaceRecord: Codable {
     var id: UUID
     var name: String
     var proxy: String
-    var defaultTab: UUID
     var tabs: [TabRecord]
     var deleting: Bool = false
     var tls: TLSConfiguration?
     var suspended: Bool?
+    // Only the on-disk codec uses this hint when an older daemon opens the registry.
+    fileprivate var rollbackTab: UUID? = nil
     var popupCount: Int { tabs.filter { $0.openerTabID != nil }.count }
+}
+
+extension SpaceRecord {
+    private enum CodingKeys: String, CodingKey {
+        case id, name, proxy, tabs, deleting, tls, suspended, defaultTab
+    }
+
+    init(from decoder: Decoder) throws {
+        let fields = try decoder.container(keyedBy: CodingKeys.self)
+        id = try fields.decode(UUID.self, forKey: .id)
+        name = try fields.decode(String.self, forKey: .name)
+        proxy = try fields.decode(String.self, forKey: .proxy)
+        tabs = try fields.decode([TabRecord].self, forKey: .tabs)
+        deleting = try fields.decode(Bool.self, forKey: .deleting)
+        tls = try fields.decodeIfPresent(TLSConfiguration.self, forKey: .tls)
+        suspended = try fields.decodeIfPresent(Bool.self, forKey: .suspended)
+        rollbackTab = try? fields.decode(UUID.self, forKey: .defaultTab)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var fields = encoder.container(keyedBy: CodingKeys.self)
+        try fields.encode(id, forKey: .id)
+        try fields.encode(name, forKey: .name)
+        try fields.encode(proxy, forKey: .proxy)
+        try fields.encode(tabs, forKey: .tabs)
+        try fields.encode(deleting, forKey: .deleting)
+        try fields.encodeIfPresent(tls, forKey: .tls)
+        try fields.encodeIfPresent(suspended, forKey: .suspended)
+        let survivingPin = tabs.first { $0.id == rollbackTab }?.id
+        try fields.encodeIfPresent(survivingPin ?? tabs.first?.id ?? rollbackTab, forKey: .defaultTab)
+    }
 }
 
 struct BrowserLimits {
@@ -1072,11 +1104,23 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
 }
 
+enum RequestOrigin {
+    case agent, observer, confirmedObserverClose
+}
+
+struct TabActivity {
+    var executing = 0
+    var agentFinishedAt: ContinuousClock.Instant?
+    var recentUntil: ContinuousClock.Instant? { agentFinishedAt?.advanced(by: .seconds(300)) }
+    var recent: Bool { recentUntil.map { $0 > .now } ?? false }
+}
+
 @MainActor
 final class Space {
     var record: SpaceRecord
     private(set) var store: WKWebsiteDataStore?
     var tabs: [Tab] = []
+    var activity: [UUID: TabActivity] = [:]
     var busy = false
     var resourceBlockedReason: String?
     private(set) var configurationError: BrowserError?
@@ -1136,7 +1180,7 @@ final class Space {
     }
     var summary: [String: Any] {
         ["id": record.id.uuidString, "name": record.name, "proxy": record.proxy, "persistent": true,
-         "dataStoreId": record.id.uuidString, "defaultTabId": record.defaultTab.uuidString,
+         "dataStoreId": record.id.uuidString,
          "tabs": tabStates, "busy": busy, "network": networkState,
          "lifecycle": configurationError != nil ? "configuration-error" : suspended ? "suspended" : "active", "liveWebViews": tabs.count,
          "configurationError": configurationError.map { failure($0)["error"]! } ?? NSNull(),
@@ -1265,9 +1309,9 @@ final class BrowserModel {
                 if let replacement { remaining.append(replacement) }
                 var record = space.record
                 record.tabs = remaining.map { TabRecord(id: $0.id, url: $0.persistedURL, openerTabID: $0.openerTabID) }
-                if record.defaultTab == tab.id { record.defaultTab = remaining[0].id }
                 do { try self.commitSpaceRecord(record, for: space) }
                 catch { replacement?.close(); fputs("Persistence error: \(error)\n", stderr); return }
+                space.activity[tab.id] = nil
                 space.tabs = remaining; tab.close(); self.bind(space)
                 self.changed?()
             }
@@ -1406,10 +1450,10 @@ final class BrowserModel {
         space.tabs = []
     }
 
-    func handle(_ request: Request) async -> [String: Any] {
+    func handle(_ request: Request, origin: RequestOrigin) async -> [String: Any] {
         let timing = RequestTiming()
         var response: [String: Any]
-        do { response = ["ok": true, "result": try await execute(request, timing: timing)] }
+        do { response = ["ok": true, "result": try await execute(request, timing: timing, origin: origin)] }
         catch { response = failure(error) }
         response["timing"] = timing.summary
         return response
@@ -1429,7 +1473,7 @@ final class BrowserModel {
         }, "websiteDataPreserved": true, "pageMemoryPreserved": false]
     }
 
-    private func execute(_ r: Request, timing: RequestTiming) async throws -> Any {
+    private func execute(_ r: Request, timing: RequestTiming, origin: RequestOrigin) async throws -> Any {
         guard !shuttingDown else { throw BrowserError("shutting_down", "应用正在退出") }
         try r.validate()
         let command = r.command
@@ -1495,7 +1539,7 @@ final class BrowserModel {
             let tab = TabRecord(id: UUID(), url: "about:blank")
             let tls = r.options["ignore-certificate-errors"] == "true" ? TLSConfiguration.insecure : try r.options["ca-cert"].map { try TLSConfiguration(path: $0) }
             try checkCapacity(addingTabs: 1, addingViews: 1)
-            let record = SpaceRecord(id: UUID(), name: name, proxy: proxy, defaultTab: tab.id, tabs: [tab], tls: tls)
+            let record = SpaceRecord(id: UUID(), name: name, proxy: proxy, tabs: [tab], tls: tls)
             let space = try Space(record)
             records.append(record)
             do { try persist() } catch { records.removeLast(); throw error }
@@ -1504,20 +1548,22 @@ final class BrowserModel {
         }
         let target = command.hasPrefix("space.") ? try arg(0) : r.options["space"]
         guard let target else { throw BrowserError("space_required", "缺少 --space NAME_OR_ID；先用 awb space list 查看已有 Space 或 awb space create 创建") }
-        var deletionID: UUID?
-        if command == "space.delete" {
-            if let uuid = UUID(uuidString: target), records.contains(where: { $0.id == uuid }) {
-                deletionID = uuid
-            } else {
-                let matches = records.filter { $0.name == target }
-                guard matches.count <= 1 else {
-                    throw BrowserError("space_ambiguous", "同名 Space 包含待清理记录；请从 space list 和 status.pendingStores 确认 UUID 后按 UUID 删除")
-                }
-                deletionID = matches.first?.id
+        let id: UUID
+        if let uuid = UUID(uuidString: target) {
+            // A confirmed UUID must keep its identity even after its record disappears.
+            guard records.contains(where: { $0.id == uuid }) else {
+                throw BrowserError("space_not_found", "Space 不存在：\(target)")
             }
-        }
-        guard let id = deletionID ?? spaces.first(where: { $0.record.name == target || $0.record.id.uuidString.lowercased() == target.lowercased() })?.record.id else {
-            throw BrowserError("space_not_found", "Space 不存在：\(target)；运行 awb space list 核对名称或 UUID")
+            id = uuid
+        } else {
+            let matches = records.filter { $0.name == target && (command == "space.delete" || !$0.deleting) }
+            guard let record = matches.first else {
+                throw BrowserError("space_not_found", "Space 不存在：\(target)；运行 awb space list 核对名称或 UUID")
+            }
+            guard matches.count == 1 else {
+                throw BrowserError("space_ambiguous", "同名 Space 包含待清理记录；请从 space list 和 status.pendingStores 确认 UUID")
+            }
+            id = record.id
         }
         if command == "space.delete" {
             // Avoid retaining the Space/DataStore across the asynchronous removal API.
@@ -1525,6 +1571,7 @@ final class BrowserModel {
             var candidate = records
             if let index = candidate.firstIndex(where: { $0.id == id }) { candidate[index].deleting = true }
             try commitRecords(candidate); detach(id); changed?()
+            defer { changed?() }
             let removed = try await removeStore(id)
             if removed { try commitRecords(records.filter { $0.id != id }); storeCleanupErrors[id] = nil }
             return ["deleted": true, "spaceId": id.uuidString, "websiteDataRemoved": true,
@@ -1533,6 +1580,10 @@ final class BrowserModel {
         guard let space = spaces.first(where: { $0.record.id == id }) else { throw BrowserError("space_not_found", "Space 已删除") }
         if command == "space.info" { return space.summary }
         if command == "tab.list" { return space.tabStates }
+        let targetTab = r.options["tab"].flatMap(UUID.init(uuidString:))
+        if r.options["tab"] != nil, !space.record.tabs.contains(where: { $0.id == targetTab }) {
+            throw BrowserError("tab_not_found", "Space 中不存在该标签页；运行 awb tab list --space \(space.record.id.uuidString) 核对 Tab UUID")
+        }
         if let error = space.configurationError { throw error }
         if command == "space.suspend" {
             guard !space.busy else { throw BrowserError("space_busy", "Space 正在操作中") }
@@ -1557,9 +1608,25 @@ final class BrowserModel {
             try resume(space)
             return space.summary
         }
+        // Page reads, dialog responses and download waits can overlap a locked page action.
+        // Count their lifetimes without changing the Space command lock.
+        var trackedTab: UUID?
+        func beginActivity(_ id: UUID) {
+            trackedTab = id
+            space.activity[id, default: TabActivity()].executing += 1
+            changed?()
+        }
+        defer {
+            if let id = trackedTab, var activity = space.activity[id] {
+                activity.executing -= 1
+                if origin == .agent { activity.agentFinishedAt = .now }
+                space.activity[id] = activity
+                changed?()
+            }
+        }
+        if let targetTab, command != "tab.close" { beginActivity(targetTab) }
         if space.suspended, ["state", "diagnostics", "dialog.list", "dialog.respond", "download.list", "download.wait", "download.cancel"].contains(command) {
-            let tabID = r.options["tab"] ?? space.record.defaultTab.uuidString
-            guard let state = space.tabStates.first(where: { ($0["tabId"] as? String)?.lowercased() == tabID.lowercased() }) else {
+            guard let state = space.tabStates.first(where: { ($0["tabId"] as? String) == targetTab?.uuidString }) else {
                 throw BrowserError("tab_not_found", "Space 中不存在该标签页；运行 awb tab list --space \(space.record.id.uuidString) 核对 Tab UUID")
             }
             guard command == "state" else { throw BrowserError("space_suspended", "Space 已休眠；使用 space resume 显式恢复") }
@@ -1567,8 +1634,7 @@ final class BrowserModel {
                     "network": space.networkState, "page": state, "busy": false, "value": NSNull()] as [String: Any]
         }
         if command == "state" || command == "diagnostics" || command.hasPrefix("dialog.") || command.hasPrefix("download.") {
-            let tabID = r.options["tab"] ?? space.record.defaultTab.uuidString
-            guard let tab = space.tabs.first(where: { $0.id.uuidString.lowercased() == tabID.lowercased() }) else {
+            guard let tab = space.tabs.first(where: { $0.id == targetTab }) else {
                 throw BrowserError("tab_not_found", "Space 中不存在该标签页；运行 awb tab list --space \(space.record.id.uuidString) 核对 Tab UUID")
             }
             if command.hasPrefix("download.") {
@@ -1616,44 +1682,35 @@ final class BrowserModel {
         guard !space.busy else { throw BrowserError("space_busy", "同一 Space 已有操作执行中；先用 state 和 dialog list 检查是否正在等待 JS 对话框，否则等待原操作完成后再顺序执行") }
         space.busy = true; changed?()
         defer { space.busy = false; changed?() }
-        if !["tab.close", "tab.default"].contains(command), let error = space.networkError { throw error }
+        if command != "tab.close", let error = space.networkError { throw error }
         let timeout: Int
         if let raw = r.options["timeout"] {
             guard let value = Int(raw), (1...60000).contains(value) else { throw BrowserError("invalid_timeout", "timeout 必须为 1–60000 ms") }; timeout = value
         } else { timeout = 15000 }
-        if let tabID = r.options["tab"], !space.record.tabs.contains(where: { $0.id.uuidString.lowercased() == tabID.lowercased() }) {
-            throw BrowserError("tab_not_found", "Space 中不存在该标签页；运行 awb tab list --space \(space.record.id.uuidString) 核对 Tab UUID")
-        }
-        if ["tab.close", "tab.default"].contains(command) {
-            guard space.record.tabs.contains(where: { $0.id.uuidString.lowercased() == r.args[0].lowercased() }) else {
-                throw BrowserError("tab_not_found", "标签页不存在；运行 awb tab list --space \(space.record.id.uuidString) 核对 Tab UUID")
-            }
-            if command == "tab.close", space.record.tabs.count == 1 { throw BrowserError("last_tab", "不能关闭最后一个标签页；可删除 Space") }
-        }
         if command == "open" { _ = try validateURL(arg(0)) }
         if command == "tab.new" { _ = try validateURL(r.args.first ?? "about:blank") }
         if command == "tab.new" {
             try checkCapacity(space: space, addingTabs: 1, addingViews: space.suspended ? space.record.tabs.count + 1 : 1)
         }
-        if command == "tab.default" || command == "tab.close" {
-            let tabID = try arg(0)
+        if command == "tab.close" {
             var record = space.record
             if !space.suspended { record.tabs = space.tabs.map { TabRecord(id: $0.id, url: $0.persistedURL, openerTabID: $0.openerTabID) } }
-            let index = record.tabs.firstIndex { $0.id.uuidString.lowercased() == tabID.lowercased() }!
+            guard let index = record.tabs.firstIndex(where: { $0.id == targetTab }) else { throw BrowserError("tab_not_found", "标签页不存在") }
             let id = record.tabs[index].id
-            if command == "tab.default" {
-                record.defaultTab = id
-            } else {
-                record.tabs.remove(at: index)
-                if record.defaultTab == id { record.defaultTab = record.tabs[0].id }
+            guard record.tabs.count > 1 else { throw BrowserError("last_tab", "不能关闭最后一个标签页；可休眠 Space") }
+            let activity = space.activity[id]
+            guard (activity?.executing ?? 0) == 0 else { throw BrowserError("space_busy", "标签页仍有操作执行中") }
+            if origin == .observer, activity?.recent == true {
+                throw BrowserError("confirmation_required", "Agent 在最近 5 分钟内操作过此标签页。仍要关闭吗？")
             }
+            record.tabs.remove(at: index)
             try commitSpaceRecord(record, for: space)
-            if command == "tab.close", let tab = space.tabs.first(where: { $0.id == id }) {
+            if let tab = space.tabs.first(where: { $0.id == id }) {
                 space.tabs.removeAll { $0 === tab }; tab.close()
             }
+            space.activity[id] = nil
             changed?()
-            if command == "tab.default" { return ["defaultTabId": record.defaultTab.uuidString] }
-            return ["closed": tabID, "defaultTabId": record.defaultTab.uuidString]
+            return ["closed": id.uuidString]
         }
         let wasSuspended = space.suspended
         try resume(space)
@@ -1666,7 +1723,7 @@ final class BrowserModel {
             space.tabs.append(tab); bind(space)
             do { try save(space) }
             catch { space.tabs.removeAll { $0 === tab }; tab.close(); throw error }
-            changed?()
+            beginActivity(tab.id)
             do {
                 tab.load(url); try await tab.wait(selector: nil, timeout: timeout); try save(space)
             } catch {
@@ -1675,8 +1732,7 @@ final class BrowserModel {
             }
             return tab.state
         }
-        let tabID = r.options["tab"] ?? space.record.defaultTab.uuidString
-        guard var tab = space.tabs.first(where: { $0.id.uuidString.lowercased() == tabID.lowercased() }) else {
+        guard var tab = space.tabs.first(where: { $0.id == targetTab }) else {
             throw BrowserError("tab_not_found", "Space 中不存在该标签页；运行 awb tab list --space \(space.record.id.uuidString) 核对 Tab UUID")
         }
         // Replace a stalled view only on explicit navigation. Never replay an Agent action.

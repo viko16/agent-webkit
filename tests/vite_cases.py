@@ -76,7 +76,7 @@ def verify_vite_workflow(out, cli, restart):
                 created['vite-direct'] = cli('space', 'create', 'vite-direct', '--proxy', 'direct')
 
                 def command(name, *args, **kwargs):
-                    return cli(*args, '--space', name, '--tab', created[name]['defaultTabId'], **kwargs)
+                    return cli(*args, '--space', name, '--tab', created[name]['tabs'][0]['tabId'], **kwargs)
 
                 def js(name, source):
                     return command(name, 'evaluate', source)['value']
@@ -111,9 +111,9 @@ def verify_vite_workflow(out, cli, restart):
                     initial[name] = js(name, 'window.workflowState')
                 assert initial['vite-a']['documentId'] != initial['vite-b']['documentId']
                 assert cli('evaluate', 'window.workflowState', '--space', 'vite-b',
-                           '--tab', created['vite-a']['defaultTabId'], ok=False)['code'] == 'tab_not_found'
+                           '--tab', created['vite-a']['tabs'][0]['tabId'], ok=False)['code'] == 'tab_not_found'
                 spare = cli('tab', 'new', 'about:blank', '--space', 'vite-a')['tabId']
-                cli('tab', 'default', spare, '--space', 'vite-a')
+                assert spare != created['vite-a']['tabs'][0]['tabId']
                 await_events(lambda items: len([e for e in items if e['kind'] == 'ws-connected']) == 2)
 
                 # Direct must visit the same public domain, without reaching Vite or Whistle.
@@ -145,8 +145,8 @@ def verify_vite_workflow(out, cli, restart):
                 assert command('vite-a', 'wait', '#revision', '--text', 'never-published',
                                '--timeout', '100', ok=False)['code'] == 'timeout'
                 assert js('vite-a', 'window.workflowState') == report['rounds'][-1]['vite-a']
-                cli('tab', 'close', spare, '--space', 'vite-a')
-                assert cli('space', 'info', 'vite-a')['defaultTabId'] == created['vite-a']['defaultTabId']
+                cli('tab', 'close', '--tab', spare, '--space', 'vite-a')
+                assert cli('space', 'info', 'vite-a')['tabs'][0]['tabId'] == created['vite-a']['tabs'][0]['tabId']
                 final_revision = report['rounds'][-1][names[0]]['revision']
                 old_ref = next(e['ref'] for e in command('vite-a', 'snapshot')['value']['elements']
                                if e['name'] == 'Increment')
@@ -190,7 +190,7 @@ def verify_vite_workflow(out, cli, restart):
                 restored_documents = []
                 for name in names:
                     info = cli('space', 'info', name)
-                    for key in ('id', 'dataStoreId', 'defaultTabId', 'proxy', 'tls'):
+                    for key in ('id', 'dataStoreId', 'proxy', 'tls'):
                         assert info[key] == created[name][key], (key, info)
                     ready(name, final_revision)
                     restored_documents.append(js(name, 'window.workflowState.documentId'))

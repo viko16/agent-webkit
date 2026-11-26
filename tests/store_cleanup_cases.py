@@ -74,8 +74,8 @@ def verify_store_cleanup_failures(cli, start, stop, state, base, out):
         later = cli('space', 'create', 'cleanup-later', '--proxy', 'direct')
         healthy = cli('space', 'create', 'cleanup-healthy', '--proxy', 'direct')
         url = base + '?cleanup=' + code
-        cli('open', url, '--space', 'cleanup-healthy')
-        cli('evaluate', 'localStorage.setItem("restore-probe", "preserved"); true', '--space', 'cleanup-healthy')
+        cli('open', url, '--space', 'cleanup-healthy', '--tab', healthy['tabs'][0]['tabId'])
+        cli('evaluate', 'localStorage.setItem("restore-probe", "preserved"); true', '--space', 'cleanup-healthy', '--tab', healthy['tabs'][0]['tabId'])
         stop()
         records = json.loads(registry.read_text())
         for record in records:
@@ -95,9 +95,9 @@ def verify_store_cleanup_failures(cli, start, stop, state, base, out):
         assert status['storeCleanupErrors'][0]['error']['code'] == code, status
         spaces = cli('space', 'list')
         assert [space['id'] for space in spaces] == [healthy['id']], spaces
-        assert spaces[0]['defaultTabId'] == healthy['defaultTabId'], spaces
-        cli('wait', '#message', '--space', 'cleanup-healthy')
-        restored = cli('evaluate', '[location.href, localStorage.getItem("restore-probe")]', '--space', 'cleanup-healthy')
+        assert spaces[0]['tabs'][0]['tabId'] == healthy['tabs'][0]['tabId'], spaces
+        cli('wait', '#message', '--space', 'cleanup-healthy', '--tab', healthy['tabs'][0]['tabId'])
+        restored = cli('evaluate', '[location.href, localStorage.getItem("restore-probe")]', '--space', 'cleanup-healthy', '--tab', healthy['tabs'][0]['tabId'])
         assert restored['value'] == [url, 'preserved'], restored
         records = json.loads(registry.read_text())
         pending = [record for record in records if record.get('deleting')]
@@ -111,8 +111,8 @@ def verify_store_cleanup_failures(cli, start, stop, state, base, out):
                    for record in json.loads(registry.read_text()))
         start()
         assert cli('status')['pendingStoreCleanup'] == 0
-        cli('wait', '#message', '--space', 'cleanup-healthy')
-        assert cli('evaluate', 'localStorage.getItem("restore-probe")', '--space', 'cleanup-healthy')['value'] == 'preserved'
+        cli('wait', '#message', '--space', 'cleanup-healthy', '--tab', healthy['tabs'][0]['tabId'])
+        assert cli('evaluate', 'localStorage.getItem("restore-probe")', '--space', 'cleanup-healthy', '--tab', healthy['tabs'][0]['tabId'])['value'] == 'preserved'
         assert cli('space', 'delete', 'cleanup-healthy')['websiteDataRemoved']
         # Finish any deferred container removal through the normal daemon.
         stop(); start()
@@ -128,8 +128,8 @@ def verify_store_cleanup_failures(cli, start, stop, state, base, out):
 def verify_delete_persistence_failure(cli, start, stop, state, base):
     created = cli('space', 'create', 'delete-transaction', '--proxy', 'direct')
     cli('space', 'create', 'delete-peer', '--proxy', 'direct')
-    cli('open', base, '--space', 'delete-transaction')
-    cli('evaluate', 'document.cookie="deleteProbe=kept; Max-Age=3600; Path=/";localStorage.deleteProbe="kept";true', '--space', 'delete-transaction')
+    cli('open', base, '--space', 'delete-transaction', '--tab', created['tabs'][0]['tabId'])
+    cli('evaluate', 'document.cookie="deleteProbe=kept; Max-Age=3600; Path=/";localStorage.deleteProbe="kept";true', '--space', 'delete-transaction', '--tab', created['tabs'][0]['tabId'])
     permissions = state.stat().st_mode & 0o777
     try:
         state.chmod(0o500)
@@ -140,8 +140,8 @@ def verify_delete_persistence_failure(cli, start, stop, state, base):
     records = json.loads((state / 'spaces.json').read_text())
     assert not next(record for record in records if record['id'] == created['id'])['deleting']
     stop(); start()
-    cli('wait', '#message', '--space', 'delete-transaction')
-    value = cli('evaluate', '[document.cookie,localStorage.deleteProbe]', '--space', 'delete-transaction')['value']
+    cli('wait', '#message', '--space', 'delete-transaction', '--tab', created['tabs'][0]['tabId'])
+    value = cli('evaluate', '[document.cookie,localStorage.deleteProbe]', '--space', 'delete-transaction', '--tab', created['tabs'][0]['tabId'])['value']
     assert value == ['deleteProbe=kept', 'kept'], value
     for name in ('delete-transaction', 'delete-peer'):
         cli('space', 'delete', name)
@@ -152,8 +152,8 @@ def verify_delete_persistence_failure(cli, start, stop, state, base):
 def verify_pending_store_only(cli, start, stop, state, base):
     name = 'pending-only'
     created = cli('space', 'create', name, '--proxy', 'direct')
-    cli('open', base, '--space', name)
-    cli('evaluate', 'localStorage.setItem("cleanup-probe","must-be-removed");true', '--space', name)
+    cli('open', base, '--space', name, '--tab', created['tabs'][0]['tabId'])
+    cli('evaluate', 'localStorage.setItem("cleanup-probe","must-be-removed");true', '--space', name, '--tab', created['tabs'][0]['tabId'])
     stop()
     registry = state / 'spaces.json'
     records = json.loads(registry.read_text())
@@ -170,8 +170,8 @@ def verify_pending_store_only(cli, start, stop, state, base):
     assert cli('space', 'list') == [] and json.loads(registry.read_text()) == []
     replacement = cli('space', 'create', name, '--proxy', 'direct')
     assert replacement['id'] != created['id']
-    cli('open', base, '--space', name)
-    assert cli('evaluate', 'localStorage.getItem("cleanup-probe")', '--space', name)['value'] is None
+    cli('open', base, '--space', name, '--tab', replacement['tabs'][0]['tabId'])
+    assert cli('evaluate', 'localStorage.getItem("cleanup-probe")', '--space', name, '--tab', replacement['tabs'][0]['tabId'])['value'] is None
     assert cli('space', 'delete', name)['websiteDataRemoved']
     return {'passed': True, 'pendingId': created['id'], 'replacementId': replacement['id'],
             'method': 'real store + interrupted-deletion registry; new process with no live Spaces',
@@ -187,8 +187,8 @@ def verify_delete_without_active_stores(cli, start, stop, state, base):
             name = f'no-runtime-{index}'
             space = cli('space', 'create', name, '--proxy', 'direct')
             created.append(space)
-            cli('open', base, '--space', name)
-            cli('evaluate', 'localStorage.deleteProbe="old-data";true', '--space', name)
+            cli('open', base, '--space', name, '--tab', space['tabs'][0]['tabId'])
+            cli('evaluate', 'localStorage.deleteProbe="old-data";true', '--space', name, '--tab', space['tabs'][0]['tabId'])
             cli('space', 'suspend', name)
         stop()
         if mode == 'all-invalid':
@@ -210,8 +210,8 @@ def verify_delete_without_active_stores(cli, start, stop, state, base):
         assert cli('status')['pendingStoreCleanup'] == 0 and json.loads(registry.read_text()) == []
         replacement = cli('space', 'create', created[0]['name'], '--proxy', 'direct')
         assert replacement['id'] != created[0]['id']
-        cli('open', base, '--space', replacement['id'])
-        assert cli('evaluate', 'localStorage.deleteProbe??null', '--space', replacement['id'])['value'] is None
+        cli('open', base, '--space', replacement['id'], '--tab', replacement['tabs'][0]['tabId'])
+        assert cli('evaluate', 'localStorage.deleteProbe??null', '--space', replacement['id'], '--tab', replacement['tabs'][0]['tabId'])['value'] is None
         cli('space', 'delete', replacement['id'])
         stop(); start()
         cases.append(dict(case=mode, zeroWebViewsBeforeAndAfterDeletion=True,

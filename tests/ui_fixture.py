@@ -64,8 +64,8 @@ def main():
 
     try:
         start()
-        cli('space', 'create', 'ui-direct', '--proxy', 'direct')
-        cli('open', url, '--space', 'ui-direct')
+        tab = cli('space', 'create', 'ui-direct', '--proxy', 'direct')['tabs'][0]['tabId']
+        cli('open', url, '--space', 'ui-direct', '--tab', tab)
         cli('space', 'create', 'ui-proxy', '--proxy', proxy_url)
         if args.conflict:
             cli('shutdown', '--all'); daemon.wait(timeout=15)

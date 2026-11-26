@@ -2,13 +2,13 @@
 import json
 
 
-def verify_network_cases(cli, whistle, site, events):
+def verify_network_cases(cli, whistle, site, events, tabs):
     nonce = site.fixture_nonce
     resource = f'https://example.com/resource?network_probe={nonce}'
     websocket = f'wss://example.com/echo?network_probe={nonce}'
 
     def evaluate(space, script):
-        return cli('evaluate', script, '--space', space, '--await', '--timeout', '5000')['value']
+        return cli('evaluate', script, '--space', space, '--tab', tabs[space], '--await', '--timeout', '5000')['value']
 
     result = evaluate('admin', f'fetch({json.dumps(resource)}).then(r=>r.json())')
     assert result['nonce'] == nonce, result

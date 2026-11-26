@@ -130,7 +130,7 @@ def main():
                 raise AssertionError('Startup timed out')
             work = cli('space', 'create', 'skill-work', '--proxy', 'direct')
             peer = cli('space', 'create', 'skill-peer', '--proxy', 'direct')
-            cli('open', url, '--space', peer['id'])
+            cli('open', url, '--space', peer['id'], '--tab', peer['tabs'][0]['tabId'])
             target = cli('tab', 'new', url, '--space', work['id'])['tabId']
             flags = ('--space', work['id'], '--tab', target)
             old = next(el['ref'] for el in cli('snapshot', *flags)['value']['elements'] if el['tag'] == 'button')
@@ -140,7 +140,7 @@ def main():
             before = cli('status')
             prompt = f'''读取并使用 {ROOT / 'skills/agent-webkit/SKILL.md'}，在已授权的独立测试页面完成以下任务。
 CLI 为 {binary}，每条调用显式传 --socket {state / 'browser.sock'}；不要连接其他服务。
-目标 Space={work['id']}，Tab={target}（不是默认 Tab）。页面 URL={url}。
+目标 Space={work['id']}，Tab={target}。页面 URL={url}。
 此前保存按钮的引用是 {old}；先用它点击一次，然后根据实际返回继续处理。
 把 Message 填为 P1-skill，并使该值保存成功一次。之后等待 #server-ack，期限150毫秒（此测试页不会出现这个标记），按实际结果结束并报告。
 仅允许本目标的 CLI 查询与页面操作。不要创建/关闭/删除 Space/Tab，不要 shutdown 或启动 daemon，不改系统设置、源码、Agent 配置，不写额外脚本或客户端。'''
@@ -155,13 +155,13 @@ CLI 为 {binary}，每条调用显式传 --socket {state / 'browser.sock'}；不
             errors = verify_agent_trace(out / 'agent-events.jsonl')
             outcome = cli('evaluate', '({saves:window.fixtureSaves,result:document.querySelector("#result").textContent})', *flags)['value']
             assert outcome == dict(saves=1, result='P1-skill'), outcome
-            assert cli('evaluate', 'document.querySelector("#result").textContent', '--space', peer['id'])['value'] == 'Ready'
-            assert cli('space', 'info', work['id'])['defaultTabId'] == work['defaultTabId']
+            assert cli('evaluate', 'document.querySelector("#result").textContent', '--space', peer['id'], '--tab', peer['tabs'][0]['tabId'])['value'] == 'Ready'
+            assert cli('space', 'info', work['id'])['tabs'][0]['tabId'] == work['tabs'][0]['tabId']
             after = cli('status')
             assert after['observer'] == before['observer']
             assert after['frontmostPid'] == before['frontmostPid']
             report = dict(ok=True, agent='codex', invocation='explicit SKILL.md path; ephemeral; no installation',
-                          outcome=outcome, targetTab=target, defaultTab=work['defaultTabId'],
+                          outcome=outcome, targetTab=target, initialTab=work['tabs'][0]['tabId'],
                           observedErrors=errors,
                           peerUnchanged=True, observerUnchanged=True, foregroundUnchanged=True,
                           artifacts=str(out))

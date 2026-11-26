@@ -30,6 +30,10 @@ Skill 会引导 Agent 读取页面、操作元素并核对结果。如果你想�
 
 在地址栏打开网页，完成登录等需要手动操作的步骤。点击工具栏的分享按钮，把复制的接管命令和任务一起发给 Agent，例如「列出这页还没勾选的待办事项」。命令里带有当前 Space 和标签页的编号，你切换到其他标签页后，Agent 仍会操作原来的页面。
 
+**CLI / IPC 破坏性变更（契约 v2）**　对已有页面的操作必须同时提供 `--space` 和 `--tab`，即使 Space 只有一页。创建 Space 后从 `tabs[0].tabId` 取得初始页 ID；`tab new --space SPACE` 直接返回 `tabId`。关闭使用 `tab close --space SPACE --tab ID`。旧的 `tab default` 命令及 `defaultTabId` 字段已移除。现有注册表继续加载，Space、标签页和网站数据沿用原 ID。形如 UUID 的 Space 参数始终按 ID 查找；名称本身是 UUID 的 Space 请使用它自己的 ID。
+
+回退到契约 v1 前，请先正常退出 v2 daemon，再配套启动旧版 daemon 和 CLI。注册表保留旧版所需的默认页 ID：原默认页仍在就沿用，否则取首个现存页。回退后旧版省略 Tab 的调用会使用该页。
+
 关闭窗口后，Agent 可以继续工作。退出应用后，已保存的网站数据会保留，尚未提交的表单可能丢失。下次打开时是否需要重新登录，取决于网站。
 
 如果开启了系统代理，直连 Space 会暂停。关闭系统代理后，重新加载页面即可恢复。调试本地项目时，也可以给 Space 单独配置 Whistle。[Whistle 配置示例](docs/DEVELOPMENT.md#vite--whistle-域名与-hmr-回归)

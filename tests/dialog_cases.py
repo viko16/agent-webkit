@@ -9,8 +9,8 @@ from urllib.parse import urljoin
 def verify_dialogs(cli, base, out, restart, state):
     name, peer = 'dialogs', 'dialogs-peer'
     work = cli('space', 'create', name, '--proxy', 'direct')
-    cli('space', 'create', peer, '--proxy', 'direct')
-    tab = work['defaultTabId']
+    peer_tab = cli('space', 'create', peer, '--proxy', 'direct')['tabs'][0]['tabId']
+    tab = work['tabs'][0]['tabId']
     flags = ('--space', name, '--tab', tab)
     url = urljoin(base, '/dialogs')
 
@@ -27,7 +27,7 @@ def verify_dialogs(cli, base, out, restart, state):
 
     try:
         command('open', url)
-        cli('open', url, '--space', peer)
+        cli('open', url, '--space', peer, '--tab', peer_tab)
         before = cli('status')
         command('dialog', 'respond', 'unknown', 'yes', error='invalid_arguments')
         command('dialog', 'list', '--text', 'wrong', error='invalid_arguments')
@@ -49,8 +49,8 @@ def verify_dialogs(cli, base, out, restart, state):
                 assert command('diagnostics')['busy']
                 assert not future.done(), 'Dialog was silently handled'
                 command('snapshot', error='space_busy')
-                cli('dialog', 'respond', dialog['id'], 'accept', '--space', peer, error='dialog_not_found')
-                assert cli('evaluate', 'document.title', '--space', peer)['value'] == 'JavaScript dialog fixture'
+                cli('dialog', 'respond', dialog['id'], 'accept', '--space', peer, '--tab', peer_tab, error='dialog_not_found')
+                assert cli('evaluate', 'document.title', '--space', peer, '--tab', peer_tab)['value'] == 'JavaScript dialog fixture'
                 if kind == 'confirm':
                     command('dialog', 'respond', dialog['id'], 'accept', '--text', 'invalid', error='invalid_arguments')
                 args = ('--text', text) if text is not None else ()
@@ -64,18 +64,18 @@ def verify_dialogs(cli, base, out, restart, state):
             # Both Spaces can wait for their own dialogs without routing replies across them.
             first = pool.submit(command, 'click', '#confirm', '--timeout', '5000')
             _, a = pending()
-            second = pool.submit(cli, 'click', '#confirm', '--space', peer, '--timeout', '5000')
+            second = pool.submit(cli, 'click', '#confirm', '--space', peer, '--tab', peer_tab, '--timeout', '5000')
             for _ in range(100):
-                dialogs = cli('dialog', 'list', '--space', peer)['value']['dialogs']
+                dialogs = cli('dialog', 'list', '--space', peer, '--tab', peer_tab)['value']['dialogs']
                 if dialogs:
                     break
                 time.sleep(.02)
             else:
                 raise AssertionError('No peer dialog')
-            cli('dialog', 'respond', dialogs[0]['id'], 'dismiss', '--space', peer)
+            cli('dialog', 'respond', dialogs[0]['id'], 'dismiss', '--space', peer, '--tab', peer_tab)
             command('dialog', 'respond', a['id'], 'accept')
             first.result(timeout=8); second.result(timeout=8)
-            assert cli('evaluate', 'window.dialogResults.at(-1)', '--space', peer)['value'] is False
+            assert cli('evaluate', 'window.dialogResults.at(-1)', '--space', peer, '--tab', peer_tab)['value'] is False
             assert command('evaluate', 'window.dialogResults.at(-1)')['value'] is True
             # A modal wait expiring is not evidence that the content process is hung.
             expired = pool.submit(command, 'click', '#confirm', '--timeout', '400', error='timeout')
@@ -121,7 +121,7 @@ def verify_dialogs(cli, base, out, restart, state):
             cli('dialog', 'respond', popup_dialog['id'], 'accept', '--text', 'popup value', '--space', name, '--tab', child)
             popup.result(timeout=8)
             assert cli('evaluate', 'window.dialogResults.at(-1)', '--space', name, '--tab', child)['value'] == 'popup value'
-            cli('tab', 'close', child, '--space', name)
+            cli('tab', 'close', '--tab', child, '--space', name)
         command('evaluate', 'setTimeout(()=>confirm("Navigation cancellation"),0); true')
         _, obsolete = pending()
         assert not cli('space', 'info', name)['busy']
@@ -132,7 +132,7 @@ def verify_dialogs(cli, base, out, restart, state):
         closing = cli('tab', 'new', url, '--space', name)['tabId']
         cli('evaluate', 'setTimeout(()=>{confirm("Close cancellation");alert("Late close callback")},0); true', '--space', name, '--tab', closing)
         pending(closing)
-        cli('tab', 'close', closing, '--space', name)
+        cli('tab', 'close', '--tab', closing, '--space', name)
         cli('dialog', 'list', '--space', name, '--tab', closing, error='tab_not_found')
         # A failed shutdown must leave a live service able to handle subsequent dialogs.
         permissions = state.stat().st_mode & 0o777
@@ -163,7 +163,7 @@ def verify_dialogs(cli, base, out, restart, state):
         assert not command('state')['page']['unresponsive']
         after = cli('status')
         assert after['observer'] == before['observer'] and after['frontmostPid'] == before['frontmostPid']
-        assert cli('space', 'info', name)['defaultTabId'] == tab
+        assert cli('space', 'info', name)['tabs'][0]['tabId'] == tab
         report = dict(dialogs=True, explicitCases=len(cases), uniqueIDs=len(ids),
                       busyReplyVerified=True, spaceIsolation=True, expiryVerified=True, foregroundUnchanged=True,
                       lifecycle=['chained dialogs', 'initial navigation', 'frame and popup ownership', 'navigation cancellation', 'close with late callback', 'failed shutdown remains usable', 'restart resets pending IDs', 'real 15s autonomous expiry'])

@@ -8,7 +8,7 @@ enum CLIContract {
         "space.suspend": ["NAME_OR_ID"], "space.resume": ["NAME_OR_ID"],
         "download.wait": ["ID"], "download.cancel": ["ID"],
         "upload": ["SELECTOR_OR_REF"] + (1...16).map { "FILE_PATH_\($0)" },
-        "tab.new": ["URL"], "tab.close": ["ID"], "tab.default": ["ID"],
+        "tab.new": ["URL"],
         "open": ["URL"], "evaluate": ["JAVASCRIPT"], "click": ["SELECTOR_OR_REF"],
         "viewport.set": ["WIDTH", "HEIGHT"],
         "scroll": ["DX", "DY"], "select": ["SELECTOR_OR_REF", "VALUE"],
@@ -18,8 +18,8 @@ enum CLIContract {
     private static let optionDetails: [String: [String: Any]] = [
         "socket": ["type": "string", "description": "Unix socket path; overrides BROWSER_SOCKET"],
         "data-dir": ["type": "string", "description": "Registry directory; overrides BROWSER_DATA_DIR"],
-        "space": ["type": "string", "description": "Explicit Space name or UUID"],
-        "tab": ["type": "string", "description": "Tab UUID in this Space; omitted uses fixed CLI default, never GUI selection"],
+        "space": ["type": "string", "description": "Space name or UUID; UUID-shaped arguments always identify a Space by ID"],
+        "tab": ["type": "string", "description": "Required UUID of the target Tab in this Space"],
         "frame": ["type": "string", "description": "Document ID from frame list in this Space/Tab; requires explicit --tab; stale_frame after navigation/removal/eviction; >>> remains same-origin; cross-origin ancestor geometry is unavailable"],
         "timeout": ["type": "integer", "unit": "ms", "minimum": 1, "maximum": 60000, "default": 15000],
         "proxy": ["type": "string", "description": "direct or http://127.0.0.1:PORT (1–65535); required at creation"],
@@ -51,7 +51,7 @@ enum CLIContract {
 
     private static let commandSummaries: [String: String] = [
         "back": "Navigate backward one entry in WebKit history",
-        "capabilities": "Output the full machine-readable JSON contract (schemaVersion 1)",
+        "capabilities": "Output the full machine-readable JSON contract (schemaVersion 2)",
         "check": "Idempotently check a native checkbox via DOM click",
         "click": "Click a visible element via DOM with hit-test sampling",
         "daemon": "Run the Agent WebKit app and Unix socket IPC server (use packaged .app)",
@@ -84,9 +84,8 @@ enum CLIContract {
         "state": "Read host Tab state, HTTP status, errors, and pending dialogs (works while busy/suspended)",
         "status": "Check daemon readiness, Spaces, limits, observer window, and shutdownImpact",
         "tab.close": "Close a Tab in a Space (cannot close the last Tab)",
-        "tab.default": "Set the fixed CLI default Tab for a Space",
         "tab.list": "List all Tabs in a Space",
-        "tab.new": "Open a new Tab in a Space (does not change CLI default Tab)",
+        "tab.new": "Create a Tab and return its tabId",
         "uncheck": "Idempotently uncheck a native checkbox via DOM click",
         "upload": "Attach 1–16 local files to a file input via DataTransfer (does not auto-submit)",
         "version": "Output CLI version as JSON",
@@ -108,7 +107,7 @@ enum CLIContract {
             "Manage Tabs inside a Space",
             [
                 "All tab subcommands require --space NAME_OR_ID.",
-                "CLI default Tab is fixed per Space and never changed by GUI selection or tab new.",
+                "Each existing-Tab operation requires --space and --tab, including tab close.",
                 "Save returned Tab UUIDs and pass --tab explicitly on page commands."
             ]
         ),
@@ -148,11 +147,18 @@ enum CLIContract {
     private static let commandNotes: [String: [String]] = [
         "space.create": [
             "NAME must match ^[A-Za-z][A-Za-z0-9_-]{0,63}$.",
-            "--proxy is required: direct or http://127.0.0.1:<PORT> (1–65535). Proxy cannot be changed after creation.",
+            "--proxy is required: direct or http://127.0.0.1:<PORT> (1–65535). The response includes the initial tabs[0].tabId. Proxy and TLS policy are fixed at creation.",
             "--ca-cert and --ignore-certificate-errors are mutually exclusive; direct Spaces pause if macOS system proxy is enabled."
         ],
         "space.delete": [
+            "UUID targets are exact; a removed UUID returns space_not_found. Use the actual ID for a Space with a UUID-shaped name.",
             "Deletes persistent website data; check cleanupPending (true means empty WebKit container removal retries on next startup)."
+        ],
+        "tab.new": [
+            "Returns tabId for the new Tab. Existing-Tab commands require both --space and --tab."
+        ],
+        "tab.close": [
+            "Rejects the last Tab (last_tab), a busy Space or an executing Tab (space_busy). A closed ID returns tab_not_found."
         ],
         "space.suspend": [
             "Rejects if the Space is busy or has active downloads. Website data and URLs are preserved; JS memory and unsaved forms are lost."
@@ -185,7 +191,7 @@ enum CLIContract {
         ],
         "fill": [
             "Sets input/textarea/select/contenteditable via native setters and dispatches input + change events (nativeVerified=false).",
-            "Use -- before values starting with a hyphen, e.g. awb fill --space work -- '#field' '--literal'."
+            "Use -- before values starting with a hyphen, e.g. awb fill --space work --tab TAB_ID -- '#field' '--literal'."
         ],
         "select": [
             "Requires explicit --tab. Targets a native single <select> by option value; returns selectedValue and changed."
@@ -256,8 +262,7 @@ enum CLIContract {
         "space.delete": ["awb space delete work"],
         "tab.list": ["awb tab list --space work"],
         "tab.new": ["awb tab new https://example.com --space work"],
-        "tab.close": ["awb tab close TAB_ID --space work"],
-        "tab.default": ["awb tab default TAB_ID --space work"],
+        "tab.close": ["awb tab close --space work --tab TAB_ID"],
         "open": ["awb open https://example.com --space work --tab TAB_ID --fail-on-http-error"],
         "reload": ["awb reload --space work --tab TAB_ID"],
         "back": ["awb back --space work --tab TAB_ID"],
@@ -332,14 +337,14 @@ enum CLIContract {
         Quick Workflow:
           awb status                                                # verify daemon is ready
           awb space create work --proxy direct                      # isolated cookies, storage & proxy
-          awb open https://example.com --space work                 # navigate Tab
+          awb open https://example.com --space work --tab TAB_ID    # navigate Tab
           awb snapshot --space work --tab TAB_ID --interactive      # inspect page & get @ref handles
           awb click '@e1-...' --space work --tab TAB_ID             # act, then wait/verify
 
         Service & Discovery:
           status                  Daemon readiness, Spaces, limits, observer window, shutdownImpact
           version                 CLI version (JSON)
-          capabilities            Full machine-readable JSON contract (schemaVersion 1)
+          capabilities            Full machine-readable JSON contract (schemaVersion 2)
           help [CMD [SUBCMD]]     Show overview or detailed command help
           daemon                  Run the Agent WebKit app & IPC server (use packaged .app)
           shutdown --all          Stop shared daemon and every Space (check status.shutdownImpact first)
@@ -347,23 +352,22 @@ enum CLIContract {
         Spaces (isolated cookies, storage, proxy & TLS):
           space create NAME       Create Space (--proxy direct|http://127.0.0.1:PORT required)
           space list              List all Spaces and their Tabs
-          space info NAME_OR_ID   Inspect a Space (IDs, defaultTabId, proxy, TLS, lifecycle)
+          space info NAME_OR_ID   Inspect a Space (IDs, tabs, proxy, TLS, lifecycle)
           space suspend NAME_OR_ID  Close WebViews to free memory; keep URLs & website data
           space resume NAME_OR_ID   Recreate WebViews for a suspended Space and start loading
           space delete NAME_OR_ID   Delete Space and website data (check cleanupPending)
 
         Tabs:
           tab list                List Tabs in a Space (--space required)
-          tab new [URL]           Open a new Tab (does not change CLI default Tab)
-          tab close ID            Close a Tab (cannot close the last Tab)
-          tab default ID          Set the fixed CLI default Tab for a Space
+          tab new [URL] --space S   Create a Tab and return its tabId
+          tab close --space S --tab T   Close an idle Tab; the last Tab stays open
 
         Navigation & Viewport:
           open URL                Navigate Tab to http(s) URL or about:blank (--fail-on-http-error)
           reload                  Reload persisted URL; recovers unresponsive/terminated Tab
-          back* / forward*        Traverse native WebKit history
+          back / forward        Traverse native WebKit history
           viewport get            Read measured CSS viewport and AppKit view points
-          viewport set W H*       Pin Tab viewport to 100–4096 px (resets on suspend/restart)
+          viewport set W H       Pin Tab viewport to 100–4096 px (resets on suspend/restart)
 
         Observation:
           state                   Host Tab state, HTTP status, errors, pending dialogs (works while busy/suspended)
@@ -375,11 +379,11 @@ enum CLIContract {
         Interaction:
           click TARGET            DOM click with hit-test (--wait-for-navigation | --wait-for-popup, --frame)
           fill TARGET VALUE       Set input/textarea/select/contenteditable + input/change events (--frame)
-          select TARGET VALUE*    Select option by value in native single <select> (--frame)
-          check* / uncheck*       Idempotently toggle native checkbox (--frame)
-          scroll DX DY*           Relative document scroll in CSS px (-100000..100000, --frame)
-          focus TARGET*           DOM focus + AppKit responder (main doc/open shadow only; required before key)
-          key KEY*                Send directed AppKit key (Enter, Tab, Escape, arrows, limited edit keys)
+          select TARGET VALUE    Select option by value in native single <select> (--frame)
+          check / uncheck       Idempotently toggle native checkbox (--frame)
+          scroll DX DY           Relative document scroll in CSS px (-100000..100000, --frame)
+          focus TARGET           DOM focus + AppKit responder (main doc/open shadow only; required before key)
+          key KEY                Send directed AppKit key (Enter, Tab, Escape, arrows, limited edit keys)
           upload TARGET FILE...   Attach 1–16 local absolute files (<= 4 MiB total; does not auto-submit)
 
         Waiting:
@@ -400,8 +404,9 @@ enum CLIContract {
           --                      End options; treat following args as literals (e.g. values starting with - or --)
 
         Key Rules for Agents:
-          * Commands marked with * require explicit --tab ID (best practice: always pass --space and --tab).
-          - Page commands require --space; CLI default Tab is fixed and independent of GUI selection.
+          - Breaking change (schema 2): all existing-Tab commands require --space and --tab, even with one Tab.
+          - GUI selection never changes an Agent target; a closed Tab returns tab_not_found.
+          - Obtain the UUID from space create (tabs[].tabId), tab list, or tab new (tabId).
           - Same-Space commands run serially (space_busy); different Spaces run in parallel.
           - On space_busy or timeout: inspect state and dialog list first; never blindly replay side-effecting actions.
           - Runtime commands output one-line JSON ({"ok":true,"result":...} or {"ok":false,"error":{...}}); exit 0/1.
@@ -546,7 +551,7 @@ enum CLIContract {
         if name == "space.create" { keys.append("proxy") }
         if name == "screenshot" { keys.append("out") }
         if name == "shutdown" { keys.append("all") }
-        if Request.explicitTabCommands.contains(name) { keys.append("tab") }
+        if Request.allowedOptions(for: name).contains("tab") { keys.append("tab") }
         return keys
     }
 
@@ -559,7 +564,7 @@ enum CLIContract {
 
     private static func displaySynopsis(_ name: String) -> String {
         if name == "upload" {
-            return "awb upload SELECTOR_OR_REF FILE_PATH [FILE_PATH ...] --space VALUE [options]"
+            return "awb upload SELECTOR_OR_REF FILE_PATH [FILE_PATH ...] --space VALUE --tab VALUE [options]"
         }
         if name == "daemon" {
             return "awb daemon [--data-dir PATH] [--socket PATH]"
@@ -605,7 +610,6 @@ enum CLIContract {
         case "tab.list": result = "tabs"
         case "tab.new": result = "tab"
         case "tab.close": result = "tabClose"
-        case "tab.default": result = "tabDefault"
         case "diagnostics": result = "diagnostics"
         case "dialog.list": result = "dialogs"
         case "dialog.respond": result = "dialogResponse"
@@ -641,7 +645,7 @@ enum CLIContract {
         let string = ["type": "string"]
         let page = object(["spaceId", "space", "proxy", "network", "page", "value"], ["value": [:]])
         let tab = object(["tabId", "url", "title", "loading", "webContentTerminated", "unresponsive"])
-        let space = object(["id", "name", "proxy", "defaultTabId", "tabs", "busy"])
+        let space = object(["id", "name", "proxy", "tabs", "busy"])
         let shutdownImpact = object(["spaces", "websiteDataPreserved", "pageMemoryPreserved"], [
             "spaces": ["type": "array", "items": object(["spaceId", "name", "tabIds"], [
                 "spaceId": string, "name": string, "tabIds": ["type": "array", "items": string]])],
@@ -656,7 +660,7 @@ enum CLIContract {
         var helpSchema = object(["usage"], ["usage": string, "commands": ["type": "array"]])
         helpSchema["description"] = "IPC JSON help result (resultSchemaScope: [\"ipc\"]); successful CLI help outputs plain text while CLI errors use the JSON error response"
         return [
-            "schemaVersion": 1, "version": productVersion,
+            "schemaVersion": 2, "version": productVersion,
             "commands": Request.arities.keys.sorted().map(command),
             "constraints": [
                 "key": ["supported": BackgroundKey.allCases.map(\.rawValue), "requiresFocus": true, "keyboardLayout": "fixed US key codes"],
@@ -690,7 +694,7 @@ enum CLIContract {
                     "tabs": ["type": "array", "items": tab], "page": page,
                     "downloads": object(["spaceId", "tabId", "value"]),
                     "deletion": object(["deleted", "spaceId", "websiteDataRemoved", "dataStoreRemoved", "cleanupPending"]),
-                    "tabClose": object(["closed", "defaultTabId"]), "tabDefault": object(["defaultTabId"]),
+                    "tabClose": object(["closed"]),
                     "diagnostics": object(["spaceId", "tabId", "busy", "networkBlocked", "networkErrorCode", "value"]),
                     "dialogs": object(["spaceId", "tabId", "busy", "value"], ["value": object(["dialogs", "limit"], [
                         "dialogs": ["type": "array", "items": object(["id", "type", "message", "defaultText", "expiresAtMs", "origin", "mainFrame"], [
@@ -704,7 +708,7 @@ enum CLIContract {
             "scope": [
                 "platform": "macOS 14+; per-Space proxy requires macOS 14+ public WebKit support",
                 "transport": "same-user local Unix socket; newline-delimited JSON; maximum message 8 MiB",
-                "target": "explicit Space; fixed CLI default Tab or explicit Tab; independent of GUI selection",
+                "target": "Explicit space and tab required for every existing-Tab operation, independent of GUI selection",
                 "concurrency": "one mutating/WebKit operation per Space; different Spaces independent",
                 "shutdown": "requires explicit --all; status.shutdownImpact previews all affected Spaces/Tab IDs; successful reply reports the affected scope; busy rejects exit; website data retained, page memory lost",
                 "lifecycle": "space suspend releases WebViews, retaining its data-store coordinator and IDs/URLs/website data/proxy/TLS; suspended Spaces restart without WebViews; resume starts loading; page actions resume on demand; state/list/info never wake; JS memory is lost",

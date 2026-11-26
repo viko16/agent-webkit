@@ -47,42 +47,43 @@ def main():
         return next(item for item in response['timing']['webkitOperations'] if item['operation'] == name)
 
     try:
+        tabs = {}
         for space in spaces:
-            cli('space', 'create', space, '--proxy', 'direct')
+            tabs[space] = cli('space', 'create', space, '--proxy', 'direct')['result']['tabs'][0]['tabId']
             created.append(space)
         with ThreadPoolExecutor(2) as pool:
-            futures = [pool.submit(cli, 'open', url + '?delay=0.25', '--space', space) for space in spaces]
+            futures = [pool.submit(cli, 'open', url + '?delay=0.25', '--space', space, '--tab', tabs[space]) for space in spaces]
             for future in futures:
                 response = future.result()
                 assert response['timing']['webkitMs'] >= 250, response
                 assert operation(response, 'navigation')['inProgress'] == 0
         space = spaces[0]
-        cli('snapshot', '--space', space)
-        cli('evaluate', 'throw new Error("timing-error")', '--space', space, ok=False)
-        cli('evaluate', '({invalid: Infinity})', '--space', space, ok=False)
-        cli('fill', '#message', 'timed', '--space', space)
+        cli('snapshot', '--space', space, '--tab', tabs[space])
+        cli('evaluate', 'throw new Error("timing-error")', '--space', space, '--tab', tabs[space], ok=False)
+        cli('evaluate', '({invalid: Infinity})', '--space', space, '--tab', tabs[space], ok=False)
+        cli('fill', '#message', 'timed', '--space', space, '--tab', tabs[space])
         # A DOM button without navigation must time out, not report the previous load as new.
-        response = cli('click', '#save', '--space', space, '--wait-for-navigation', '--timeout', '150', ok=False)
+        response = cli('click', '#save', '--space', space, '--tab', tabs[space], '--wait-for-navigation', '--timeout', '150', ok=False)
         assert response['error']['code'] == 'timeout', response
         assert response['timing']['serverMs'] >= 150
-        cli('evaluate', f'(() => {{ const a=document.createElement("a"); a.id="next"; a.href={json.dumps(url + "?delay=0.25&next=1")}; a.textContent="next"; document.body.append(a); return true; }})()', '--space', space)
-        response = cli('click', '#next', '--space', space, '--wait-for-navigation', '--timeout', '5000')
+        cli('evaluate', f'(() => {{ const a=document.createElement("a"); a.id="next"; a.href={json.dumps(url + "?delay=0.25&next=1")}; a.textContent="next"; document.body.append(a); return true; }})()', '--space', space, '--tab', tabs[space])
+        response = cli('click', '#next', '--space', space, '--tab', tabs[space], '--wait-for-navigation', '--timeout', '5000')
         assert 'next=1' in response['result']['page']['url'] and not response['result']['page']['loading'], response
         assert response['timing']['webkitMs'] >= 250, response
         assert operation(response, 'navigation')['inProgress'] == 0
-        response = cli('open', url + '?delay=0.5&timeout=1', '--space', space, '--timeout', '100', ok=False)
+        response = cli('open', url + '?delay=0.5&timeout=1', '--space', space, '--tab', tabs[space], '--timeout', '100', ok=False)
         assert response['error']['code'] == 'timeout', response
         assert operation(response, 'navigation')['inProgress'] == 1, response
         assert response['timing']['webkitMs'] >= 100, response
-        cli('wait', '--space', space)
+        cli('wait', '--space', space, '--tab', tabs[space])
         # A navigation completing after timeout must not be charged to the next request.
-        response = cli('evaluate', 'document.title', '--space', space)
+        response = cli('evaluate', 'document.title', '--space', space, '--tab', tabs[space])
         assert all(item['operation'] != 'navigation' for item in response['timing']['webkitOperations']), response
         path = ROOT / '.artifacts' / 'timing-test.png'
-        response = cli('screenshot', '--space', space, '--out', str(path))
+        response = cli('screenshot', '--space', space, '--tab', tabs[space], '--out', str(path))
         assert operation(response, 'takeSnapshot')['totalMs'] > 0
         assert path.read_bytes().startswith(b'\x89PNG\r\n\x1a\n')
-        cli('snapshot', '--space', space, '--wait-for-navigation', ok=False)
+        cli('snapshot', '--space', space, '--tab', tabs[space], '--wait-for-navigation', ok=False)
         print(json.dumps({'ok': True, 'checks': count, 'verified': [
             'nested timing intervals', 'parallel per-space navigation attribution', 'JS error timing',
             'no-navigation timeout', 'click waits for delayed destination', 'open timeout preserves in-progress timing',

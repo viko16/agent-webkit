@@ -16,9 +16,22 @@ def verify_offline(cli, cli_text=None, check_bare=True):
     assert re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', version), version
     assert cli('--version')['version'] == version
     contract = cli('capabilities')
-    assert contract['schemaVersion'] == 1
+    assert contract['schemaVersion'] == 2
+    skill = (ROOT / 'skills/agent-webkit/SKILL.md').read_text()
+    metadata = skill.split('---', 2)[1]
+    assert re.search(rf'^  contract-version: "{contract["schemaVersion"]}"$', metadata, re.MULTILINE)
     assert contract['version'] == version
     commands = {item['command']: item for item in contract['commands']}
+    assert 'tab.default' not in commands
+    for name, entry in commands.items():
+        required = {o['name'] for o in entry['options'] if o['required']}
+        has_target = name.split('.')[0] not in {'space', 'daemon', 'help', 'status', 'shutdown', 'version', 'capabilities'} and name not in {'tab.list', 'tab.new'}
+        assert ('tab' in required) == has_target, name
+        if has_target:
+            assert 'space' in required, name
+            args = ['x'] * entry['args']['minimum']
+            cli(*name.split('.'), *args, '--space', 'work', error='invalid_arguments')
+            cli(*name.split('.'), *args, '--tab', 'id', error='space_required')
     assert len(commands) == len(contract['commands'])
     definitions = contract['schemas']['$defs']
     for name, command in commands.items():
@@ -111,8 +124,16 @@ def verify_live_contract(cli, socket_path):
 
     before = cli('status')
     spaces = cli('space', 'list')
+    work_tab = next(space for space in spaces if space['name'] == 'work')['tabs'][0]['tabId']
     contract = cli('capabilities')
     commands = {item['command']: item for item in contract['commands']}
+    assert all('defaultTabId' not in space for space in spaces)
+    assert raw('tab.default', [work_tab], {'space': 'work'})['error']['code'] == 'invalid_arguments'
+    for entry in commands.values():
+        if any(o['name'] == 'tab' and o['required'] for o in entry['options']):
+            args = ['x'] * entry['args']['minimum']
+            assert raw(entry['command'], args, {'space': 'work'})['error']['code'] == 'invalid_arguments'
+            assert raw(entry['command'], args, {'tab': work_tab})['error']['code'] == 'space_required'
     assert raw('capabilities')['result'] == contract
     assert raw('help')['result']['usage'].startswith(f"awb {before['version']} ")
     assert raw('help', ['space', 'create'])['result']['commands'] == [commands['space.create']]
@@ -126,20 +147,19 @@ def verify_live_contract(cli, socket_path):
         assert raw('space.delete', ['work'], {key: '/tmp/other-daemon'})['error']['code'] == 'invalid_arguments'
     assert cli('status', '--data-dir', str(socket_path.parent), '--socket', str(socket_path))['pid'] == before['pid']
     assert cli('space', 'list') == spaces
-    assert raw('wait', options={'space': 'work', 'url': 'x', 'text': 'y'})['error']['code'] == 'invalid_arguments'
-    assert raw('diagnostics', options={'space': 'work', 'inspectable': 'yes'})['error']['code'] == 'invalid_arguments'
-    assert raw('diagnostics', options={'space': 'work', 'detail': 'on', 'inspectable': 'on'})['error']['code'] == 'invalid_arguments'
-    assert raw('dialog.respond', ['unknown', 'yes'], {'space': 'work'})['error']['code'] == 'invalid_arguments'
-    assert raw('dialog.list', options={'space': 'work', 'text': 'wrong'})['error']['code'] == 'invalid_arguments'
-    assert raw('snapshot', options={'space': 'work', 'element': '#message'})['error']['code'] == 'invalid_arguments'
+    assert raw('wait', options={'space': 'work', 'tab': work_tab, 'url': 'x', 'text': 'y'})['error']['code'] == 'invalid_arguments'
+    assert raw('diagnostics', options={'space': 'work', 'tab': work_tab, 'inspectable': 'yes'})['error']['code'] == 'invalid_arguments'
+    assert raw('diagnostics', options={'space': 'work', 'tab': work_tab, 'detail': 'on', 'inspectable': 'on'})['error']['code'] == 'invalid_arguments'
+    assert raw('dialog.respond', ['unknown', 'yes'], {'space': 'work', 'tab': work_tab})['error']['code'] == 'invalid_arguments'
+    assert raw('dialog.list', options={'space': 'work', 'tab': work_tab, 'text': 'wrong'})['error']['code'] == 'invalid_arguments'
+    assert raw('snapshot', options={'space': 'work', 'tab': work_tab, 'element': '#message'})['error']['code'] == 'invalid_arguments'
     assert raw('focus', ['#message'], {'space': 'work'})['error']['code'] == 'invalid_arguments'
     assert raw('key', ['Command+A'], {'space': 'work', 'tab': 'id'})['error']['code'] == 'unsupported_key'
-    assert raw('snapshot', options={'space': 'work', 'frame': 'unknown'})['error']['code'] == 'invalid_arguments'
-    assert raw('snapshot', options={'space': 'work', 'tab': spaces[0]['defaultTabId'], 'frame': ''})['error']['code'] == 'invalid_arguments'
-    assert raw('click', ['#save'], {'space': 'work', 'tab': spaces[0]['defaultTabId'], 'frame': 'id', 'wait-for-navigation': 'true'})['error']['code'] == 'invalid_arguments'
-    assert raw('evaluate', ['true'], {'space': 'work', 'tab': spaces[0]['defaultTabId'], 'frame': 'unknown'})['error']['code'] == 'invalid_arguments'
-    assert raw('screenshot', options={'space': 'work', 'full-page': 'false', 'out': '/tmp/unused.png'})['error']['code'] == 'invalid_arguments'
-    assert raw('screenshot', options={'space': 'work', 'full-page': 'true', 'element': '#message', 'out': '/tmp/unused.png'})['error']['code'] == 'invalid_arguments'
+    assert raw('snapshot', options={'space': 'work', 'tab': work_tab, 'frame': ''})['error']['code'] == 'invalid_arguments'
+    assert raw('click', ['#save'], {'space': 'work', 'tab': work_tab, 'frame': 'id', 'wait-for-navigation': 'true'})['error']['code'] == 'invalid_arguments'
+    assert raw('evaluate', ['true'], {'space': 'work', 'tab': work_tab, 'frame': 'unknown'})['error']['code'] == 'invalid_arguments'
+    assert raw('screenshot', options={'space': 'work', 'tab': work_tab, 'full-page': 'false', 'out': '/tmp/unused.png'})['error']['code'] == 'invalid_arguments'
+    assert raw('screenshot', options={'space': 'work', 'tab': work_tab, 'full-page': 'true', 'element': '#message', 'out': '/tmp/unused.png'})['error']['code'] == 'invalid_arguments'
     for options in ({}, {'all': 'false'}, {'all': 'yes'}, {'all': 'true', 'tab': 'wrong'}):
         assert raw('shutdown', options=options)['error']['code'] == 'invalid_arguments'
     cli('shutdown', error='invalid_arguments')
@@ -151,13 +171,13 @@ def verify_live_contract(cli, socket_path):
     # Validate schemas against actual host results, rather than only self-consistent metadata.
     for name, result in [('status', before), ('space', cli('space', 'info', 'work')),
                          ('tab', cli('tab', 'list', '--space', 'work')[0]),
-                         ('page', cli('snapshot', '--space', 'work')),
-                         ('diagnostics', cli('diagnostics', '--space', 'work'))]:
+                         ('page', cli('snapshot', '--space', 'work', '--tab', work_tab)),
+                         ('diagnostics', cli('diagnostics', '--space', 'work', '--tab', work_tab))]:
         assert set(definitions[name]['required']) <= result.keys(), (name, result)
-    cli('fill', '--space', 'work', '--', '#message', '--help')
-    assert cli('evaluate', 'document.querySelector("#message").value', '--space', 'work')['value'] == '--help'
-    cli('fill', '--space', 'work', '--', '#message', '-h')
-    assert cli('evaluate', 'document.querySelector("#message").value', '--space', 'work')['value'] == '-h'
+    cli('fill', '--space', 'work', '--tab', work_tab, '--', '#message', '--help')
+    assert cli('evaluate', 'document.querySelector("#message").value', '--space', 'work', '--tab', work_tab)['value'] == '--help'
+    cli('fill', '--space', 'work', '--tab', work_tab, '--', '#message', '-h')
+    assert cli('evaluate', 'document.querySelector("#message").value', '--space', 'work', '--tab', work_tab)['value'] == '-h'
     after = cli('status')
     assert after['observer'] == before['observer']
     assert after['frontmostPid'] == before['frontmostPid']

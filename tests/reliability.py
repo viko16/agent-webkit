@@ -112,10 +112,15 @@ def main():
         daemon.wait(timeout=15)
 
     def js(source, **kwargs):
-        return cli('evaluate', source, '--space', 'work', **kwargs)
+        return cli('evaluate', source, '--space', 'work', '--tab', work_tab, **kwargs)
 
     def interrupt_restart():
         daemon.terminate(); daemon.wait(timeout=15)
+        registry = state / 'spaces.json'
+        legacy = json.loads(registry.read_text())
+        for space in legacy:
+            space['defaultTab'] = 'invalid-legacy-id' if space['name'] == 'sleep-peer' else space['tabs'][-1]['id']
+        registry.write_text(json.dumps(legacy))
         start()
 
     def run_forms():
@@ -124,7 +129,7 @@ def main():
 
     try:
         verify_offline(cli, cli_text)
-        cli('open', 'https://example.com', '--space', 'work', '--proxy', 'direct', error='invalid_arguments')
+        cli('open', 'https://example.com', '--space', 'work', '--tab', 'id', '--proxy', 'direct', error='invalid_arguments')
         start()
         if args.forms_only:
             run_forms()
@@ -196,38 +201,39 @@ def main():
         checks.append(verify_screenshots(cli, base, out, lambda: (stop(), start())))
         checks.append(verify_fullpage(cli, base, out, lambda: (stop(), start())))
         work = cli('space', 'create', 'work', '--proxy', 'direct')
-        cli('space', 'create', 'other', '--proxy', 'direct')
-        cli('open', base, '--space', 'work')
-        cli('open', base, '--space', 'other')
+        work_tab = work['tabs'][0]['tabId']
+        other_tab = cli('space', 'create', 'other', '--proxy', 'direct')['tabs'][0]['tabId']
+        cli('open', base, '--space', 'work', '--tab', work_tab)
+        cli('open', base, '--space', 'other', '--tab', other_tab)
         checks.append(verify_live_contract(cli, state / 'browser.sock'))
         focus = cli('status')['frontmostPid']
         assert js('typeof window.__agentWebKit')['value'] == 'undefined'
-        cli('open', base + '?poison=1', '--space', 'work')
+        cli('open', base + '?poison=1', '--space', 'work', '--tab', work_tab)
         for mutation in ['true', 'delete window.__agentWebKit',
                          'window.__agentWebKit={snapshot:()=>({forged:true}),act:()=>false,exists:()=>true}; true']:
             js(mutation)
-            snap = cli('snapshot', '--space', 'work')['value']
+            snap = cli('snapshot', '--space', 'work', '--tab', work_tab)['value']
             assert 'forged' not in snap
             bridge_ref = next(el['ref'] for el in snap['elements'] if el['tag'] == 'button')
-            cli('fill', '#message', 'isolated', '--space', 'work')
-            cli('click', bridge_ref, '--space', 'work')
+            cli('fill', '#message', 'isolated', '--space', 'work', '--tab', work_tab)
+            cli('click', bridge_ref, '--space', 'work', '--tab', work_tab)
             assert js('document.querySelector("#result").textContent')['value'] == 'isolated'
-            cli('wait', '#missing', '--space', 'work', '--timeout', '100', error='timeout')
-            cli('wait', '#message', '--space', 'work')
-        assert cli('evaluate', 'Promise.resolve(window.fixtureNonce)', '--space', 'work', '--await')['value'] == site.fixture_nonce
+            cli('wait', '#missing', '--space', 'work', '--tab', work_tab, '--timeout', '100', error='timeout')
+            cli('wait', '#message', '--space', 'work', '--tab', work_tab)
+        assert cli('evaluate', 'Promise.resolve(window.fixtureNonce)', '--space', 'work', '--tab', work_tab, '--await')['value'] == site.fixture_nonce
         js('history.pushState({}, "", "?poison=1&spa=1"); true')
-        cli('click', bridge_ref, '--space', 'work')
+        cli('click', bridge_ref, '--space', 'work', '--tab', work_tab)
         js('document.querySelector("#save").replaceWith(document.querySelector("#save").cloneNode(true)); true')
-        cli('click', bridge_ref, '--space', 'work', error='stale_ref')
-        cli('reload', '--space', 'work')
-        cli('click', bridge_ref, '--space', 'work', error='stale_ref')
+        cli('click', bridge_ref, '--space', 'work', '--tab', work_tab, error='stale_ref')
+        cli('reload', '--space', 'work', '--tab', work_tab)
+        cli('click', bridge_ref, '--space', 'work', '--tab', work_tab, error='stale_ref')
         stop(); start()
-        cli('wait', '#message', '--space', 'work')
-        assert cli('snapshot', '--space', 'work')['value']['elements']
+        cli('wait', '#message', '--space', 'work', '--tab', work_tab)
+        assert cli('snapshot', '--space', 'work', '--tab', work_tab)['value']['elements']
         assert js('window.__agentWebKit.snapshot().forged')['value'] is True
-        cli('screenshot', '--space', 'work', '--out', str(out / 'isolated-bridge.png'))
+        cli('screenshot', '--space', 'work', '--tab', work_tab, '--out', str(out / 'isolated-bridge.png'))
         assert cli('status')['frontmostPid'] == focus
-        cli('open', base, '--space', 'work')
+        cli('open', base, '--space', 'work', '--tab', work_tab)
         checks.append('isolated bridge resists page overwrite/delete; page evaluate and Promise; SPA/ref invalidation; reload/restart; background screenshot and unchanged foreground')
         def popup_cli(*args, ok=True):
             if ok:
@@ -248,35 +254,35 @@ def main():
         # Raw IPC gets the same validation as the CLI parser.
         with socket.socket(socket.AF_UNIX) as client:
             client.connect(str(state / 'browser.sock'))
-            client.sendall(json.dumps(dict(command='snapshot', args=[], options={'space': 'work', 'proxy': 'direct'})).encode() + b'\n')
+            client.sendall(json.dumps(dict(command='snapshot', args=[], options={'space': 'work', 'tab': work_tab, 'proxy': 'direct'})).encode() + b'\n')
             response = json.loads(client.makefile('rb').readline())
             assert response['error']['code'] == 'invalid_arguments', response
         checks.append('CLI and raw IPC reject unsupported options; offline help/version')
-        cli('fill', '--space', 'work', '--', '#message', '--literal-value')
+        cli('fill', '--space', 'work', '--tab', work_tab, '--', '#message', '--literal-value')
         assert js('document.querySelector("#message").value')['value'] == '--literal-value'
-        cli('wait', '[', '--space', 'work', error='invalid_selector')
-        cli('wait', 'p', '--space', 'work', error='selector_count')
+        cli('wait', '[', '--space', 'work', '--tab', work_tab, error='invalid_selector')
+        cli('wait', 'p', '--space', 'work', '--tab', work_tab, error='selector_count')
         js('document.querySelector("#message").style.visibility="hidden"')
-        cli('wait', '#message', '--space', 'work', '--timeout', '120', error='timeout')
+        cli('wait', '#message', '--space', 'work', '--tab', work_tab, '--timeout', '120', error='timeout')
         js('document.querySelector("#message").style.visibility="visible"')
-        cli('wait', '#message', '--space', 'work')
-        cli('open', base + '?delay=1', '--space', 'work', '--timeout', '100', error='timeout')
-        cli('open', base, '--space', 'work', '--timeout', '3000')
-        assert cli('state', '--space', 'work')['page']['lastError'] is None
+        cli('wait', '#message', '--space', 'work', '--tab', work_tab)
+        cli('open', base + '?delay=1', '--space', 'work', '--tab', work_tab, '--timeout', '100', error='timeout')
+        cli('open', base, '--space', 'work', '--tab', work_tab, '--timeout', '3000')
+        assert cli('state', '--space', 'work', '--tab', work_tab)['page']['lastError'] is None
         js('document.body.insertAdjacentHTML("beforeend", `<fieldset disabled><input id="disabled"></fieldset><select id="choice"><option value="a">Alpha</option><option value="b" disabled>Beta</option></select><input type="password" id="password" value="secret">`)')
-        cli('fill', '#disabled', 'x', '--space', 'work', error='element_not_actionable')
-        cli('fill', '#choice', 'b', '--space', 'work', error='invalid_option')
+        cli('fill', '#disabled', 'x', '--space', 'work', '--tab', work_tab, error='element_not_actionable')
+        cli('fill', '#choice', 'b', '--space', 'work', '--tab', work_tab, error='invalid_option')
         assert js('document.querySelector("#choice").value')['value'] == 'a'
-        snapshot = cli('snapshot', '--space', 'work')['value']
+        snapshot = cli('snapshot', '--space', 'work', '--tab', work_tab)['value']
         assert any(el['value'] == '[redacted]' for el in snapshot['elements'])
         assert 'secret' not in json.dumps(snapshot)
         ref = next(el['ref'] for el in snapshot['elements'] if el['tag'] == 'button')
         checks.append('literal CLI values; visible waits; selector errors; disabled fields; select validation; password redaction')
 
-        assert cli('evaluate', 'Promise.resolve({answer:42})', '--space', 'work', '--await')['value'] == {'answer': 42}
-        cli('evaluate', 'Promise.reject(new Error("expected rejection"))', '--space', 'work', '--await', error='javascript_error')
+        assert cli('evaluate', 'Promise.resolve({answer:42})', '--space', 'work', '--tab', work_tab, '--await')['value'] == {'answer': 42}
+        cli('evaluate', 'Promise.reject(new Error("expected rejection"))', '--space', 'work', '--tab', work_tab, '--await', error='javascript_error')
         with ThreadPoolExecutor(1) as pool:
-            future = pool.submit(cli, 'evaluate', 'new Promise(resolve=>setTimeout(()=>resolve(1),1200))', '--space', 'work', '--await')
+            future = pool.submit(cli, 'evaluate', 'new Promise(resolve=>setTimeout(()=>resolve(1),1200))', '--space', 'work', '--tab', work_tab, '--await')
             # Observe actual busy state, not an arbitrary sleep before the concurrent checks.
             for _ in range(50):
                 if cli('space', 'info', 'work')['busy']:
@@ -284,61 +290,64 @@ def main():
                 time.sleep(.02)
             else:
                 raise AssertionError('Never saw in-flight command')
-            assert cli('state', '--space', 'work')['busy']
+            assert cli('state', '--space', 'work', '--tab', work_tab)['busy']
             cli('tab', 'list', '--space', 'work')
-            cli('fill', '#message', 'no', '--space', 'work', error='space_busy')
+            cli('fill', '#message', 'no', '--space', 'work', '--tab', work_tab, error='space_busy')
             cli('shutdown', '--all', error='space_busy')
             assert len(cli('status')['shutdownImpact']['spaces']) == 2
-            assert cli('evaluate', 'document.title', '--space', 'other')['value'] == 'Agent WebKit Fixture'
+            assert cli('evaluate', 'document.title', '--space', 'other', '--tab', other_tab)['value'] == 'Agent WebKit Fixture'
             assert future.result()['value'] == 1
         checks.append('Promise resolution/rejection; read-only state during a command; Space concurrency')
 
         second = cli('tab', 'new', base + '?second=1', '--space', 'work')
-        cli('tab', 'default', second['tabId'], '--space', 'work')
-        assert cli('state', '--space', 'work')['page']['tabId'] == second['tabId']
+        work_tab = second['tabId']
+        assert cli('state', '--space', 'work', '--tab', work_tab)['page']['tabId'] == second['tabId']
         js('history.pushState({}, "", "?spa=1"); localStorage.setItem("persistent","yes"); true')
         time.sleep(.2)
         stop(); start()
-        cli('wait', '--space', 'work')
-        assert cli('space', 'info', 'work')['defaultTabId'] == second['tabId']
-        assert '?spa=1' in cli('state', '--space', 'work')['page']['url']
+        cli('wait', '--space', 'work', '--tab', work_tab)
+        assert second['tabId'] in [t['tabId'] for t in cli('tab', 'list', '--space', 'work')]
+        assert '?spa=1' in cli('state', '--space', 'work', '--tab', work_tab)['page']['url']
         assert js('localStorage.getItem("persistent")')['value'] == 'yes'
-        cli('click', ref, '--space', 'work', '--tab', work['defaultTabId'], error='stale_ref')
-        checks.append('explicit default tab; SPA URL and storage restore; stale refs after restart')
+        cli('click', ref, '--space', 'work', '--tab', work['tabs'][0]['tabId'], error='stale_ref')
+        checks.append('explicit tab; SPA URL and storage restore; stale refs after restart')
 
         # A real infinite JS loop must return a bounded error without blocking another Space.
         began = time.monotonic()
-        cli('evaluate', 'localStorage.setItem("beforeHang","saved"); while(true) {}', '--space', 'work', '--timeout', '250', error='timeout')
+        cli('evaluate', 'localStorage.setItem("beforeHang","saved"); while(true) {}', '--space', 'work', '--tab', work_tab, '--timeout', '250', error='timeout')
         assert time.monotonic() - began < 3
-        page = cli('state', '--space', 'work')['page']
+        page = cli('state', '--space', 'work', '--tab', work_tab)['page']
         assert page['unresponsive'] and not cli('space', 'info', 'work')['busy']
-        cli('snapshot', '--space', 'work', error='web_content_unresponsive')
-        assert cli('evaluate', 'document.title', '--space', 'other')['value'] == 'Agent WebKit Fixture'
-        cli('reload', '--space', 'work', '--timeout', '5000')
-        assert cli('state', '--space', 'work')['page']['tabId'] == second['tabId']
+        cli('snapshot', '--space', 'work', '--tab', work_tab, error='web_content_unresponsive')
+        assert cli('evaluate', 'document.title', '--space', 'other', '--tab', other_tab)['value'] == 'Agent WebKit Fixture'
+        cli('reload', '--space', 'work', '--tab', work_tab, '--timeout', '5000')
+        assert cli('state', '--space', 'work', '--tab', work_tab)['page']['tabId'] == second['tabId']
         assert js('localStorage.getItem("beforeHang")')['value'] == 'saved'
-        cli('snapshot', '--space', 'work')
+        cli('snapshot', '--space', 'work', '--tab', work_tab)
         checks.append('real infinite JS deadline; released Space lock; other Space unaffected; explicit recovery preserves Tab ID and storage')
 
-        cli('evaluate', 'new Promise(()=>{})', '--space', 'work', '--await', '--timeout', '150', error='timeout')
-        cli('open', base, '--space', 'work', '--timeout', '5000')
-        cli('screenshot', '--space', 'work', '--out', str(out / 'recovered.png'))
+        cli('evaluate', 'new Promise(()=>{})', '--space', 'work', '--tab', work_tab, '--await', '--timeout', '150', error='timeout')
+        cli('open', base, '--space', 'work', '--tab', work_tab, '--timeout', '5000')
+        cli('screenshot', '--space', 'work', '--tab', work_tab, '--out', str(out / 'recovered.png'))
         assert (out / 'recovered.png').read_bytes().startswith(b'\x89PNG\r\n\x1a\n')
-        cli('tab', 'close', second['tabId'], '--space', 'work')
-        assert cli('space', 'info', 'work')['defaultTabId'] == work['defaultTabId']
-        checks.append('never-settling Promise deadline; open recovery; real PNG; default fallback on tab close')
+        cli('tab', 'close', '--tab', second['tabId'], '--space', 'work')
+        assert cli('space', 'info', 'work')['tabs'][0]['tabId'] == work['tabs'][0]['tabId']
+        cli('state', '--space', 'work', '--tab', second['tabId'], error='tab_not_found')
+        work_tab = work['tabs'][0]['tabId']
+        checks.append('never-settling Promise deadline; open recovery; real PNG; closed tab rejected')
         subprocess.run(['python3', str(ROOT / 'tests/timing.py'), '--socket', str(state / 'browser.sock')], check=True, timeout=90)
         checks.append('existing timing regression suite')
         # Clear real data immediately even if WebKit retains an empty network session.
-        cli('evaluate', 'while(true) {}', '--space', 'work', '--timeout', '100', error='timeout')
-        cli('reload', '--space', 'work', '--timeout', '5000')
+        cli('evaluate', 'while(true) {}', '--space', 'work', '--tab', work_tab, '--timeout', '100', error='timeout')
+        cli('reload', '--space', 'work', '--tab', work_tab, '--timeout', '5000')
         deleted = cli('space', 'delete', 'work')
         assert deleted['websiteDataRemoved']
         assert cli('space', 'delete', 'other')['websiteDataRemoved']
         assert cli('space', 'list') == []
         recreated = cli('space', 'create', 'work', '--proxy', 'direct')
+        work_tab = recreated['tabs'][0]['tabId']
         assert recreated['id'] != work['id']
-        cli('open', base, '--space', 'work')
+        cli('open', base, '--space', 'work', '--tab', work_tab)
         assert js('localStorage.getItem("beforeHang")')['value'] is None
         stop(); start()
         assert cli('status')['pendingStoreCleanup'] == 0

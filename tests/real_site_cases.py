@@ -55,7 +55,7 @@ def verify_real_spa(cli, out, observe=None):
     checkpoint, observer = site_gui_checks(cli, created, report, observe)
 
     def command(name, *args, **kwargs):
-        return cli(*args, '--space', name, '--tab', created[name]['defaultTabId'], **kwargs)
+        return cli(*args, '--space', name, '--tab', created[name]['tabs'][0]['tabId'], **kwargs)
 
     def js(name, source):
         return command(name, 'evaluate', source)['value']
@@ -117,7 +117,7 @@ def verify_real_spa(cli, out, observe=None):
         checkpoint('spa-verify-and-select-b', beforeSpace=names[0], beforeTab=spare,
                    beforeHeading='Reactivity Fundamentals', selectSpace=names[1], heading='Introduction')
         if observe:
-            observer(names[1], created[names[1]]['defaultTabId'])
+            observer(names[1], created[names[1]]['tabs'][0]['tabId'])
         focus = cli('status')['frontmostPid'] if observe else focus
         with ThreadPoolExecutor(2) as pool:
             futures = [pool.submit(route, names[0], 'Reactivity Fundamentals', REACTIVITY),
@@ -125,10 +125,10 @@ def verify_real_spa(cli, out, observe=None):
             report['rounds'].append([f.result() for f in futures])
         assert cli('status')['frontmostPid'] == focus
         if observe:
-            observer(names[1], created[names[1]]['defaultTabId'])
+            observer(names[1], created[names[1]]['tabs'][0]['tabId'])
         checkpoint('spa-verify-and-close', space=names[1], heading='Computed Properties', closeWindow=True)
         if observe:
-            observer(names[1], created[names[1]]['defaultTabId'], visible=False)
+            observer(names[1], created[names[1]]['tabs'][0]['tabId'], visible=False)
         focus = cli('status')['frontmostPid'] if observe else focus
         with ThreadPoolExecutor(2) as pool:
             futures = [pool.submit(route, names[0], 'Computed Properties', COMPUTED),
@@ -143,10 +143,10 @@ def verify_real_spa(cli, out, observe=None):
             assert command(name, 'wait', '#awb-nonexistent', '--timeout', '100', ok=False)['code'] == 'timeout'
             assert js(name, 'document.querySelector("h1").textContent.trim()').startswith('Introduction')
             command(name, 'screenshot', '--out', str(out / f'{name}-background.png'))
-            assert cli('space', 'info', name)['defaultTabId'] == created[name]['defaultTabId']
+            assert cli('space', 'info', name)['tabs'][0]['tabId'] == created[name]['tabs'][0]['tabId']
         assert cli('status')['frontmostPid'] == focus
         if observe:
-            observer(names[1], created[names[1]]['defaultTabId'], visible=False)
+            observer(names[1], created[names[1]]['tabs'][0]['tabId'], visible=False)
         report.update(guiVerified=observe is not None,
                       initial=initial, explicitTabs=True, syntheticInput=True)
     except Exception as error:
@@ -172,7 +172,7 @@ def verify_real_login(cli, out, restart, observe=None):
     checkpoint, observer = site_gui_checks(cli, created, report, observe)
 
     def command(name, *args, tab=None, **kwargs):
-        return cli(*args, '--space', name, '--tab', tab or created[name]['defaultTabId'], **kwargs)
+        return cli(*args, '--space', name, '--tab', tab or created[name]['tabs'][0]['tabId'], **kwargs)
 
     def page(name, path, text, tab=None):
         command(name, 'wait', '--url', INTERNET + path, '--timeout', '15000', tab=tab)
@@ -200,9 +200,9 @@ def verify_real_login(cli, out, restart, observe=None):
             created[name] = cli('space', 'create', name, '--proxy', 'direct')
             command(name, 'open', INTERNET + '/secure')
             page(name, '/login', 'You must login to view the secure area!')
-        checkpoint('login-select-b', space=names[1], tab=created[names[1]]['defaultTabId'], heading='Login Page')
+        checkpoint('login-select-b', space=names[1], tab=created[names[1]]['tabs'][0]['tabId'], heading='Login Page')
         if observe:
-            observer(names[1], created[names[1]]['defaultTabId'])
+            observer(names[1], created[names[1]]['tabs'][0]['tabId'])
         focus = cli('status')['frontmostPid'] if observe else focus
         with ThreadPoolExecutor(2) as pool:
             valid = pool.submit(login, names[0], True)
@@ -221,7 +221,7 @@ def verify_real_login(cli, out, restart, observe=None):
         child = result['newTabId']
         popup = page(names[0], '/windows/new', 'New Window', tab=child)
         assert popup['openerTabId'] == parent and popup['tls']['policy'] == 'system'
-        assert cli('space', 'info', names[0])['defaultTabId'] == created[names[0]]['defaultTabId']
+        assert cli('space', 'info', names[0])['tabs'][0]['tabId'] == created[names[0]]['tabs'][0]['tabId']
         command(names[0], 'open', INTERNET + '/secure', tab=child)
         page(names[0], '/secure', 'Secure Area', tab=child)
         # This public site's _blank link uses HTML's implicit noopener behavior.
@@ -229,7 +229,7 @@ def verify_real_login(cli, out, restart, observe=None):
         report['openerPolicy'] = 'implicit-noopener; host openerTabId does not imply a JS opener'
         assert cli('status')['frontmostPid'] == focus
         if observe:
-            observer(names[1], created[names[1]]['defaultTabId'])
+            observer(names[1], created[names[1]]['tabs'][0]['tabId'])
         checkpoint('login-select-child-and-close', beforeSpace=names[1], beforeHeading='Login Page',
                    selectSpace=names[0], selectTab=child, heading='Secure Area', closeWindow=True)
         if observe:
@@ -255,15 +255,15 @@ def verify_real_login(cli, out, restart, observe=None):
             signed_in = pool.submit(login, names[0], True)
             signed_out = pool.submit(logout, names[1])
             signed_in.result(); signed_out.result()
-        cli('tab', 'close', child, '--space', names[0])
+        cli('tab', 'close', '--tab', child, '--space', names[0])
         assert command(names[0], 'state', tab=child, ok=False)['code'] == 'tab_not_found'
-        assert cli('space', 'info', names[0])['defaultTabId'] == created[names[0]]['defaultTabId']
+        assert cli('space', 'info', names[0])['tabs'][0]['tabId'] == created[names[0]]['tabs'][0]['tabId']
         before = {name: cli('space', 'info', name) for name in names}
         restart()
         report['restart'] = {}
         for name in names:
             restored = cli('space', 'info', name)
-            for key in ('id', 'dataStoreId', 'defaultTabId', 'proxy', 'tls'):
+            for key in ('id', 'dataStoreId', 'proxy', 'tls'):
                 assert restored[key] == before[name][key], (key, restored)
             assert {t['tabId'] for t in restored['tabs']} == {t['tabId'] for t in before[name]['tabs']}
             command(name, 'wait')

@@ -15,10 +15,10 @@ def verify_proxy_uploads(cli, target, out, events, nonce, whistle):
             return {'error': result}
         return result
     # Keep a real earlier POST, as an existing Whistle can contain task history.
-    cli('space', 'create', 'upload-history', '--proxy', whistle.url, '--ignore-certificate-errors')
+    history_tab = cli('space', 'create', 'upload-history', '--proxy', whistle.url, '--ignore-certificate-errors')['tabs'][0]['tabId']
     try:
-        cli('open', target, '--space', 'upload-history')
-        cli('evaluate', 'fetch("/upload",{method:"POST",body:new FormData()}).then(r=>r.json())', '--await', '--space', 'upload-history')
+        cli('open', target, '--space', 'upload-history', '--tab', history_tab)
+        cli('evaluate', 'fetch("/upload",{method:"POST",body:new FormData()}).then(r=>r.json())', '--await', '--space', 'upload-history', '--tab', history_tab)
     finally:
         cli('space', 'delete', 'upload-history')
     prior = {item.get('id') for item in whistle.sessions()}
@@ -37,7 +37,7 @@ def verify_uploads(cli, base, out, events, nonce, proxy='direct', insecure=False
     name, peer = 'upload-work', 'upload-peer'
     tls = ('--ignore-certificate-errors',) if insecure else ()
     work = cli('space', 'create', name, '--proxy', proxy, *tls)
-    cli('space', 'create', peer, '--proxy', proxy, *tls)
+    peer_tab = cli('space', 'create', peer, '--proxy', proxy, *tls)['tabs'][0]['tabId']
     url = urljoin(base, '/files')
     target = cli('tab', 'new', url, '--space', name)['tabId']
     flags = ('--space', name, '--tab', target)
@@ -55,7 +55,7 @@ def verify_uploads(cli, base, out, events, nonce, proxy='direct', insecure=False
         return command('evaluate', f'Array.from(document.querySelector({json.dumps(selector)}).files,f=>f.name)')['value']
 
     try:
-        cli('open', url, '--space', peer)
+        cli('open', url, '--space', peer, '--tab', peer_tab)
         before = cli('status')
         existing = len([e for e in events.items if e['kind'] == 'file-upload'])
         command('upload', '#single', str(text))
@@ -101,8 +101,8 @@ def verify_uploads(cli, base, out, events, nonce, proxy='direct', insecure=False
         actual = [e for e in events.items if e['kind'] == 'file-upload']
         assert len(actual) == existing + 1 and actual[-1]['files'] == expected, actual
         assert command('evaluate', 'window.uploadResponse')['value'] == dict(nonce=nonce, files=expected)
-        assert cli('evaluate', 'document.querySelector("#multiple").files.length', '--space', peer)['value'] == 0
-        assert cli('space', 'info', name)['defaultTabId'] == work['defaultTabId']
+        assert cli('evaluate', 'document.querySelector("#multiple").files.length', '--space', peer, '--tab', peer_tab)['value'] == 0
+        assert cli('space', 'info', name)['tabs'][0]['tabId'] == work['tabs'][0]['tabId']
         command('reload')
         assert names('#multiple') == []
         command('upload', ref, str(empty), error='stale_ref')

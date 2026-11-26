@@ -149,11 +149,11 @@ def termination(runtime):
     r = runtime
     host = build_host(r.out)
     r.start(host, str(r.state), str(r.out))
-    peer = r.command('space', 'create', 'peer', '--proxy', 'direct')['defaultTabId']
+    peer = r.command('space', 'create', 'peer', '--proxy', 'direct')['tabs'][0]['tabId']
     r.page('peer', peer, 'open', r.base)
     r.page('peer', peer, 'evaluate', 'window.peerSentinel=73;true')
     before = r.content_processes()
-    victim = r.command('space', 'create', 'victim', '--proxy', 'direct')['defaultTabId']
+    victim = r.command('space', 'create', 'victim', '--proxy', 'direct')['tabs'][0]['tabId']
     r.page('victim', victim, 'open', r.base)
     r.gui('select', space='victim')
     page = lambda *args, **kwargs: r.page('victim', victim, *args, **kwargs)
@@ -244,7 +244,7 @@ def benchmark(runtime, count):
     # Ad-hoc signing changes file bytes, but preserves the linked Mach-O UUID.
     assert build_ids(app_binary) == build_ids(ROOT / '.build/release/awb'), 'Build/package the matching Release binary first'
     r.start(app_binary, 'daemon')
-    tab = r.command('space', 'create', 'timing', '--proxy', 'direct')['defaultTabId']
+    tab = r.command('space', 'create', 'timing', '--proxy', 'direct')['tabs'][0]['tabId']
     page = lambda *args, **kwargs: r.page('timing', tab, *args, **kwargs)
     page('open', r.base)
     foreground = r.command('status')['frontmostPid']

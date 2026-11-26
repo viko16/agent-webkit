@@ -184,10 +184,10 @@ def run_case(case, configured, out, binary):
             assert daemon.wait(timeout=15) == 0
 
         def begin(selector, space='limit-a'):
-            before = {item['id'] for item in cli('download', 'list', '--space', space)['value']['downloads']}
-            cli('click', selector, '--space', space)
+            before = {item['id'] for item in cli('download', 'list', '--space', space, '--tab', tabs[space])['value']['downloads']}
+            cli('click', selector, '--space', space, '--tab', tabs[space])
             for _ in range(100):
-                items = cli('download', 'list', '--space', space)['value']['downloads']
+                items = cli('download', 'list', '--space', space, '--tab', tabs[space])['value']['downloads']
                 new = [item for item in items if item['id'] not in before]
                 if new:
                     return new[0]['id']
@@ -195,7 +195,7 @@ def run_case(case, configured, out, binary):
             raise AssertionError('No native download')
 
         def wait(download, space='limit-a'):
-            return cli('download', 'wait', download, '--space', space)['value']
+            return cli('download', 'wait', download, '--space', space, '--tab', tabs[space])['value']
 
         def assert_failed(item, code):
             assert item['status'] == 'failed' and item['error'] == code, item
@@ -204,10 +204,12 @@ def run_case(case, configured, out, binary):
 
         try:
             start()
+            tabs = {}
             for name in ('limit-a', 'limit-b'):
                 created.append(cli('space', 'create', name, '--proxy', 'direct'))
-                cli('open', base, '--space', name)
-            limits = cli('download', 'list', '--space', 'limit-a')['value']['limits']
+                tabs[name] = created[-1]['tabs'][0]['tabId']
+                cli('open', base, '--space', name, '--tab', tabs[name])
+            limits = cli('download', 'list', '--space', 'limit-a', '--tab', tabs['limit-a'])['value']['limits']
             assert limits == dict(fileBytes=settings['MAX_FILE_BYTES'], spaceBytes=settings['MAX_SPACE_BYTES'],
                                   totalBytes=settings['MAX_TOTAL_BYTES'], minFreeBytes=settings['MIN_FREE_BYTES'])
             completed = None
@@ -241,17 +243,17 @@ def run_case(case, configured, out, binary):
                     wait_until(lambda: (recovery_gate / 'sampled').exists(), 'Recovery gate not reached')
                     assert cli('status')['ready']
                     assert not (recovery_gate / 'release').exists(), 'Recovery must still be blocked after readiness'
-                    cli('wait', '#small', '--space', 'limit-b')
-                    assert cli('evaluate', 'document.querySelector("#small").textContent', '--space', 'limit-b')['value'] == 'small'
+                    cli('wait', '#small', '--space', 'limit-b', '--tab', tabs['limit-b'])
+                    assert cli('evaluate', 'document.querySelector("#small").textContent', '--space', 'limit-b', '--tab', tabs['limit-b'])['value'] == 'small'
                     running = begin('#stream', 'limit-b')
-                    running_folder = state / 'downloads' / created[1]['id'] / created[1]['defaultTabId'] / running
+                    running_folder = state / 'downloads' / created[1]['id'] / created[1]['tabs'][0]['tabId'] / running
                     running_marker = running_folder.parent / ('.awb-pending-' + running)
                     wait_until(lambda: running_folder.exists() and running_marker.exists(), 'New download destination missing')
                     (recovery_gate / 'release').touch()
                     wait_until(lambda: 'Pending download cleanup failed:' in (out / (case + '-daemon.log')).read_text(),
                                'Recovery did not report the isolated permission failure')
                     assert running_folder.exists(), 'Startup recovery removed a new runtime download'
-                    assert cli('download', 'cancel', running, '--space', 'limit-b')['value']['status'] == 'cancelled'
+                    assert cli('download', 'cancel', running, '--space', 'limit-b', '--tab', tabs['limit-b'])['value']['status'] == 'cancelled'
                     assert marker.exists() and abandoned.exists(), 'Failed cleanup lost its retry marker'
                     assert 'Pending download cleanup failed:' in (out / (case + '-daemon.log')).read_text()
                     stop()
@@ -270,16 +272,16 @@ def run_case(case, configured, out, binary):
                 final_gate.mkdir()
                 download = begin('#small')
                 wait_until(lambda: (final_gate / 'sampled').exists(), 'Final scan did not reach gate')
-                folder = state / 'downloads' / created[0]['id'] / created[0]['defaultTabId'] / download
+                folder = state / 'downloads' / created[0]['id'] / created[0]['tabs'][0]['tabId'] / download
                 assert (folder / 'payload.bin').read_bytes() == b'x' * 1024
                 failed = wait(download)
                 assert failed['status'] == 'failed' and failed['error'] == 'download_budget_timeout', failed
                 assert failed['path'] is None and folder.exists()
-                assert cli('state', '--space', 'limit-a')['page']['activeDownloads']
+                assert cli('state', '--space', 'limit-a', '--tab', tabs['limit-a'])['page']['activeDownloads']
                 cli('space', 'suspend', 'limit-a', error='space_busy')
                 if case == 'final-scan-tab-close':
                     cli('tab', 'new', base, '--space', 'limit-a')
-                    cli('tab', 'close', created[0]['defaultTabId'], '--space', 'limit-a')
+                    cli('tab', 'close', '--tab', created[0]['tabs'][0]['tabId'], '--space', 'limit-a')
                 elif case == 'final-scan-space-delete':
                     cli('space', 'delete', created[0]['id'])
                 stop()
@@ -287,7 +289,7 @@ def run_case(case, configured, out, binary):
                 start()
                 assert cli('status')['ready']
                 wait_until(lambda: not folder.exists(), 'Startup recovery did not clear the failed download')
-                cli('wait', '#small', '--space', 'limit-b')
+                cli('wait', '#small', '--space', 'limit-b', '--tab', tabs['limit-b'])
                 # Record the actual quota outcome before asserting recovery, including on the baseline.
                 peer_id = begin('#small', 'limit-b')
                 peer_result = wait(peer_id, 'limit-b')
@@ -301,35 +303,35 @@ def run_case(case, configured, out, binary):
                 from download_budget_cases import wait_until
                 download = begin('#small')
                 wait_until(lambda: (final_gate / 'sampled').exists(), 'Final scan did not reach gate')
-                folder = state / 'downloads' / created[0]['id'] / created[0]['defaultTabId'] / download
+                folder = state / 'downloads' / created[0]['id'] / created[0]['tabs'][0]['tabId'] / download
                 files = list(folder.iterdir())
                 assert len(files) == 1 and files[0].read_bytes() == b'x' * 1024
-                cli('download', 'wait', download, '--space', 'limit-a', '--timeout', '80', error='timeout')
+                cli('download', 'wait', download, '--space', 'limit-a', '--tab', tabs['limit-a'], '--timeout', '80', error='timeout')
                 with ThreadPoolExecutor(1) as pool:
-                    pending = pool.submit(cli, 'download', 'cancel', download, '--space', 'limit-a')
+                    pending = pool.submit(cli, 'download', 'cancel', download, '--space', 'limit-a', '--tab', tabs['limit-a'])
                     for space in ('limit-a', 'limit-b'):
                         started = time.monotonic()
-                        assert cli('evaluate', 'document.querySelector("#small").textContent', '--space', space)['value'] == 'small'
+                        assert cli('evaluate', 'document.querySelector("#small").textContent', '--space', space, '--tab', tabs[space])['value'] == 'small'
                         assert time.monotonic() - started < 1
                     failed = pending.result()['value']
                 assert failed['status'] == 'failed' and failed['error'] == 'download_budget_timeout', failed
                 assert failed['path'] is None and folder.exists(), failed
                 assert files[0].read_bytes() == b'x' * 1024, 'Unfinished scan lost access to its file'
-                assert cli('state', '--space', 'limit-a')['page']['activeDownloads']
+                assert cli('state', '--space', 'limit-a', '--tab', tabs['limit-a'])['page']['activeDownloads']
                 cli('space', 'suspend', 'limit-a', error='space_busy')
                 active = cli('space', 'info', 'limit-a')
                 assert active['lifecycle'] == 'active' and active['liveWebViews'] == 1, active
-                assert active['defaultTabId'] == created[0]['defaultTabId']
+                assert active['tabs'][0]['tabId'] == created[0]['tabs'][0]['tabId']
                 assert wait(begin('#small', 'limit-b'), 'limit-b')['status'] == 'completed'
                 (final_gate / 'release').touch()
                 wait_until(lambda: (final_gate / 'retained').exists(), 'File was deleted before the scan returned')
                 wait_until(lambda: not folder.exists(), 'Late scan did not release failed data')
                 assert wait(download) == failed, 'Late scan changed the terminal result'
-                assert cli('download', 'cancel', download, '--space', 'limit-a')['value'] == failed
-                assert not cli('state', '--space', 'limit-a')['page']['activeDownloads']
+                assert cli('download', 'cancel', download, '--space', 'limit-a', '--tab', tabs['limit-a'])['value'] == failed
+                assert not cli('state', '--space', 'limit-a', '--tab', tabs['limit-a'])['page']['activeDownloads']
                 cli('space', 'suspend', 'limit-a')
                 cli('space', 'resume', 'limit-a')
-                cli('wait', '#small', '--space', 'limit-a')
+                cli('wait', '#small', '--space', 'limit-a', '--tab', tabs['limit-a'])
                 completed = wait(begin('#small'))
             elif case == 'exact-budget':
                 completed = wait(begin('#small'))
@@ -343,8 +345,8 @@ def run_case(case, configured, out, binary):
                 completed = wait(begin('#small'))
                 assert completed['status'] == 'completed', completed
                 stop(); start()
-                cli('wait', '#small', '--space', 'limit-a')
-                cli('wait', '#small', '--space', 'limit-b')
+                cli('wait', '#small', '--space', 'limit-a', '--tab', tabs['limit-a'])
+                cli('wait', '#small', '--space', 'limit-b', '--tab', tabs['limit-b'])
                 destination = 'limit-a' if case == 'space' else 'limit-b'
                 assert_failed(wait(begin('#small', destination), destination), 'download_' + case + '_limit')
                 if case == 'space':
@@ -356,12 +358,12 @@ def run_case(case, configured, out, binary):
                 second = begin('#stream', 'limit-b')
                 log_path = out / (case + '-daemon.log')
                 assert log_path.read_text().count('BUDGET-SCAN') == 1
-                folder = state / 'downloads' / created[1]['id'] / created[1]['defaultTabId'] / second
+                folder = state / 'downloads' / created[1]['id'] / created[1]['tabs'][0]['tabId'] / second
                 assert not folder.exists(), 'Destination must wait for the budget scan'
                 with ThreadPoolExecutor(1) as pool:
-                    pending = pool.submit(cli, 'download', 'cancel', second, '--space', 'limit-b')
+                    pending = pool.submit(cli, 'download', 'cancel', second, '--space', 'limit-b', '--tab', tabs['limit-b'])
                     began = time.monotonic()
-                    assert cli('evaluate', 'document.querySelector("#small").textContent', '--space', 'limit-a')['value'] == 'small'
+                    assert cli('evaluate', 'document.querySelector("#small").textContent', '--space', 'limit-a', '--tab', tabs['limit-a'])['value'] == 'small'
                     response_seconds = time.monotonic() - began
                     assert response_seconds < 1, response_seconds
                     cancelled = pending.result()['value']
@@ -377,7 +379,7 @@ def run_case(case, configured, out, binary):
                         break
                     time.sleep(.02)
                 assert 'DOWNLOAD-FINISH' in log_path.read_text(), 'No real WebKit finish callback'
-                assert cli('download', 'list', '--space', 'limit-a')['value']['downloads'][0]['status'] == 'running'
+                assert cli('download', 'list', '--space', 'limit-a', '--tab', tabs['limit-a'])['value']['downloads'][0]['status'] == 'running'
                 if case == 'finish-over-budget':
                     # Fault injection after the real finish delegate: make the final
                     # file exceed the limit while its asynchronous check is delayed.
@@ -386,13 +388,13 @@ def run_case(case, configured, out, binary):
                     with files[0].open('ab') as stream:
                         stream.write(b'y' * 1024)
                 with ThreadPoolExecutor(2) as pool:
-                    pending = pool.submit(cli, 'download', 'cancel', download, '--space', 'limit-a')
+                    pending = pool.submit(cli, 'download', 'cancel', download, '--space', 'limit-a', '--tab', tabs['limit-a'])
                     waiting = pool.submit(wait, download)
-                    assert cli('evaluate', 'document.querySelector("#small").textContent', '--space', 'limit-b')['value'] == 'small'
+                    assert cli('evaluate', 'document.querySelector("#small").textContent', '--space', 'limit-b', '--tab', tabs['limit-b'])['value'] == 'small'
                     completed = pending.result()['value']
                     assert waiting.result() == completed
-                assert cli('download', 'cancel', download, '--space', 'limit-a')['value'] == completed
-                assert cli('download', 'list', '--space', 'limit-a')['value']['downloads'] == [completed]
+                assert cli('download', 'cancel', download, '--space', 'limit-a', '--tab', tabs['limit-a'])['value'] == completed
+                assert cli('download', 'list', '--space', 'limit-a', '--tab', tabs['limit-a'])['value']['downloads'] == [completed]
                 if case == 'finish-over-budget':
                     assert_failed(completed, 'download_file_limit')
                     assert completed['bytesReceived'] == 2048
@@ -403,13 +405,13 @@ def run_case(case, configured, out, binary):
             elif case == 'cancel':
                 completed = wait(begin('#small'))
                 download = begin('#stream')
-                folder = state / 'downloads' / created[0]['id'] / created[0]['defaultTabId'] / download
+                folder = state / 'downloads' / created[0]['id'] / created[0]['tabs'][0]['tabId'] / download
                 for _ in range(100):
                     if folder.exists():
                         break
                     time.sleep(.02)
                 assert folder.exists()
-                cancelled = cli('download', 'cancel', download.lower(), '--space', 'limit-a')['value']
+                cancelled = cli('download', 'cancel', download.lower(), '--space', 'limit-a', '--tab', tabs['limit-a'])['value']
                 assert cancelled['status'] == 'cancelled' and cancelled['cleanupError'] is None, cancelled
                 assert not folder.exists()
             if completed:

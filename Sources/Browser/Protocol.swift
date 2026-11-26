@@ -25,7 +25,7 @@ struct Request: Codable {
     static let arities: [String: ClosedRange<Int>] = ["help":0...2, "capabilities":0...0, "version":0...0, "daemon":0...0,
             "status":0...0, "shutdown":0...0, "space.list":0...0, "space.create":1...1,
             "space.info":1...1, "space.delete":1...1, "tab.list":0...0, "tab.new":0...1,
-            "tab.close":1...1, "tab.default":1...1, "open":1...1, "reload":0...0,
+            "tab.close":0...0, "open":1...1, "reload":0...0,
             "snapshot":0...0, "state":0...0, "evaluate":1...1, "click":1...1,
             "fill":2...2, "screenshot":0...0, "wait":0...1, "diagnostics":0...0,
             "dialog.list":0...0, "dialog.respond":2...2, "space.suspend":1...1, "space.resume":1...1,
@@ -35,13 +35,12 @@ struct Request: Codable {
 
     static let clientOptions: Set<String> = ["socket", "data-dir"]
     static let frameCommands = ["snapshot", "click", "fill", "wait", "scroll", "select", "check", "uncheck"]
-    static let explicitTabCommands = ["focus", "key", "viewport.set", "back", "forward", "scroll", "select", "check", "uncheck"]
 
     static func allowedOptions(for command: String, includingClientOptions: Bool = false) -> Set<String> {
         var allowed: Set<String> = includingClientOptions ? clientOptions : []
         if !["help", "capabilities", "version", "daemon", "status", "shutdown"].contains(command), !command.hasPrefix("space.") {
             allowed.insert("space")
-            if !command.hasPrefix("tab.") { allowed.insert("tab") }
+            if !["tab.list", "tab.new"].contains(command) { allowed.insert("tab") }
         }
         if (["open", "reload", "tab.new", "evaluate", "screenshot", "frame.list", "focus", "key", "back", "forward"] + frameCommands).contains(command) { allowed.insert("timeout") }
         if frameCommands.contains(command) { allowed.insert("frame") }
@@ -71,7 +70,10 @@ struct Request: Codable {
             throw BrowserError("invalid_arguments", "\(display) 参数数量不正确（需要 \(expected) 个，实际 \(args.count) 个）；运行 awb help \(display) 查看用法")
         }
         let allowed = Self.allowedOptions(for: command)
-        if Self.explicitTabCommands.contains(command), options["tab"]?.isEmpty != false {
+        if allowed.contains("space"), options["space"]?.isEmpty != false {
+            throw BrowserError("space_required", "\(display) 必须显式指定 --space NAME_OR_ID")
+        }
+        if allowed.contains("tab"), options["tab"]?.isEmpty != false {
             throw BrowserError("invalid_arguments", "\(display) 必须显式指定 --tab ID（先用 awb tab list --space SPACE 或 space info 获取 Tab UUID）")
         }
         if ["focus", "key"].contains(command), options["frame"] != nil {
@@ -185,7 +187,7 @@ func failure(_ error: Error) -> [String: Any] {
 struct Options {
     private static let commandGroups: [String: [String]] = [
         "space": ["create", "list", "info", "suspend", "resume", "delete"],
-        "tab": ["list", "new", "close", "default"],
+        "tab": ["list", "new", "close"],
         "frame": ["list"],
         "dialog": ["list", "respond"],
         "download": ["list", "wait", "cancel"],

@@ -40,7 +40,7 @@ def verify_independent_proxies(out, cli, restart, whistle_a, site_a, events_a):
     created = {}
 
     def evaluate(name, script):
-        return cli('evaluate', script, '--space', name)['value']
+        return cli('evaluate', script, '--space', name, '--tab', created[name]['tabs'][0]['tabId'])['value']
 
     def evidence(route, url):
         name, whistle, site, events = route
@@ -65,18 +65,18 @@ def verify_independent_proxies(out, cli, restart, whistle_a, site_a, events_a):
 
         def visit(route):
             name, whistle, site, _ = route
-            cli('open', url, '--space', name)
+            cli('open', url, '--space', name, '--tab', created[name]['tabs'][0]['tabId'])
             page = evaluate(name, '({nonce:window.fixtureNonce,url:location.href})')
             assert page == {'nonce': site.fixture_nonce, 'url': url}, page
-            cli('fill', '#message', name, '--space', name)
-            cli('click', '#save', '--space', name)
+            cli('fill', '#message', name, '--space', name, '--tab', created[name]['tabs'][0]['tabId'])
+            cli('click', '#save', '--space', name, '--tab', created[name]['tabs'][0]['tabId'])
             actual = evaluate(name, 'document.querySelector("#result").textContent')
             assert actual == name, actual
             resource = f'https://example.com/resource?independent={token}&phase={phase}'
             response = cli('evaluate', f'fetch({json.dumps(resource)}).then(r=>r.json())',
-                           '--await', '--space', name)['value']
+                           '--await', '--space', name, '--tab', created[name]['tabs'][0]['tabId'])['value']
             assert response['nonce'] == site.fixture_nonce, response
-            cli('screenshot', '--space', name, '--out', str(directory / f'{phase}-{name}.png'))
+            cli('screenshot', '--space', name, '--tab', created[name]['tabs'][0]['tabId'], '--out', str(directory / f'{phase}-{name}.png'))
             return {'page': page, 'interaction': actual, 'resource': response,
                     'navigationEvidence': evidence(route, url), 'resourceEvidence': evidence(route, resource)}
 
@@ -113,9 +113,9 @@ def verify_independent_proxies(out, cli, restart, whistle_a, site_a, events_a):
             info = cli('space', 'info', name)
             assert info['proxy'] == whistle.url and info['id'] == created[name]['id']
             assert info['dataStoreId'] == created[name]['dataStoreId']
-            assert info['defaultTabId'] == created[name]['defaultTabId']
+            assert info['tabs'][0]['tabId'] == created[name]['tabs'][0]['tabId']
             assert info['tls'] == created[name]['tls']
-            cli('wait', '--space', name)
+            cli('wait', '--space', name, '--tab', created[name]['tabs'][0]['tabId'])
             assert evaluate(name, 'window.fixtureNonce') == site.fixture_nonce
             storage = evaluate(name, read_storage)
             assert storage == {'cookie': f'route={name}', 'local': name}, storage
@@ -126,7 +126,7 @@ def verify_independent_proxies(out, cli, restart, whistle_a, site_a, events_a):
             assert sleeping['lifecycle'] == 'suspended' and sleeping['liveWebViews'] == 0
             assert sleeping['proxy'] == whistle.url and sleeping['tls'] == created[name]['tls']
             cli('space', 'resume', name)
-            cli('wait', '--space', name)
+            cli('wait', '--space', name, '--tab', created[name]['tabs'][0]['tabId'])
             assert evaluate(name, read_storage) == {'cookie': f'route={name}', 'local': name}
         round_trip('after-resume')
         report['suspendResumeVerified'] = True
@@ -134,8 +134,10 @@ def verify_independent_proxies(out, cli, restart, whistle_a, site_a, events_a):
         # A direct control loads the same public URL successfully, making an offline
         # proxy error meaningful rather than a consequence of an unreachable origin.
         offline_url = f'https://example.com/?independent={token}&phase=offline'
-        cli('space', 'create', 'proxy-direct-control', '--proxy', 'direct')
-        cli('open', offline_url, '--space', 'proxy-direct-control')
+        control = cli('space', 'create', 'proxy-direct-control', '--proxy', 'direct')
+        created['proxy-direct-control'] = control
+        control_tab = control['tabs'][0]['tabId']
+        cli('open', offline_url, '--space', 'proxy-direct-control', '--tab', control_tab)
         direct = evaluate('proxy-direct-control', '({title:document.title,nonce:window.fixtureNonce||null})')
         assert direct == {'title': 'Example Domain', 'nonce': None}, direct
         before_a = len(events_a.items)
@@ -143,11 +145,11 @@ def verify_independent_proxies(out, cli, restart, whistle_a, site_a, events_a):
         whistle_a.sessions()
         whistle_a.close()
         with ThreadPoolExecutor(2) as pool:
-            failed = pool.submit(cli, 'open', offline_url, '--space', 'proxy-a', '--timeout', '5000', ok=False)
-            healthy = pool.submit(cli, 'open', offline_url, '--space', 'proxy-b')
+            failed = pool.submit(cli, 'open', offline_url, '--space', 'proxy-a', '--tab', created['proxy-a']['tabs'][0]['tabId'], '--timeout', '5000', ok=False)
+            healthy = pool.submit(cli, 'open', offline_url, '--space', 'proxy-b', '--tab', created['proxy-b']['tabs'][0]['tabId'])
             error, _ = failed.result(), healthy.result()
         assert error['code'] == 'operation_failed', error
-        diagnostics = cli('diagnostics', '--space', 'proxy-a')['value']['events']
+        diagnostics = cli('diagnostics', '--space', 'proxy-a', '--tab', created['proxy-a']['tabs'][0]['tabId'])['value']['events']
         assert any(e.get('reason') == 'connection_failed' and e['source'] == 'webkit' for e in diagnostics), diagnostics
         assert len(events_a.items) == before_a, events_a.items[before_a:]
         hits_b = events_b.items[before_b:]
@@ -165,7 +167,7 @@ def verify_independent_proxies(out, cli, restart, whistle_a, site_a, events_a):
                 cleanup.callback(site_b.server_close)
                 cleanup.callback(site_b.shutdown)
                 cleanup.callback(whistle_b.close)
-                for name in (*created, 'proxy-direct-control'):
+                for name in created:
                     if any(s['name'] == name for s in cli('space', 'list')):
                         cli('space', 'delete', name)
         except Exception:

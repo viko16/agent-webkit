@@ -11,8 +11,9 @@ def verify_capacity(cli, base, out, start, stop, state):
                        BROWSER_MAX_POPUPS_PER_SPACE='1')
     stop(); start(extra_env=environment)
     try:
+        tabs = {}
         for name in names:
-            cli('space', 'create', name, '--proxy', 'direct')
+            tabs[name] = cli('space', 'create', name, '--proxy', 'direct')['tabs'][0]['tabId']
         cli('space', 'create', 'capacity-excess', '--proxy', 'direct', error='resource_limit')
         first = cli('tab', 'new', '--space', names[0])['tabId']
         cli('tab', 'new', '--space', names[1], error='resource_limit')
@@ -23,24 +24,24 @@ def verify_capacity(cli, base, out, start, stop, state):
         cli('space', 'resume', names[2])
         cli('space', 'resume', names[0], error='resource_limit')
         assert cli('space', 'info', names[0])['liveWebViews'] == 0
-        cli('tab', 'close', second, '--space', names[0])
+        cli('tab', 'close', '--tab', second, '--space', names[0])
         cli('space', 'resume', names[0])
         cli('space', 'suspend', names[2])
-        cli('tab', 'close', first, '--space', names[0])
-        cli('open', urljoin(base, '/popups'), '--space', names[0])
-        popup = cli('click', '#blank', '--wait-for-popup', '--space', names[0])['value']['newTabId']
+        cli('tab', 'close', '--tab', first, '--space', names[0])
+        cli('open', urljoin(base, '/popups'), '--space', names[0], '--tab', tabs[names[0]])
+        popup = cli('click', '#blank', '--wait-for-popup', '--space', names[0], '--tab', tabs[names[0]])['value']['newTabId']
         cli('wait', '--space', names[0], '--tab', popup)
-        cli('click', '#blank', '--wait-for-popup', '--timeout', '500', '--space', names[0], error='resource_limit')
+        cli('click', '#blank', '--wait-for-popup', '--timeout', '500', '--space', names[0], '--tab', tabs[names[0]], error='resource_limit')
         assert len(cli('tab', 'list', '--space', names[0])) == 2
         cli('space', 'suspend', names[0])
         cli('space', 'resume', names[0])
-        cli('wait', '--space', names[0])
-        cli('click', '#blank', '--wait-for-popup', '--timeout', '500', '--space', names[0], error='resource_limit')
+        cli('wait', '--space', names[0], '--tab', tabs[names[0]])
+        cli('click', '#blank', '--wait-for-popup', '--timeout', '500', '--space', names[0], '--tab', tabs[names[0]], error='resource_limit')
         stop(); start(extra_env=environment)
-        cli('wait', '--space', names[0])
-        cli('click', '#blank', '--wait-for-popup', '--timeout', '500', '--space', names[0], error='resource_limit')
-        cli('open', base, '--space', names[1])
-        assert cli('evaluate', 'document.title', '--space', names[1])['value']
+        cli('wait', '--space', names[0], '--tab', tabs[names[0]])
+        cli('click', '#blank', '--wait-for-popup', '--timeout', '500', '--space', names[0], '--tab', tabs[names[0]], error='resource_limit')
+        cli('open', base, '--space', names[1], '--tab', tabs[names[1]])
+        assert cli('evaluate', 'document.title', '--space', names[1], '--tab', tabs[names[1]])['value']
         before = {space['id']: [tab['tabId'] for tab in space['tabs']] for space in cli('space', 'list')}
         stop(); start(extra_env=dict(environment, BROWSER_MAX_LIVE_WEBVIEWS='1'))
         assert cli('status')['liveWebViews'] <= 1
@@ -70,17 +71,17 @@ def verify_lowered_popup_quota(cli, base, start, stop, state):
     stop(); start(extra_env={'BROWSER_MAX_POPUPS_PER_SPACE': '2'})
     try:
         space = cli('space', 'create', name, '--proxy', 'direct')
-        cli('open', urljoin(base, '/popups'), '--space', name)
+        cli('open', urljoin(base, '/popups'), '--space', name, '--tab', space['tabs'][0]['tabId'])
         popups = []
         for _ in range(2):
-            popup = cli('click', '#blank', '--wait-for-popup', '--space', name)['value']['newTabId']
+            popup = cli('click', '#blank', '--wait-for-popup', '--space', name, '--tab', space['tabs'][0]['tabId'])['value']['newTabId']
             cli('wait', '--space', name, '--tab', popup)
             popups.append(popup)
         tab_ids = [tab['tabId'] for tab in cli('tab', 'list', '--space', name)]
         cli('space', 'suspend', name)
         stop(); start(extra_env={'BROWSER_MAX_POPUPS_PER_SPACE': '1'})
         cli('space', 'resume', name, error='resource_limit')
-        cli('snapshot', '--space', name, error='resource_limit')
+        cli('snapshot', '--space', name, '--tab', space['tabs'][0]['tabId'], error='resource_limit')
         assert cli('space', 'info', name)['liveWebViews'] == 0
         assert [tab['tabId'] for tab in cli('tab', 'list', '--space', name)] == tab_ids
         stop()
@@ -95,15 +96,15 @@ def verify_lowered_popup_quota(cli, base, start, stop, state):
         assert blocked['lifecycle'] == 'suspended' and blocked['liveWebViews'] == 0 and blocked['resourceBlockedReason'], blocked
         assert [tab['tabId'] for tab in blocked['tabs']] == tab_ids
         cli('space', 'resume', name, error='resource_limit')
-        cli('tab', 'close', popups[-1], '--space', name)
+        cli('tab', 'close', '--tab', popups[-1], '--space', name)
         cli('space', 'resume', name)
-        cli('wait', '--space', name)
+        cli('wait', '--space', name, '--tab', space['tabs'][0]['tabId'])
         cli('wait', '--space', name, '--tab', popups[0])
-        cli('click', '#blank', '--wait-for-popup', '--timeout', '500', '--space', name, error='resource_limit')
+        cli('click', '#blank', '--wait-for-popup', '--timeout', '500', '--space', name, '--tab', space['tabs'][0]['tabId'], error='resource_limit')
         stop(); start(extra_env={'BROWSER_MAX_POPUPS_PER_SPACE': '1'})
         restored = cli('space', 'info', name)
         assert restored['lifecycle'] == 'active' and restored['liveWebViews'] == 2, restored
-        assert [tab['tabId'] for tab in restored['tabs']] == [space['defaultTabId'], popups[0]]
+        assert [tab['tabId'] for tab in restored['tabs']] == [space['tabs'][0]['tabId'], popups[0]]
     finally:
         for item in cli('space', 'list'):
             if item['name'] == name:

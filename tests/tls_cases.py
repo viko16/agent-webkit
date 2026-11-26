@@ -24,9 +24,9 @@ def verify_tls_cases(out, cli, restart):
         plain, _ = origin()
         servers.append(plain)
         file_url = f'http://127.0.0.1:{plain.server_address[1]}/files'
-        cli('space', 'create', 'tls-local', '--proxy', 'direct', '--ca-cert', str(directory / 'ca.pem'))
-        cli('space', 'create', 'tls-other-ca', '--proxy', 'direct', '--ca-cert', str(out / 'whistle-ca.pem'))
-        cli('space', 'create', 'tls-insecure', '--proxy', 'direct', '--ignore-certificate-errors')
+        local_tab = cli('space', 'create', 'tls-local', '--proxy', 'direct', '--ca-cert', str(directory / 'ca.pem'))['tabs'][0]['tabId']
+        other_tab = cli('space', 'create', 'tls-other-ca', '--proxy', 'direct', '--ca-cert', str(out / 'whistle-ca.pem'))['tabs'][0]['tabId']
+        insecure_tab = cli('space', 'create', 'tls-insecure', '--proxy', 'direct', '--ignore-certificate-errors')['tabs'][0]['tabId']
         for name, san, days in [('valid', 'IP:127.0.0.1', '2'), ('wrong-host', 'DNS:wrong.example', '2'), ('expired', 'IP:127.0.0.1', '-1')]:
             (directory / f'{name}.ext').write_text(f'subjectAltName={san}\nbasicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n')
             openssl('req', '-new', '-newkey', 'rsa:2048', '-nodes', '-sha256', '-subj', '/CN=Agent WebKit TLS Fixture', '-keyout', f'{name}.key', '-out', f'{name}.csr')
@@ -44,37 +44,37 @@ def verify_tls_cases(out, cli, restart):
             servers.append(server)
             url = f'https://127.0.0.1:{server.server_address[1]}/'
             if name == 'valid':
-                page = cli('open', url, '--space', 'tls-local')
+                page = cli('open', url, '--space', 'tls-local', '--tab', local_tab)
                 assert page['page']['lastTLSChallenge']['accepted'] is True
                 results['matchingCAAccepted'] = True
-                results['unrelatedCARejected'] = cli('open', url, '--space', 'tls-other-ca', ok=False)
+                results['unrelatedCARejected'] = cli('open', url, '--space', 'tls-other-ca', '--tab', other_tab, ok=False)
                 assert results['unrelatedCARejected']['code'] == 'certificate_rejected'
                 # Persisted trust is certificate data, not a dependency on the original file path.
                 (directory / 'ca.pem').rename(directory / 'ca-renamed.pem')
                 restart()
-                restored = cli('open', url, '--space', 'tls-local')
+                restored = cli('open', url, '--space', 'tls-local', '--tab', local_tab)
                 assert restored['page']['tls']['policy'] == 'custom-ca'
-                assert cli('evaluate', 'window.fixtureNonce', '--space', 'tls-local')['value'] == server.fixture_nonce
+                assert cli('evaluate', 'window.fixtureNonce', '--space', 'tls-local', '--tab', local_tab)['value'] == server.fixture_nonce
                 results['caPersistedWithoutSourceFile'] = True
                 (directory / 'ca-renamed.pem').rename(directory / 'ca.pem')
             else:
-                error = cli('open', url, '--space', 'tls-local', ok=False)
+                error = cli('open', url, '--space', 'tls-local', '--tab', local_tab, ok=False)
                 assert error['code'] == 'certificate_rejected', error
                 results[name] = error
-                insecure = cli('open', url, '--space', 'tls-insecure')
+                insecure = cli('open', url, '--space', 'tls-insecure', '--tab', insecure_tab)
                 assert insecure['page']['lastTLSChallenge']['certificateErrorsIgnored'] is True
                 # Repeating a rejected URL can make WKWebView.load return no navigation token.
                 # It must never report success from the still-visible previous document.
                 for _ in range(3):
-                    assert cli('open', url, '--space', 'tls-local', ok=False)['code'] == 'certificate_rejected'
-                diagnostic = cli('diagnostics', '--space', 'tls-local')['value']
+                    assert cli('open', url, '--space', 'tls-local', '--tab', local_tab, ok=False)['code'] == 'certificate_rejected'
+                diagnostic = cli('diagnostics', '--space', 'tls-local', '--tab', local_tab)['value']
                 assert any(e.get('reason') == 'certificate_rejected' and e['source'] == 'webkit'
                            and e['origin'] == url.rstrip('/') for e in diagnostic['events']), diagnostic
                 results[name + 'AcceptedOnlyWithInsecureFlag'] = True
             # The exact WebKit-provided popup configuration must retain the Space's TLS policy.
-            parent = cli('space', 'info', 'tls-local')['defaultTabId']
+            parent = cli('space', 'info', 'tls-local')['tabs'][0]['tabId']
             before = {t['tabId'] for t in cli('tab', 'list', '--space', 'tls-local')}
-            assert cli('evaluate', f'Boolean(window.open({json.dumps(url)}))', '--space', 'tls-local')['value'] is True
+            assert cli('evaluate', f'Boolean(window.open({json.dumps(url)}))', '--space', 'tls-local', '--tab', local_tab)['value'] is True
             tabs = cli('tab', 'list', '--space', 'tls-local')
             popup = next(t['tabId'] for t in tabs if t['tabId'] not in before)
             if name == 'valid':
@@ -83,12 +83,12 @@ def verify_tls_cases(out, cli, restart):
                 assert accepted['page']['tls']['policy'] == 'custom-ca'
             else:
                 assert cli('wait', '--space', 'tls-local', '--tab', popup, ok=False)['code'] == 'certificate_rejected'
-            assert cli('space', 'info', 'tls-local')['defaultTabId'] == parent
-            cli('tab', 'close', popup, '--space', 'tls-local')
+            assert cli('space', 'info', 'tls-local')['tabs'][0]['tabId'] == parent
+            cli('tab', 'close', '--tab', popup, '--space', 'tls-local')
             results[name + 'PopupInheritsTLS'] = True
             redirect = f'http://127.0.0.1:{plain.server_address[1]}/download-redirect?' + urlencode({'to': url + 'download?mode=ok'})
-            results[name + 'DownloadTLS'] = verify_download_tls(cli, file_url, redirect, 'tls-local', name == 'valid')
-            results[name + 'InsecureDownloadTLS'] = verify_download_tls(cli, file_url, redirect, 'tls-insecure', True)
+            results[name + 'DownloadTLS'] = verify_download_tls(cli, file_url, redirect, 'tls-local', local_tab, name == 'valid')
+            results[name + 'InsecureDownloadTLS'] = verify_download_tls(cli, file_url, redirect, 'tls-insecure', insecure_tab, True)
         results['passed'] = True
         return results
     finally:

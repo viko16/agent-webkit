@@ -9,11 +9,12 @@ from urllib.parse import urljoin
 def verify_diagnostics(cli, base, out, restart):
     name = 'diagnostic'
     other = 'diagnostic-other'
-    cli('space', 'create', name, '--proxy', 'direct')
-    cli('space', 'create', other, '--proxy', 'direct')
+    tab = cli('space', 'create', name, '--proxy', 'direct')['tabs'][0]['tabId']
+    peer_tab = cli('space', 'create', other, '--proxy', 'direct')['tabs'][0]['tabId']
 
     def command(*args, **kwargs):
-        return cli(*args, '--space', name, **kwargs)
+        target = () if args[0] == 'tab' or '--tab' in args else ('--tab', tab)
+        return cli(*args, '--space', name, *target, **kwargs)
 
     def js(source, **kwargs):
         return command('evaluate', source, **kwargs)['value']
@@ -105,8 +106,8 @@ def verify_diagnostics(cli, base, out, restart):
         command('evaluate', 'console.error("diagnostic-secret"); true', '--tab', child)
         until(lambda v: any(e['kind'] == 'console' for e in v['events']), '--tab', child)
         assert not any(e['kind'] == 'console' for e in logs()['events'])
-        assert not any(e['kind'] == 'console' for e in cli('diagnostics', '--space', other)['value']['events'])
-        command('tab', 'close', child)
+        assert not any(e['kind'] == 'console' for e in cli('diagnostics', '--space', other, '--tab', peer_tab)['value']['events'])
+        command('tab', 'close', '--tab', child)
         logs('--clear')
         command('evaluate', 'new Promise(resolve=>{const f=document.createElement("iframe"); f.onload=()=>{f.contentWindow.webkit.messageHandlers.agentWebKitDiagnostics.postMessage({events:[{kind:"console",level:"error"}]}); console.warn("frame barrier"); resolve(true)}; f.src="/context-frame"; document.body.append(f)})', '--await')
         framed = until(lambda v: any(e['kind'] == 'console' for e in v['events']))

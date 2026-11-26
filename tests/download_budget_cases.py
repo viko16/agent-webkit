@@ -125,7 +125,7 @@ def concurrent_case(out, binary, *, same_space, known_length, stale_scan=False, 
         for index in range(2):
             name_space = 'budget-a' if same_space or index == 0 else 'budget-b'
             if not same_space or index == 0:
-                tab = cli('space', 'create', name_space, '--proxy', 'direct')['defaultTabId']
+                tab = cli('space', 'create', name_space, '--proxy', 'direct')['tabs'][0]['tabId']
             else:
                 tab = cli('tab', 'new', '--space', name_space)['tabId']
             flags = ('--space', name_space, '--tab', tab)

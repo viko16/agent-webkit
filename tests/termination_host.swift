@@ -19,7 +19,7 @@ final class TerminationHost: NSObject, NSApplicationDelegate {
             model = try BrowserModel(directory: directory)
             observer = ObserverWindow(model: model, socketPath: directory.appendingPathComponent("browser.sock").path)
             server = SocketServer(path: directory.appendingPathComponent("browser.sock").path)
-            try server.start { [self] request in await model.handle(request) }
+            try server.start { [self] request in await model.handle(request, origin: .agent) }
             Task { @MainActor in try await model.restore() }
             timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.poll() }

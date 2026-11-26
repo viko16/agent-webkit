@@ -126,8 +126,10 @@ def main():
         daemon.wait(timeout=15)
         assert daemon.returncode == 0
 
+    tabs = {}
+
     def evaluate(space, script, tab=None):
-        extra = ['--tab', tab] if tab else []
+        extra = ['--tab', tab or tabs[space]]
         return cli('evaluate', script, '--space', space, *extra)['value']
 
     def sample(label):
@@ -200,54 +202,55 @@ def main():
         assert cli('space', 'create', 'invalid', '--proxy', 'direct', '--ca-cert', str(whistle.ca_path), '--ignore-certificate-errors', ok=False)['code'] == 'invalid_arguments'
         a = cli('space', 'create', 'admin', '--proxy', whistle.url, '--ignore-certificate-errors')
         b = cli('space', 'create', 'user', '--proxy', 'direct')
+        tabs.update(admin=a['tabs'][0]['tabId'], user=b['tabs'][0]['tabId'])
         assert a['id'] != b['id'] and a['dataStoreId'] != b['dataStoreId']
-        assert cli('state', '--space', 'admin', '--tab', b['defaultTabId'], ok=False)['code'] == 'tab_not_found'
+        assert cli('state', '--space', 'admin', '--tab', b['tabs'][0]['tabId'], ok=False)['code'] == 'tab_not_found'
         # B: real domain, same URL, real Whistle maps only the proxied Space to the local origin.
         target = f'https://example.com/?agent_webkit={site.fixture_nonce}'
-        cli('space', 'create', 'strict', '--proxy', whistle.url)
-        strict_before = cli('open', target, '--space', 'strict', ok=None)
+        tabs['strict'] = cli('space', 'create', 'strict', '--proxy', whistle.url)['tabs'][0]['tabId']
+        strict_before = cli('open', target, '--space', 'strict', '--tab', tabs['strict'], ok=None)
         if not args.whistle_existing:
             assert strict_before['ok'] is False, 'A fresh, untrusted Whistle CA must be rejected by system policy'
-        cli('space', 'create', 'whistle-ca', '--proxy', whistle.url, '--ca-cert', str(whistle.ca_path))
-        ca_result = cli('open', target, '--space', 'whistle-ca', ok=None)
+        tabs['whistle-ca'] = cli('space', 'create', 'whistle-ca', '--proxy', whistle.url, '--ca-cert', str(whistle.ca_path))['tabs'][0]['tabId']
+        ca_result = cli('open', target, '--space', 'whistle-ca', '--tab', tabs['whistle-ca'], ok=None)
         cli('space', 'delete', 'whistle-ca')
-        proxied = cli('open', target, '--space', 'admin')
+        proxied = cli('open', target, '--space', 'admin', '--tab', tabs['admin'])
         observed = evaluate('admin', '({title:document.title,nonce:window.fixtureNonce,url:location.href})')
         assert observed == {'title': 'Agent WebKit Fixture', 'nonce': site.fixture_nonce, 'url': target}, observed
         assert proxied['page']['lastTLSChallenge']['accepted'] is True, proxied
-        assert cli('snapshot', '--space', 'admin')['value']['elements']
-        cli('screenshot', '--space', 'admin', '--out', str(out / 'b-proxied.png'))
+        assert cli('snapshot', '--space', 'admin', '--tab', tabs['admin'])['value']['elements']
+        cli('screenshot', '--space', 'admin', '--tab', tabs['admin'], '--out', str(out / 'b-proxied.png'))
 
         def mapped_sessions():
             return [item for item in whistle.sessions() if item.get('url') == target and item.get('req', {}).get('method') == 'GET']
 
         before_direct = mapped_sessions()
         assert before_direct, 'Whistle must contain the actual HTTPS GET, not just a successful configuration'
-        cli('open', target, '--space', 'user')
+        cli('open', target, '--space', 'user', '--tab', tabs['user'])
         direct = evaluate('user', '({title:document.title,nonce:window.fixtureNonce||null,url:location.href})')
         assert direct == {'title': 'Example Domain', 'nonce': None, 'url': target}, direct
-        cli('screenshot', '--space', 'user', '--out', str(out / 'b-direct.png'))
+        cli('screenshot', '--space', 'user', '--tab', tabs['user'], '--out', str(out / 'b-direct.png'))
         after_direct = mapped_sessions()
         assert {item['id'] for item in before_direct} == {item['id'] for item in after_direct}, 'direct Space generated a Whistle session'
         local_hits = [event for event in site_events.items if f'agent_webkit={site.fixture_nonce}' in event['path']]
         expected_hits = 1 + int(ca_result['ok']) + int(strict_before['ok'])
         assert len(local_hits) == expected_hits, ('direct Space reached the local origin', local_hits)
-        strict_after = cli('open', target, '--space', 'strict', ok=None)
+        strict_after = cli('open', target, '--space', 'strict', '--tab', tabs['strict'], ok=None)
         assert strict_after['ok'] == strict_before['ok'], 'TLS bypass leaked to a system-policy Space'
         cli('space', 'delete', 'strict')
         inherited_tab = cli('tab', 'new', target, '--space', 'admin')['tabId']
         assert evaluate('admin', 'window.fixtureNonce', inherited_tab) == site.fixture_nonce
-        cli('tab', 'close', inherited_tab, '--space', 'admin')
+        cli('tab', 'close', '--tab', inherited_tab, '--space', 'admin')
         report['tests']['B'] = {'passed': True, 'url': target, 'proxiedPage': observed, 'directPage': direct,
             'localOriginRequest': local_hits[0], 'whistleSessionIds': [item['id'] for item in before_direct],
             'directAddedWhistleSessions': 0, 'systemPolicyBeforeCustomCA': strict_before,
             'systemPolicyAfterCustomCA': strict_after, 'whistleWithCustomCA': ca_result,
             'insecurePolicyIsolated': True, 'newTabInheritsPolicy': True}
-        report['tests']['network'] = verify_network_cases(cli, whistle, site, site_events)
+        report['tests']['network'] = verify_network_cases(cli, whistle, site, site_events, tabs)
         report['tests']['TLS'] = verify_tls_cases(out, cli, lambda: (stop(), start()))
         # Test the same origin with persistent cookies, avoiding session-cookie restart assumptions.
         for name, value in [('admin', 'A'), ('user', 'B')]:
-            cli('open', base, '--space', name)
+            cli('open', base, '--space', name, '--tab', tabs[name])
             evaluate(name, f"document.cookie='shared={value}; Max-Age=86400; Path=/; SameSite=Lax';localStorage.setItem('shared','{value}');true")
         read = "({cookie:document.cookie,local:localStorage.getItem('shared')})"
         for name, expected in [('admin', 'A'), ('user', 'B')]:
@@ -261,38 +264,38 @@ def main():
         time.sleep(1)
         start()
         for name, expected in [('admin', 'A'), ('user', 'B')]:
-            cli('wait', '--space', name)
+            cli('wait', '--space', name, '--tab', tabs[name])
             value = evaluate(name, read)
             assert value['cookie'] == f'shared={expected}' and value['local'] == expected, value
         restored = cli('space', 'info', 'admin')
         assert restored['id'] == a['id'] and any(t['tabId'] == tab for t in restored['tabs'])
         assert evaluate('admin', read, tab)['local'] == 'A'
         report['tests']['A'] = {'passed': True, 'persistentCookie': True, 'localStorage': True, 'stableSpaceAndTabIds': True}
-        restored_tls = cli('open', target, '--space', 'admin')
+        restored_tls = cli('open', target, '--space', 'admin', '--tab', tabs['admin'])
         assert restored_tls['page']['tls']['policy'] == a['tls']['policy']
         assert evaluate('admin', 'window.fixtureNonce') == site.fixture_nonce
         report['tests']['B']['tlsPolicyPersistedAfterRestart'] = True
-        cli('tab', 'close', tab, '--space', 'admin')
+        cli('tab', 'close', '--tab', tab, '--space', 'admin')
         # Duplicate daemon must fail without unlinking the live socket.
         duplicate = subprocess.run([str(app_binary), 'daemon'], env=env, capture_output=True, text=True, timeout=10)
         assert duplicate.returncode != 0 and cli('status')['pid'] == daemon.pid
         # Independent CLI processes navigate simultaneously; origin has a deterministic 0.8s delay.
         def agent(name, text):
-            cli('open', base + '?delay=0.8', '--space', name)
-            snapshot = cli('snapshot', '--space', name)['value']
+            cli('open', base + '?delay=0.8', '--space', name, '--tab', tabs[name])
+            snapshot = cli('snapshot', '--space', name, '--tab', tabs[name])['value']
             field = next(el['ref'] for el in snapshot['elements'] if el['tag'] == 'input')
             button = next(el['ref'] for el in snapshot['elements'] if el['tag'] == 'button')
-            repeat = cli('snapshot', '--space', name)['value']
+            repeat = cli('snapshot', '--space', name, '--tab', tabs[name])['value']
             assert [e['ref'] for e in repeat['elements']] == [e['ref'] for e in snapshot['elements']]
-            cli('fill', field, text, '--space', name)
-            click = cli('click', button, '--space', name)['value']
+            cli('fill', field, text, '--space', name, '--tab', tabs[name])
+            click = cli('click', button, '--space', name, '--tab', tabs[name])['value']
             assert click['method'] == 'dom' and click['nativeVerified'] is False
-            cli('wait', '#later', '--space', name)
+            cli('wait', '#later', '--space', name, '--tab', tabs[name])
             actual = evaluate(name, "({text:document.querySelector('#result').textContent,trusted:window.lastTrusted})")
             assert actual == {'text': text, 'trusted': False}, actual
-            cli('screenshot', '--space', name, '--out', str(out / f'{name}.png'))
-            cli('open', base, '--space', name)
-            assert 'stale_ref' in cli('click', button, '--space', name, ok=False)['message']
+            cli('screenshot', '--space', name, '--tab', tabs[name], '--out', str(out / f'{name}.png'))
+            cli('open', base, '--space', name, '--tab', tabs[name])
+            assert 'stale_ref' in cli('click', button, '--space', name, '--tab', tabs[name], ok=False)['message']
             return actual
 
         began = time.monotonic()
@@ -310,18 +313,18 @@ def main():
                                  'frontmostPidBefore': focus_before, 'frontmostPidAfter': focus_after,
                                  'stableRefs': True, 'staleRefsRejected': True}
         # Wait errors must return bounded structured JSON, not block the daemon forever.
-        assert cli('wait', '#does-not-exist', '--space', 'user', '--timeout', '200', ok=False)['code'] == 'timeout'
+        assert cli('wait', '#does-not-exist', '--space', 'user', '--tab', tabs['user'], '--timeout', '200', ok=False)['code'] == 'timeout'
         for i in range(3):
             name = f'load{i}'
-            cli('space', 'create', name, '--proxy', 'direct')
-            cli('open', base, '--space', name)
+            tabs[name] = cli('space', 'create', name, '--proxy', 'direct')['tabs'][0]['tabId']
+            cli('open', base, '--space', name, '--tab', tabs[name])
         time.sleep(3)
         sample('five_spaces')
         stop()
         time.sleep(2)
         start()
         for name in ('admin', 'user', 'load0', 'load1', 'load2'):
-            cli('wait', '--space', name)
+            cli('wait', '--space', name, '--tab', tabs[name])
         time.sleep(3)
         sample('five_spaces_after_restart')
         for space in cli('space', 'list'):
@@ -331,8 +334,9 @@ def main():
         sample('after_delete')
         # Recreating the name gets a fresh store and cannot see the deleted data.
         new = cli('space', 'create', 'admin', '--proxy', 'direct')
+        tabs['admin'] = new['tabs'][0]['tabId']
         assert new['id'] != a['id']
-        cli('open', base, '--space', 'admin')
+        cli('open', base, '--space', 'admin', '--tab', tabs['admin'])
         assert evaluate('admin', read) == {'cookie': '', 'local': None}
         cli('space', 'delete', 'admin')
         report['tests']['uploads'] = verify_proxy_uploads(cli, target, out, site_events, site.fixture_nonce, whistle)
@@ -341,8 +345,8 @@ def main():
             report['tests']['independentProxies'] = verify_independent_proxies(
                 out, cli, lambda: (stop(), start()), whistle, site, site_events)
             whistle.close()
-            cli('space', 'create', 'offline', '--proxy', whistle.url, '--ignore-certificate-errors')
-            error = cli('open', 'https://www.example.com/?must-not-arrive', '--space', 'offline', '--timeout', '3000', ok=False)
+            tabs['offline'] = cli('space', 'create', 'offline', '--proxy', whistle.url, '--ignore-certificate-errors')['tabs'][0]['tabId']
+            error = cli('open', 'https://www.example.com/?must-not-arrive', '--space', 'offline', '--tab', tabs['offline'], '--timeout', '3000', ok=False)
             cli('space', 'delete', 'offline')
             report['tests']['B']['whistleOfflineFailsClosed'] = error
         report['tests']['D'] = {'passed': True, 'spaceCount': 5, 'deletionPurgedStores': True}

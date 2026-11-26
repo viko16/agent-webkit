@@ -2,7 +2,7 @@
 name: agent-webkit
 description: 使用 Agent WebKit 本机 `awb` CLI 操控隔离的 macOS WebKit Space/Tab，完成网页浏览、DOM 快照、表单交互、后台键盘、跨源 iframe、弹窗、文件上传下载、截图与诊断。适用于用户选择 Agent WebKit 的网页任务；不用于控制其他浏览器、修改系统代理或全局键鼠注入。
 metadata:
-  contract-version: "1"
+  contract-version: "2"
 ---
 
 # Agent WebKit (`awb`)
@@ -11,14 +11,16 @@ metadata:
 
 - **本 Skill 负责**：初始化检查、目标归属与并发模型、核心工作流、安全约束、错误恢复、独立验证与证据规范、人工接管及资源清理策略。
 - **具体命令用法与示例**：查 `awb help <command>` 或 `awb <command> --help`（人类与 Agent 可读纯文本）。
-- **精确参数规格、数值上限、按键白名单与错误码**：以当前安装二进制的 `awb capabilities` 为准（对应 `schemaVersion: 1`）。
+- **精确参数规格、数值上限、按键白名单与错误码**：以当前安装二进制的 `awb capabilities` 为准（对应 `schemaVersion: 2`）。
 - **输出约定**：除成功的 CLI `awb help` / `--help` / `-h` 输出纯文本外，其余命令返回**单行 JSON**（成功 `{"ok":true,"result":...}` 退出码 0，失败 `{"ok":false,"error":{"code":...,"message":...}}` 退出码 1）。
 
 ## 核心心智模型
 
 - **Space**：独立隔离空间，拥有持久化的网站数据（Cookie/LocalStorage）、独立 Tab 列表、代理和 TLS 策略。**同 Space 内顺序执行**（重叠返回 `space_busy`），**不同 Space 可并行**。
-- **Tab**：Space 内的页面。每个 Space 的 CLI 默认 Tab 固定，**不会被 GUI 切换、`tab new` 或弹窗改变**。部分命令强制要求 `--tab`，最佳实践是**始终显式携带 `--space` 和 `--tab`**。
-- **观察窗口（GUI）**：用户可在窗口中实时观看或先手动登录，再通过工具栏分享按钮复制接管命令（已含 `--space`、`--tab` 与可选 `--socket`）。CLI 从不激活窗口或抢占前台焦点。
+- **Tab**：Space 内的页面。CLI / IPC 契约 v2 有破坏性变更。操作已有标签页（包括单页 Space）必须**始终显式携带 `--space` 和 `--tab`**。
+- **观察窗口（GUI）**：用户可在窗口中实时观看或先手动登录，再通过工具栏分享按钮复制接管命令（已含 `--space`、`--tab` 与可选 `--socket`）。GUI 选择独立于 Agent 目标。
+
+切换 CLI/daemon 版本时请配套使用；v1 回退读取磁盘兼容字段，v2 的调用始终显式传入目标。
 
 ## 硬性约束
 
@@ -69,13 +71,13 @@ awb snapshot --space SPACE_ID --tab TAB_ID
 
 ### Space、Tab、导航与视口
 
-- **Space**：`space list` / `space info NAME_OR_ID` 查看 UUID、`defaultTabId`、Tab、代理/TLS 与 `lifecycle`；`space create NAME --proxy direct|http://127.0.0.1:PORT` 创建后代理不可修改；`space suspend` 释放 WebView 但保留 URL 与网站数据（丢失 JS 内存与未提交表单，有活跃下载时拒绝）；`space resume` 重新加载并需再 `wait`；`space delete` 删除网站数据并注意 `cleanupPending`。
-- **Tab**：`tab list`、`tab new [URL]`（不改 CLI 默认 Tab）、`tab close ID`（不能关闭最后一个）、`tab default ID`，均需 `--space`。
+- **Space**：`space list` / `space info NAME_OR_ID` 查看 UUID、Tab、代理/TLS 与 `lifecycle`；`space create NAME --proxy direct|http://127.0.0.1:PORT` 创建后代理不可修改；`space suspend` 释放 WebView 但保留 URL 与网站数据（丢失 JS 内存与未提交表单，有活跃下载时拒绝）；`space resume` 重新加载并需再 `wait`；`space delete` 删除网站数据并注意 `cleanupPending`。
+- **Tab**：`tab list --space S` 枚举，`tab new [URL] --space S` 返回新页 `tabId`。使用 `space list` 返回的真实 Space UUID；形如 UUID 的名称只能通过该 Space 自己的 ID 定位。新 Space 的初始页 ID 在 `tabs[0].tabId`。使用 `tab close --space S --tab T` 关闭；最后一页保留。若收到 `tab_not_found`，重新核实任务目标。
 - **导航与视口**：`open` / `reload` 可带 `--fail-on-http-error`；`back` / `forward` / `viewport set WIDTH HEIGHT` 必须显式 `--tab`（视口设置不跨休眠或重启保留；用 `viewport get` 读回实际 CSS 视口）。
 
 ### 观察：Snapshot、State、跨源 Frame 与 Evaluate
 
-- **状态查询（不占锁、不唤醒休眠）**：`awb state --space S [--tab T]`，读取 `url`、`title`、`httpStatus`、`responseURL`、`navigationId`、`navigationPhase`、`loading`、`pendingDialogs`、`activeDownloads`、`fileChooser`、`lastError`。
+- **状态查询（不占锁、不唤醒休眠）**：`awb state --space S --tab T`，读取 `url`、`title`、`httpStatus`、`responseURL`、`navigationId`、`navigationPhase`、`loading`、`pendingDialogs`、`activeDownloads`、`fileChooser`、`lastError`。
 - **DOM 快照**：`awb snapshot --space S --tab T`
   - 引用 `@eN-<epoch>` 在导航、重载或节点替换后可能失效，始终使用最近一次快照中的引用；选择器必须唯一，可用 `>>>` 进入**同源 iframe** 和 **open Shadow Root**（不支持 closed root）。
   - 大页面用 `--scope SELECTOR_OR_REF` 和 `--interactive` 缩小范围；重复元素用 `--role ROLE --name '精确名称'` 获取唯一引用。
@@ -149,5 +151,5 @@ awb snapshot --space SPACE_ID --tab TAB_ID
 - **人工接管**：遇到 CAPTCHA、MFA/必须人工登录、站点拒绝合成上传、必须原生文件面板、依赖 CSS `:hover` 且无法 DOM 触发的菜单、需要 IME 或白名单外的快捷键时，明确说明具体阻塞点，请用户在 Agent WebKit 观察窗口接管；完成后继续读取同一个 `--space` 和 `--tab`。
 - **资源清理**：
   - 仅关闭或删除**本任务明确创建且不再需要**的 Tab/Space；用户要求保留登录态时保留 Space（需要释放页面资源时可用 `space suspend`，有活跃下载先等待或取消）。
-  - 删除 Space 时注意 `cleanupPending`：为 `true` 表示空容器待后续清理，不能当成已完全移除。
+  - 删除 Space 时注意 `cleanupPending`：为 `true` 表示空容器待后续清理，可通过 `status.pendingStores` 核对。
   - **不要把 `shutdown --all` 当作普通任务清理**：它会影响共享 daemon 的全部 Space，仅在明确全局退出意图时使用。

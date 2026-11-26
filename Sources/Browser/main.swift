@@ -15,7 +15,7 @@ final class Application: NSObject, NSApplicationDelegate {
             observer = ObserverWindow(model: model, socketPath: options.socketPath)
             configureMenu()
             let server = SocketServer(path: options.socketPath)
-            try server.start { [model] request in await model.handle(request) }
+            try server.start { [model] request in await model.handle(request, origin: .agent) }
             self.server = server
             Task { @MainActor in
                 do { try await model.restore() }

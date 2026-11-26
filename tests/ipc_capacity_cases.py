@@ -18,7 +18,7 @@ from skill_workflow import cleanup_test_services, verify_cleanup
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def verify_capacity(cli, path):
+def verify_capacity(cli, path, tab):
     def raw(command, args=None, options=None):
         with socket.socket(socket.AF_UNIX) as client:
             client.settimeout(5)
@@ -32,7 +32,7 @@ def verify_capacity(cli, path):
 
     with ThreadPoolExecutor(1) as pool, ExitStack() as stack:
         accepted = pool.submit(raw, 'evaluate', ['new Promise(r=>setTimeout(()=>r("accepted"),1200))'],
-                               {'space': 'work', 'await': 'true', 'timeout': '3000'})
+                               {'space': 'work', 'tab': tab, 'await': 'true', 'timeout': '3000'})
         for _ in range(100):
             if cli('space', 'info', 'work')['busy']:
                 break
@@ -90,8 +90,8 @@ def main():
                 time.sleep(.05)
             else:
                 raise AssertionError('Startup timed out')
-            cli('space', 'create', 'work', '--proxy', 'direct')
-            cli('open', f'http://127.0.0.1:{site.server_address[1]}/index.html', '--space', 'work')
+            tab = cli('space', 'create', 'work', '--proxy', 'direct')['tabs'][0]['tabId']
+            cli('open', f'http://127.0.0.1:{site.server_address[1]}/index.html', '--space', 'work', '--tab', tab)
             # Existing contract cases include error expectations; adapt without hiding failures.
             def contract_cli(*args, error=None):
                 process = subprocess.run([str(binary), *args], env=env, capture_output=True, text=True, timeout=15)
@@ -102,7 +102,7 @@ def main():
                     return response
                 return response['result']
             contract = verify_live_contract(contract_cli, state / 'browser.sock')
-            result = verify_capacity(contract_cli, state / 'browser.sock')
+            result = verify_capacity(contract_cli, state / 'browser.sock', tab)
         finally:
             failed = sys.exc_info()[0] is not None
             errors = cleanup_test_services(cli, daemon, site)

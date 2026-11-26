@@ -101,10 +101,10 @@ def main():
         assert process.returncode == 0 and response['ok'], (args, response, process.stderr)
         return response['result']
 
-    def native(query, action='search'):
+    def native(query, action='search', **options):
         token = str(len(results))
         request = state / 'search-request.json'
-        request.write_text(json.dumps(dict(token=token, query=query, action=action)))
+        request.write_text(json.dumps(dict(token=token, query=query, action=action, **options)))
         for _ in range(100):
             assert daemon.poll() is None, 'Fixture app exited'
             response = out / 'search-response.json'
@@ -125,7 +125,7 @@ def main():
         assert result['selectedSpaceId'] == result['sidebarSpaceId'] == expected_id, result
         assert result['emptyVisible'] == (expected is None), result
         if expected:
-            assert result['displayedTabId'] == expected['defaultTabId'], result
+            assert result['displayedTabId'] == expected['tabs'][0]['tabId'], result
             assert result['displayedURL'] == base + '?space=' + expected['name'], result
             assert result['displayedInContent'], result
         else:
@@ -144,7 +144,7 @@ def main():
         assert result['displayedInContent'], result
         assert result['displayedTabId'] == space['tabs'][-1]['tabId'], (result, space)
         if previous:
-            assert space['defaultTabId'] == previous['defaultTabId'] != result['displayedTabId'], space
+            assert space['tabs'][0]['tabId'] == previous['tabs'][0]['tabId'] != result['displayedTabId'], space
             assert space['proxy'] == previous['proxy'] and space['tls'] == previous['tls'], space
             assert len(space['tabs']) == len(previous['tabs']) + 1, space
             assert [item for item in after if item['id'] != space['id']] == [
@@ -169,7 +169,7 @@ def main():
             first = cli('space', 'create', 'search-a', '--proxy', 'direct')
             second = cli('space', 'create', 'search-b', '--proxy', 'direct')
             for space in (first, second):
-                cli('open', base + '?space=' + space['name'], '--space', space['id'])
+                cli('open', base + '?space=' + space['name'], '--space', space['id'], '--tab', space['tabs'][0]['tabId'])
             search('', first, [first, second])
             search('search-b', second, [second])
             search('no-match', None, [])
@@ -181,11 +181,11 @@ def main():
             # A visible selection still takes priority over the fallback personal Space.
             selected = native('search-b', 'new-tab')
             assert selected['selectedSpaceId'] == second['id'] and selected['query'] == '', selected
-            assert cli('space', 'info', second['id'])['defaultTabId'] == second['defaultTabId']
+            assert cli('space', 'info', second['id'])['tabs'][0]['tabId'] == second['tabs'][0]['tabId']
 
             # The fallback target's busy state must disable the native command too.
             waiting = subprocess.Popen([str(binary), 'wait', '#never-created', '--timeout', '1500',
-                                        '--space', personal['id']], env=env, stdout=subprocess.PIPE,
+                                        '--space', personal['id'], '--tab', personal['tabs'][0]['tabId']], env=env, stdout=subprocess.PIPE,
                                        stderr=subprocess.PIPE, text=True)
             try:
                 for _ in range(100):
