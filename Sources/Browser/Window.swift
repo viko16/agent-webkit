@@ -136,6 +136,14 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
                     "spaceId": self.selectedSpace?.uuidString as Any? ?? NSNull(),
                     "tabId": self.displayed?.id.uuidString as Any? ?? NSNull()]
         }
+        model.tabsCommitted = { [weak self] spaceID, before, after in
+            guard let self, let selected = self.selectedTabs[spaceID],
+                  !after.contains(where: { $0.id == selected }),
+                  let index = before.firstIndex(where: { $0.id == selected }) else { return }
+            // A close shifts the right neighbor into the vacated index.
+            self.selectedTabs[spaceID] = after.isEmpty ? nil : after[min(index, after.count - 1)].id
+            self.saveSelection()
+        }
         model.willRemove = { [weak self] space in
             guard let self else { return }
             if space.tabs.contains(where: { $0 === self.displayed }) { self.displayed?.park(); self.displayed = nil }

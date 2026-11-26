@@ -1210,6 +1210,7 @@ final class BrowserModel {
     var records: [SpaceRecord] = []
     var changed: (() -> Void)?
     var willRemove: ((Space) -> Void)?
+    var tabsCommitted: ((UUID, [TabRecord], [TabRecord]) -> Void)?
     var observerState: (() -> [String: Any])?
     private let file: URL
     var storagePath: String { file.deletingLastPathComponent().path }
@@ -1337,7 +1338,11 @@ final class BrowserModel {
         var candidate = records
         if let index = candidate.firstIndex(where: { $0.id == record.id }) { candidate[index] = record }
         try commitRecords(candidate)
+        let previous = space.record.tabs
         space.record = record
+        if previous.map(\.id) != record.tabs.map(\.id) {
+            tabsCommitted?(record.id, previous, record.tabs)
+        }
     }
 
     func saveAll() throws {

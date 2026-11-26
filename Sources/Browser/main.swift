@@ -49,7 +49,7 @@ final class Application: NSObject, NSApplicationDelegate {
         file.addItem(.separator())
         let close = file.addItem(withTitle: "关闭当前标签页", action: #selector(ObserverWindow.closeCurrentTab(_:)), keyEquivalent: "w")
         close.target = observer
-        let hide = file.addItem(withTitle: "隐藏观察窗口", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        let hide = file.addItem(withTitle: "隐藏观察窗口", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "W")
         hide.keyEquivalentModifierMask = [.command, .shift]
         hide.target = observer?.window
         let edit = section("编辑")
