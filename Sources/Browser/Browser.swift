@@ -1611,7 +1611,10 @@ final class BrowserModel {
         // Page reads, dialog responses and download waits can overlap a locked page action.
         // Count their lifetimes without changing the Space command lock.
         var trackedTab: UUID?
-        func beginActivity(_ id: UUID) {
+        var renewsRecent = false
+        var didWork = false
+        func beginActivity(_ id: UUID, renewing: Bool) {
+            renewsRecent = renewing
             trackedTab = id
             space.activity[id, default: TabActivity()].executing += 1
             changed?()
@@ -1619,12 +1622,11 @@ final class BrowserModel {
         defer {
             if let id = trackedTab, var activity = space.activity[id] {
                 activity.executing -= 1
-                if origin == .agent { activity.agentFinishedAt = .now }
+                if origin == .agent && renewsRecent && (didWork || timing.hasWebKitWork) { activity.agentFinishedAt = .now }
                 space.activity[id] = activity
                 changed?()
             }
         }
-        if let targetTab, command != "tab.close" { beginActivity(targetTab) }
         if space.suspended, ["state", "diagnostics", "dialog.list", "dialog.respond", "download.list", "download.wait", "download.cancel"].contains(command) {
             guard let state = space.tabStates.first(where: { ($0["tabId"] as? String) == targetTab?.uuidString }) else {
                 throw BrowserError("tab_not_found", "Space 中不存在该标签页；运行 awb tab list --space \(space.record.id.uuidString) 核对 Tab UUID")
@@ -1640,10 +1642,19 @@ final class BrowserModel {
             if command.hasPrefix("download.") {
                 if command == "download.list" { return ["spaceId": id.uuidString, "tabId": tab.id.uuidString, "value": tab.downloads.snapshot()] }
                 let downloadID = try arg(0)
-                if command == "download.cancel" { try await tab.downloads.cancelAndWait(downloadID) }
+                if command == "download.cancel" {
+                    _ = try tab.downloads.item(downloadID)
+                    beginActivity(tab.id, renewing: true)
+                    try await tab.downloads.cancelAndWait(downloadID) { didWork = true }
+                }
                 if command == "download.wait" {
                     let timeout = Int(r.options["timeout"] ?? "15000") ?? 0
                     guard (1...60000).contains(timeout) else { throw BrowserError("invalid_timeout", "timeout 必须为 1–60000 ms") }
+                    let download = try tab.downloads.item(downloadID)
+                    guard download["status"] as? String == "running" else {
+                        return ["spaceId": id.uuidString, "tabId": tab.id.uuidString, "value": download]
+                    }
+                    beginActivity(tab.id, renewing: false)
                     let start = monotonicNow()
                     while (try tab.downloads.item(downloadID)["status"] as? String) == "running" {
                         guard !tab.closed else { throw BrowserError("tab_closed", "目标标签页已关闭") }
@@ -1655,20 +1666,30 @@ final class BrowserModel {
             }
             if command.hasPrefix("dialog.") {
                 let value = command == "dialog.list" ? tab.dialogs.snapshot() : try tab.dialogs.respond(id: arg(0), action: arg(1), text: r.options["text"])
+                if command == "dialog.respond" {
+                    beginActivity(tab.id, renewing: true)
+                    didWork = true
+                }
                 return ["spaceId": id.uuidString, "tabId": tab.id.uuidString, "busy": space.busy, "value": value]
             }
             if command == "diagnostics" {
                 // Reads and disabling remain available while busy, blocked or hung.
+                if let mode = r.options["detail"], mode != "off", space.busy {
+                    throw BrowserError("space_busy", "启用详细诊断需要等待当前操作完成")
+                }
+                if r.options["detail"] != nil || r.options["inspectable"] != nil || r.options["clear"] == "true" {
+                    beginActivity(tab.id, renewing: true)
+                }
                 if let inspectable = r.options["inspectable"] { tab.webView.isInspectable = inspectable == "on" }
                 if r.options["detail"] == "off" {
                     tab.disableDiagnosticDetails()
                 } else if let detail = r.options["detail"] {
-                    guard !space.busy else { throw BrowserError("space_busy", "启用详细诊断需要等待当前操作完成") }
                     space.busy = true
                     tab.operationTiming = timing; tab.deadline = monotonicNow() + 2_000_000_000
                     defer { space.busy = false; tab.operationTiming = nil; tab.deadline = nil }
                     try await tab.enableDiagnosticDetails(continuous: detail == "continuous", includeInfo: r.options["include-info"] == "true")
                 }
+                didWork = true
                 var value = tab.diagnostics.snapshot(clear: r.options["clear"] == "true")
                 value["inspectable"] = tab.webView.isInspectable
                 return ["spaceId": id.uuidString, "tabId": tab.id.uuidString, "busy": space.busy,
@@ -1723,7 +1744,8 @@ final class BrowserModel {
             space.tabs.append(tab); bind(space)
             do { try save(space) }
             catch { space.tabs.removeAll { $0 === tab }; tab.close(); throw error }
-            beginActivity(tab.id)
+            beginActivity(tab.id, renewing: true)
+            didWork = true
             do {
                 tab.load(url); try await tab.wait(selector: nil, timeout: timeout); try save(space)
             } catch {
@@ -1745,16 +1767,22 @@ final class BrowserModel {
             space.tabs[index] = replacement; tab = replacement
             bind(space); changed?()
         }
+        let observing = ["snapshot", "screenshot", "frame.list", "viewport.get", "wait"].contains(command)
+        beginActivity(tab.id, renewing: !observing)
         tab.operationTiming = timing; tab.deadline = monotonicNow() + UInt64(timeout) * 1_000_000
         defer { tab.operationTiming = nil; tab.deadline = nil }
         var value: Any = NSNull()
         if wasSuspended, !["open", "reload"].contains(command) { try await tab.wait(selector: nil, timeout: timeout) }
         switch command {
         case "open":
-            let url = try validateURL(arg(0)); tab.load(url)
+            let url = try validateURL(arg(0))
+            didWork = true
+            tab.load(url)
             try await tab.wait(selector: nil, timeout: timeout); try save(space)
         case "reload":
-            tab.load(try validateURL(tab.persistedURL))
+            let url = try validateURL(tab.persistedURL)
+            didWork = true
+            tab.load(url)
             try await tab.wait(selector: nil, timeout: timeout); try save(space)
         case "state": break
         case "back", "forward":
@@ -1819,6 +1847,7 @@ final class BrowserModel {
         case "upload": value = try await tab.upload(target: arg(0), paths: Array(r.args.dropFirst()))
         default: throw BrowserError("unknown_command", "未知命令")
         }
+        didWork = true
         if r.options["fail-on-http-error"] == "true", let status = tab.state["httpStatus"] as? Int, status >= 400 {
             throw BrowserError("http_error", "主文档 HTTP \(status)；使用 state 查看响应 URL 和导航 ID")
         }

@@ -359,12 +359,13 @@ final class DownloadStore: NSObject, WKDownloadDelegate {
             } catch { entries[index].cleanupError = error.localizedDescription }
         }
     }
-    private func requestCancel(_ id: String, reason: String = "download_cancelled", status: String = "cancelled") {
+    private func requestCancel(_ id: String, reason: String = "download_cancelled", status: String = "cancelled", onStart: () -> Void = {}) {
         guard let index = entries.firstIndex(where: { $0.id.lowercased() == id.lowercased() }),
               entries[index].status == "running", !entries[index].cancelling else { return }
         // WebKit has already stopped writing. The final budget check owns the
         // terminal result; cancelling a finished WKDownload need not acknowledge again.
         guard !entries[index].finishing else { return }
+        onStart()
         entries[index].cancelling = true
         guard let download = entries[index].download else { finish(index, status: status, error: reason); return }
         let entryID = entries[index].id
@@ -374,9 +375,9 @@ final class DownloadStore: NSObject, WKDownloadDelegate {
             finish(index, status: status, error: reason)
         }
     }
-    func cancelAndWait(_ id: String) async throws {
+    func cancelAndWait(_ id: String, onStart: () -> Void = {}) async throws {
         guard entries.contains(where: { $0.id.lowercased() == id.lowercased() }) else { throw BrowserError("download_not_found", "目标 Tab 中没有该下载") }
-        requestCancel(id)
+        requestCancel(id, onStart: onStart)
         let started = monotonicNow()
         while try item(id)["status"] as? String == "running" {
             guard milliseconds(from: started) < 5000 else { throw BrowserError("download_cancel_timeout", "下载尚未确认终态，可能仍在取消或最终校验；仍被跟踪，未提前清除文件") }

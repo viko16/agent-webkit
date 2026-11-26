@@ -23,6 +23,8 @@ final class RequestTiming {
 
     func finish(_ token: Int) { spans[token].end = monotonicNow() }
 
+    var hasWebKitWork: Bool { !spans.isEmpty }
+
     var summary: [String: Any] {
         let end = monotonicNow()
         // Navigation and readiness JS can overlap. Count their union, not their sum.
