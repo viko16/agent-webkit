@@ -1104,8 +1104,28 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
 }
 
-enum RequestOrigin {
-    case agent, observer, confirmedObserverClose
+enum RequestOrigin: Equatable {
+    case agent, observer, confirmed(ObserverImpact)
+}
+
+// In-process only. Bind a sheet's consent to the exact work it described.
+struct ObserverImpact: Error, Equatable {
+    let command: String
+    let spaceID: UUID
+    let spaceName: String
+    let tabs: Set<UUID>
+    let downloads: Set<String>
+    let dialogs: Set<String>
+    let recentActivity: ContinuousClock.Instant?
+
+    var detail: String {
+        var messages: [String] = []
+        if command == "space.delete" { messages.append("将移除全部标签页、登录状态和网站数据，无法撤销。") }
+        if !downloads.isEmpty { messages.append("将中断 \(downloads.count) 项活跃下载。") }
+        if !dialogs.isEmpty { messages.append("将关闭 \(dialogs.count) 个待处理的网页对话框。") }
+        if recentActivity != nil { messages.append("Agent 在最近 5 分钟内操作过目标标签页。") }
+        return messages.joined(separator: "\n")
+    }
 }
 
 struct TabActivity {
@@ -1134,6 +1154,28 @@ final class Space {
             configurationError = error
         }
     }
+    func checkObserverImpact(_ command: String, tabID: UUID? = nil, origin: RequestOrigin) throws {
+        guard origin != .agent, let impact = try observerImpact(command, tabID: tabID) else { return }
+        guard origin == .confirmed(impact) else { throw impact }
+    }
+
+    func observerImpact(_ command: String, tabID: UUID? = nil) throws -> ObserverImpact? {
+        let ids = tabID.map { Set([$0]) } ?? Set(record.tabs.map(\.id))
+        guard !ids.contains(where: { (activity[$0]?.executing ?? 0) > 0 }) else {
+            throw BrowserError("space_busy", "目标标签页仍有操作执行中，请等待完成。")
+        }
+        let live = tabs.filter { ids.contains($0.id) }
+        // Ordinary navigation dismisses dialogs but leaves WKDownload instances alone.
+        let preservesDownloads = ["open", "reload"].contains(command) && !live.contains { $0.terminated || $0.unresponsive }
+        let downloads = preservesDownloads ? [] : Set(live.flatMap { $0.downloads.activeIDs })
+        let dialogs = Set(live.flatMap { $0.dialogs.pendingIDs })
+        let closing = tabID.flatMap { activity[$0] }
+        let recent = command == "tab.close" && closing?.recent == true ? closing?.agentFinishedAt : nil
+        guard command == "space.delete" || !downloads.isEmpty || !dialogs.isEmpty || recent != nil else { return nil }
+        return ObserverImpact(command: command, spaceID: record.id, spaceName: record.name, tabs: ids,
+                              downloads: downloads, dialogs: dialogs, recentActivity: recent)
+    }
+
     var suspended: Bool { record.suspended == true }
     func activate() throws {
         guard tabs.isEmpty else { return }
@@ -1455,11 +1497,14 @@ final class BrowserModel {
         space.tabs = []
     }
 
-    func handle(_ request: Request, origin: RequestOrigin) async -> [String: Any] {
+    func handle(_ request: Request, origin: RequestOrigin, onConfirmation: ((ObserverImpact) -> Void)? = nil) async -> [String: Any] {
         let timing = RequestTiming()
         var response: [String: Any]
         do { response = ["ok": true, "result": try await execute(request, timing: timing, origin: origin)] }
-        catch { response = failure(error) }
+        catch let impact as ObserverImpact {
+            response = failure(BrowserError("confirmation_required", impact.detail))
+            onConfirmation?(impact)
+        } catch { response = failure(error) }
         response["timing"] = timing.summary
         return response
     }
@@ -1572,7 +1617,12 @@ final class BrowserModel {
         }
         if command == "space.delete" {
             // Avoid retaining the Space/DataStore across the asynchronous removal API.
-            guard spaces.first(where: { $0.record.id == id })?.busy != true else { throw BrowserError("space_busy", "Space 正在操作中") }
+            if let live = spaces.first(where: { $0.record.id == id }) {
+                guard !live.busy else { throw BrowserError("space_busy", "Space 正在操作中") }
+                try live.checkObserverImpact(command, origin: origin)
+            } else if origin != .agent {
+                throw BrowserError("space_not_found", "Space 已移除，数据容器仍待清理。")
+            }
             var candidate = records
             if let index = candidate.firstIndex(where: { $0.id == id }) { candidate[index].deleting = true }
             try commitRecords(candidate); detach(id); changed?()
@@ -1594,6 +1644,7 @@ final class BrowserModel {
             guard !space.busy else { throw BrowserError("space_busy", "Space 正在操作中") }
             guard !space.tabs.contains(where: { $0.downloads.hasActive }) else { throw BrowserError("space_busy", "Space 有下载进行中；先等待或显式取消") }
             if !space.suspended {
+                try space.checkObserverImpact(command, origin: origin)
                 try save(space)
                 let previous = space.record
                 space.record.suspended = true
@@ -1726,9 +1777,7 @@ final class BrowserModel {
             guard record.tabs.count > 1 else { throw BrowserError("last_tab", "不能关闭最后一个标签页；可休眠 Space") }
             let activity = space.activity[id]
             guard (activity?.executing ?? 0) == 0 else { throw BrowserError("space_busy", "标签页仍有操作执行中") }
-            if origin == .observer, activity?.recent == true {
-                throw BrowserError("confirmation_required", "Agent 在最近 5 分钟内操作过此标签页。仍要关闭吗？")
-            }
+            try space.checkObserverImpact(command, tabID: id, origin: origin)
             record.tabs.remove(at: index)
             try commitSpaceRecord(record, for: space)
             if let tab = space.tabs.first(where: { $0.id == id }) {
@@ -1739,6 +1788,9 @@ final class BrowserModel {
             return ["closed": id.uuidString]
         }
         let wasSuspended = space.suspended
+        if wasSuspended, case .confirmed = origin {
+            throw BrowserError("space_suspended", "Space 在确认期间已休眠；请先显式恢复。")
+        }
         try resume(space)
         guard let store = space.store else { throw BrowserError("space_suspended", "Space 尚未恢复") }
         if command == "tab.new" {
@@ -1763,7 +1815,9 @@ final class BrowserModel {
             throw BrowserError("tab_not_found", "Space 中不存在该标签页；运行 awb tab list --space \(space.record.id.uuidString) 核对 Tab UUID")
         }
         // Replace a stalled view only on explicit navigation. Never replay an Agent action.
-        if ["open", "reload"].contains(command), tab.terminated || tab.unresponsive {
+        let navigating = command == "open" || command == "reload"
+        if navigating { try space.checkObserverImpact(command, tabID: tab.id, origin: origin) }
+        if navigating, tab.terminated || tab.unresponsive {
             let index = space.tabs.firstIndex(where: { $0 === tab })!
             let record = TabRecord(id: tab.id, url: tab.persistedURL, openerTabID: tab.openerTabID)
             tab.close()

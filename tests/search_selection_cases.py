@@ -7,8 +7,10 @@ import subprocess
 import sys
 import tempfile
 import time
+from threading import Event
 import uuid
 
+from observer_protection_cases import verify_observer_protection
 from fixtures import origin
 from skill_workflow import cleanup_test_services, verify_cleanup
 
@@ -18,6 +20,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def search_fixture(out):
     source = (ROOT / 'Sources/Browser/Window.swift').read_text()
+    window_init = 'window = NSWindow(contentRect:'
+    assert source.count(window_init) == 1
+    source = source.replace(window_init, 'window = ObserverProbeWindow(contentRect:')
     marker = '        window.orderBack(nil)\n'
     assert source.count(marker) == 1
     source = source.replace(marker, marker + '''        var lastSearchToken = ""
@@ -29,7 +34,7 @@ def search_fixture(out):
                       let request = try? JSONSerialization.jsonObject(with: data) as? [String: String],
                       let token = request["token"], token != lastSearchToken, let query = request["query"] else { return }
                 lastSearchToken = token
-                if request["action"] != "confirm-space-delete", let sheet = self.window.attachedSheet {
+                if ["new-tab", "search"].contains(request["action"] ?? ""), let sheet = self.window.attachedSheet {
                     self.window.endSheet(sheet)
                 }
                 self.search.stringValue = query
@@ -39,40 +44,17 @@ def search_fixture(out):
                         self.newTab(nil)
                         while self.creatingTab { try? await Task.sleep(nanoseconds: 10_000_000) }
                     }
-                    var closeResult: [String: Any] = [:]
-                    if let space = self.currentSpace, let tab = request["tab"], let action = request["action"],
-                       ["close", "confirm-close", "expire-close"].contains(action) {
-                        if action == "expire-close", let id = UUID(uuidString: tab) {
-                            space.activity[id]?.agentFinishedAt = ContinuousClock.now.advanced(by: .seconds(-301))
-                        }
-                        let close = Request(command: "tab.close", args: [], options: ["space": space.record.id.uuidString, "tab": tab])
-                        closeResult = await self.model.handle(close, origin: action == "confirm-close" ? .confirmedObserverClose : .observer)
-                    }
-                    if request["action"] == "delete-space", let space = self.currentSpace {
-                        self.performSpaceRequest(Request(command: "space.delete", args: [space.record.id.uuidString], options: [:]))
-                        for _ in 0..<200 {
-                            if self.transientMessage?.contains("仍待清理") == true { break }
-                            try? await Task.sleep(nanoseconds: 10_000_000)
-                        }
-                    }
+                    let probe = await self.probeControls(request["action"] ?? "", request: request)
                     var form: [String: Any] = [:]
                     if let raw = request["policy"], let policy = Int(raw) {
                         let sheet = SpaceCreationSheet()
                         self.split.presentAsSheet(sheet)
                         form = sheet.probeCollapsedTLS(policy)
                     }
-                    if request["action"] == "begin-space-delete" { self.deleteSpace() }
-                    if request["action"] == "confirm-space-delete", let sheet = self.window.attachedSheet {
-                        self.window.endSheet(sheet, returnCode: .alertSecondButtonReturn)
-                        for _ in 0..<100 {
-                            if self.transientMessage?.contains("Space 不存在") == true { break }
-                            try? await Task.sleep(nanoseconds: 10_000_000)
-                        }
-                    }
                     let row = self.table.selectedRow
                     let sidebar = self.filteredSpaces.indices.contains(row) ? self.filteredSpaces[row].record.id.uuidString : nil
                     let response: [String: Any] = [
-                        "token": token, "query": self.search.stringValue, "close": closeResult, "form": form,
+                        "token": token, "query": self.search.stringValue, "action": request["action"] ?? "", "probe": probe, "form": form,
                         "filteredSpaceIds": self.filteredSpaces.map { $0.record.id.uuidString },
                         "sidebarSpaceId": sidebar as Any? ?? NSNull(),
                         "savedTabSpaces": (UserDefaults.standard.dictionary(forKey: self.selectionKey) ?? [:]).keys.sorted(),
@@ -94,7 +76,7 @@ def search_fixture(out):
         }
 ''')
     generated = out / 'Window.swift'
-    generated.write_text(source)
+    generated.write_text(source + (ROOT / "tests/observer_controls_probe.swift").read_text())
     app = out / 'Search Selection.app'
     binary = app / 'Contents/MacOS/awb'
     binary.parent.mkdir(parents=True)
@@ -137,7 +119,8 @@ def main():
     state = Path(tempfile.mkdtemp(prefix='aw-search-'))
     env = dict(os.environ, BROWSER_DATA_DIR=str(state), BROWSER_SOCKET=str(state / 'browser.sock'),
                BROWSER_MAX_TABS_PER_SPACE='3', BROWSER_TEST_SEARCH_RESPONSE=str(out / 'search-response.json'))
-    site, _ = origin()
+    download_gate = Event()
+    site, _ = origin(download_gate=download_gate)
     base = f'http://127.0.0.1:{site.server_address[1]}/index.html'
     daemon = None
     results = []
@@ -219,12 +202,13 @@ def main():
                 raise AssertionError('Startup timed out')
             frontmost = cli('status')['frontmostPid']
             alias = cli('space', 'create', original_id, '--proxy', 'direct')
-            assert native('confirmation-target', 'begin-space-delete')['errorSheet']
+            assert native('confirmation-target', 'delete')['errorSheet']
             assert cli('space', 'delete', original_id)['dataStoreRemoved']
-            confirmed = native('', 'confirm-space-delete')
+            confirmed = native('', 'sheet', button='删除 Space')
             assert 'Space 不存在' in confirmed['message'], confirmed
             assert cli('space', 'info', alias['id'])['id'] == alias['id']
             cli('space', 'delete', alias['id'])
+            native('')
             for policy, options in [(0, {}), (1, {'ca-cert': '/tmp/fixture-ca.pem'}),
                                     (2, {'ignore-certificate-errors': 'true'})]:
                 form = native('', policy=str(policy))['form']
@@ -260,7 +244,7 @@ def main():
                 else:
                     raise AssertionError('Space never became busy')
                 personal_tab = personal['tabs'][0]['tabId']
-                assert native('personal', 'confirm-close', tab=personal_tab)['close']['error']['code'] == 'space_busy'
+                assert not native('personal', 'close', tab=personal_tab)['probe']['dispatched']
                 busy = native('no-match', 'new-tab')
                 assert not busy['canCreateTab'] and not busy['errorSheet'], busy
                 assert busy['query'] == 'no-match' and busy['selectedSpaceId'] is None, busy
@@ -283,24 +267,10 @@ def main():
             limited = native('no-match', 'new-tab')
             assert limited['errorSheet'] and limited['message'] and limited['query'] == 'no-match', limited
             assert len(cli('tab', 'list', '--space', personal['id'])) == 3
-            # A confirmed close runs the same target, last-tab and busy checks again.
-            first_id = first['tabs'][0]['tabId']
-            selected_id = native('search-a')['displayedTabId']
-            assert selected_id != first_id
-            assert native('search-a', 'close', tab=first_id)['close']['error']['code'] == 'confirmation_required'
-            assert native('search-a', 'confirm-close', tab=first_id)['close']['result']['closed'] == first_id
-            assert native('search-a')['displayedTabId'] == selected_id
-            assert native('search-a', 'confirm-close', tab=first_id)['close']['error']['code'] == 'tab_not_found'
-            assert native('search-a', 'confirm-close', tab=selected_id)['close']['error']['code'] == 'last_tab'
-
-            gui_tab = native('search-a', 'new-tab')['displayedTabId']
-            assert native('search-a', 'close', tab=gui_tab)['close']['ok']
-            recent_tab = cli('tab', 'new', '--space', first['id'])['tabId']
-            assert native('search-a', 'close', tab=recent_tab)['close']['error']['code'] == 'confirmation_required'
-            assert native('search-a', 'expire-close', tab=recent_tab)['close']['ok']
-            assert cli('status')['observer']['tabId'] == selected_id
+            assert native('no-match', 'sheet', button=limited['probe']['buttons'][0])['probe']['dispatched']
             deferred = cli('space', 'create', 'test-deferred', '--proxy', 'direct')
-            pending = native('test-deferred', 'delete-space')
+            assert native('test-deferred', 'delete')['errorSheet']
+            pending = native('test-deferred', 'sheet', button='删除 Space')
             assert '仍待清理' in pending['message'] and '1 待清理' in pending['spaceCount'], pending
             assert pending['selectedSpaceId'] is None
             assert deferred['id'] not in pending['savedTabSpaces'], pending
@@ -311,10 +281,19 @@ def main():
             for space in cli('space', 'list'):
                 cli('space', 'delete', space['id'])
             new_tab(None)
-            assert cli('status')['frontmostPid'] == frontmost, 'Native actions changed the foreground app'
+            verify_observer_protection(cli, native, binary, env, base)
+            if env.get('BROWSER_TEST_FOREGROUND') == '1':
+                assert all(not row['probe']['simulatedKey'] for row in results if row['action'] in ('cmd-w', 'shift-cmd-w'))
+            else:
+                assert cli('status')['frontmostPid'] == frontmost, 'Native actions changed the foreground app'
         finally:
+            download_gate.set()
             failed = sys.exc_info()[0] is not None
-            errors = cleanup_test_services(cli, daemon, site)
+            try:
+                if env.get('BROWSER_TEST_FOREGROUND') == '1' and daemon and daemon.poll() is None:
+                    native('', 'release-foreground')
+            finally:
+                errors = cleanup_test_services(cli, daemon, site)
             if errors:
                 (out / 'cleanup-errors.json').write_text(json.dumps([str(error) for error in errors], indent=2))
                 if not failed:

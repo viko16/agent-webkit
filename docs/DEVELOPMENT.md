@@ -351,16 +351,20 @@ GUI 的 selectedSpace / selectedTabs 只决定观察哪一个 WebView，并按�
 
 侧栏可创建 Direct 或回环 HTTP Proxy Space；创建表单的 TLS 高级选项沿用底层证书校验。休眠后在侧栏恢复，删除前确认登录和网站数据将被清除。若 WebKit 仍需清理数据容器，侧栏展示待清理数，`status.pendingStores` 保留对应 ID。
 
-标签页 × 和 ⌘W 走同一个 `tab.close` 生命周期。Space 执行中的页显示沙漏，最近 5 分钟有 Agent 活动的页显示时钟；GUI 关闭近期页需二次确认。确认绑定原始 Space 和 Tab UUID，重新验证目标存在、最后一页和执行中条件。GUI 导航、重载和新页不会刷新 Agent 时间。状态、快照、截图、列表、只读诊断、读取视口和等待不会刷新近期时间；异步读取仍有执行中保护。活动只在 daemon 内存中记录，重启后清空。
+标签页 × 和 ⌘W 走同一个 `tab.close` 生命周期。Space 执行中的页显示沙漏，最近 5 分钟有 Agent 活动的页显示时钟；GUI 关闭近期页需二次确认。观察窗口保留其他页的选择；当前页被窗口或 CLI 关闭时，优先选原来的右邻页，其次左邻页。状态、快照、截图、列表、只读诊断、读取视口和等待不会刷新近期时间；异步读取仍有执行中保护。GUI 自身操作和未开始的请求也不刷新时间。
+
+手动关闭页、删除 Space、替换无响应 WebView、退出应用均会提示将中断的活跃下载及待处理的网页对话框。普通地址栏导航和重载也会先提示待处理的网页对话框，同一 WebView 的下载可以继续。休眠遇下载直接拒绝，遇对话框先提示。每次确认重读目标、忙碌状态及受影响资源的 ID，关闭标签页还检查最后一页和近期活动；同样数量的新资源也需重新确认。CLI/IPC 保留原来的显式操作语义。活动只在 daemon 内存中记录，重启后清空。
 
 地址栏省略协议时使用 HTTPS，本地 HTTP 页面需显式输入 `http://`。底部显示代理和证书策略，忽略证书错误时显示橙色提示。⌘T 新建 Tab，⌘L 聚焦地址栏，⌃⌘S 切换侧栏，⇧⌘F 搜索 Space，⇧⌘[ / ⇧⌘] 切换标签页，⌘W 关闭当前标签页，⇧⌘W 隐藏观察窗口，⌘Q 退出服务。
 
+`python3 tests/search_selection_cases.py` 构建独立测试应用，用 ×、菜单快捷键和原生确认按钮验证关闭、相邻页选择、后台下载与对话框保护。默认宿主禁止激活前台，菜单分发时提供 key-window 条件。指定 `BROWSER_TEST_FOREGROUND=1` 会在快捷键阶段激活测试窗口，用实际 key window 分发 AppKit 菜单事件；此选项会占用桌面焦点。两种方式均不发送系统级键盘输入。
+
 运行 `zsh scripts/build.sh release` 后，可用 `python3 tests/gui_security_cases.py` 检查原生证书提示。测试复用正式源码构建独立签名宿主，在三个 Direct Space 间切换，核对系统证书、自定义 CA、忽略证书错误的文字和警告颜色，并验证重启后的策略、选择与 Tab ID 保留、前台不变。需要已登录的 macOS 桌面；临时 CA 不导入钥匙串，退出清理自有 Space 和服务。报告与窗口截图保存在 `.artifacts/gui-security-*/`。本项验证 GUI 策略展示，TLS 网络信任判定仍由证书专项覆盖。
 
-本地 RPC 为每连接一条换行分隔的 JSON Request / Response，请求结构：
+本地 RPC 每连接传输一条换行分隔的 JSON 请求和响应。操作已有页时，将示例中的 `TAB_ID` 替换为 `tab list` 返回的 UUID。
 
 ```json
-{"command":"fill","args":["#message","hello"],"options":{"space":"admin"}}
+{"command":"fill","args":["#message","hello"],"options":{"space":"admin","tab":"TAB_ID"}}
 ```
 
 复合命令为 `space.create` / `tab.new` 等，与 CLI 一一对应。Socket 默认位于 0700 的数据目录中，权限 0600，服务用 `getpeereid` 拒绝其他 UID。注册表和 Socket 各有 flock，重复 daemon 不覆盖活跃 Socket。单条消息上限 8 MiB，Socket 读写超时 75 秒，页面等待 1–60000 ms。不要把自定义 Socket 放在他人可替换的目录；同一 UID 内的进程具有相同控制权限。

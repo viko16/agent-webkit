@@ -7,6 +7,7 @@ final class Application: NSObject, NSApplicationDelegate {
     var model: BrowserModel?
     var observer: ObserverWindow?
     var server: SocketServer?
+    private var confirmedQuit: [ObserverImpact] = []
     init(_ options: Options) { self.options = options }
     func applicationDidFinishLaunching(_ notification: Notification) {
         do {
@@ -77,13 +78,36 @@ final class Application: NSObject, NSApplicationDelegate {
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if model?.shuttingDown == true { return .terminateNow }
-        do { try model?.saveAll() }
-        catch {
-            fputs("Failed to save: \(error)\n", stderr)
+        let consent = confirmedQuit
+        confirmedQuit = []
+        do {
+            let impacts = try model?.spaces.compactMap { space -> ObserverImpact? in
+                guard !space.busy else { throw BrowserError("space_busy", "Space「\(space.record.name)」正在操作中。") }
+                return try space.observerImpact("quit")
+            } ?? []
+            if !impacts.isEmpty && impacts != consent {
+                if let window = observer?.window, window.attachedSheet == nil {
+                    let alert = NSAlert()
+                    alert.messageText = "退出 Agent WebKit？"
+                    alert.informativeText = impacts.map { "「\($0.spaceName)」\n\($0.detail)" }.joined(separator: "\n")
+                    alert.addButton(withTitle: "取消")
+                    alert.addButton(withTitle: "退出")
+                    window.orderFront(nil)
+                    alert.beginSheetModal(for: window) { response in
+                        guard response == .alertSecondButtonReturn else { return }
+                        self.confirmedQuit = impacts
+                        sender.terminate(nil)
+                    }
+                }
+                return .terminateCancel
+            }
+            try model?.saveAll()
+        } catch {
+            fputs("Quit cancelled: \(error)\n", stderr)
             if let window = observer?.window, window.attachedSheet == nil {
                 let alert = NSAlert()
-                alert.messageText = "无法保存，已取消退出"
-                alert.informativeText = "\(error.localizedDescription)\n请解决存储问题后重试退出。"
+                alert.messageText = "已取消退出"
+                alert.informativeText = "\(error.localizedDescription)\n请稍后重试退出。"
                 alert.addButton(withTitle: "继续使用")
                 alert.beginSheetModal(for: window)
             }

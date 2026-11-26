@@ -159,7 +159,7 @@ enum CLIContract {
         ],
         "tab.close": [
             "Rejects the last Tab (last_tab), a busy Space or an executing Tab (space_busy). A closed ID returns tab_not_found.",
-            "GUI selection is independent. Only manual closes prompt for Agent activity in the last five minutes."
+            "GUI selection is independent. Manual closes confirm recent Agent work (five minutes), active downloads, or pending page dialogs. Read-only polling and rejected requests do not renew the timer."
         ],
         "space.suspend": [
             "Rejects if the Space is busy or has active downloads. Website data and URLs are preserved; JS memory and unsaved forms are lost."

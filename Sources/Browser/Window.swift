@@ -618,9 +618,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         Task { @MainActor in
             window.endEditing(for: address)
             window.makeFirstResponder(tab.webView)
-            let result = await model.handle(Request(command: "open", args: [url], options: ["space": space.record.id.uuidString, "tab": tab.id.uuidString]), origin: .observer)
-            if result["ok"] as? Bool != true { presentFailure(result) }
-            refresh()
+            performObserverRequest(Request(command: "open", args: [url], options: ["space": space.record.id.uuidString, "tab": tab.id.uuidString]))
         }
     }
 
@@ -632,21 +630,8 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         guard let space = currentSpace, let raw = sender.identifier?.rawValue, let tabID = UUID(uuidString: raw) else { return }
         closeTab(spaceID: space.record.id, tabID: tabID)
     }
-    private func closeTab(spaceID: UUID, tabID: UUID, confirmed: Bool = false) {
-        let request = Request(command: "tab.close", args: [], options: ["space": spaceID.uuidString, "tab": tabID.uuidString])
-        Task { @MainActor in
-            let response = await model.handle(request, origin: confirmed ? .confirmedObserverClose : .observer)
-            if response["ok"] as? Bool == true {
-                transientMessage = nil
-                refresh()
-                return
-            }
-            if let error = response["error"] as? [String: String], error["code"] == "confirmation_required" {
-                confirm("关闭最近有 Agent 活动的标签页？", detail: error["message"] ?? "", action: "关闭标签页") {
-                    self.closeTab(spaceID: spaceID, tabID: tabID, confirmed: true)
-                }
-            } else { presentFailure(response) }
-        }
+    private func closeTab(spaceID: UUID, tabID: UUID) {
+        performObserverRequest(Request(command: "tab.close", args: [], options: ["space": spaceID.uuidString, "tab": tabID.uuidString]))
     }
     private func confirm(_ title: String, detail: String, action: String, perform: @escaping () -> Void) {
         let alert = NSAlert()
@@ -657,25 +642,44 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     }
     @objc private func createSpace() {
         let sheet = SpaceCreationSheet()
-        sheet.submit = { [weak self] request in self?.performSpaceRequest(request) }
+        sheet.submit = { [weak self] request in self?.performObserverRequest(request) }
         split.presentAsSheet(sheet)
     }
     @objc private func toggleSuspension() {
         guard let space = currentSpace else { return }
-        performSpaceRequest(Request(command: space.suspended ? "space.resume" : "space.suspend", args: [space.record.id.uuidString], options: [:]))
+        performObserverRequest(Request(command: space.suspended ? "space.resume" : "space.suspend", args: [space.record.id.uuidString], options: [:]))
     }
     @objc private func deleteSpace() {
         guard let space = currentSpace else { return }
-        let id = space.record.id.uuidString
-        confirm("删除 Space「\(space.record.name)」？", detail: "此操作将移除该 Space 的所有标签页、登录状态和网站数据，无法撤销。", action: "删除 Space") {
-            self.performSpaceRequest(Request(command: "space.delete", args: [id], options: [:]))
-        }
+        performObserverRequest(Request(command: "space.delete", args: [space.record.id.uuidString], options: [:]))
     }
-    private func performSpaceRequest(_ request: Request) {
+
+    private func performObserverRequest(_ request: Request, origin: RequestOrigin = .observer) {
         Task { @MainActor in
-            let response = await model.handle(request, origin: .observer)
+            var confirmation: ObserverImpact?
+            let response = await model.handle(request, origin: origin) { confirmation = $0 }
+            if let impact = confirmation {
+                let action: String
+                switch request.command {
+                case "tab.close": action = "关闭标签页"
+                case "space.delete": action = "删除 Space"
+                case "space.suspend": action = "休眠 Space"
+                case "reload": action = "重新加载页面"
+                default: action = "前往网址"
+                }
+                confirm("\(action)（\(impact.spaceName)）？", detail: impact.detail, action: action) {
+                    self.performObserverRequest(request, origin: .confirmed(impact))
+                }
+                return
+            }
             guard response["ok"] as? Bool == true, let result = response["result"] as? [String: Any] else {
-                presentFailure(response); return
+                if request.command == "reload" {
+                    if selectedSpace?.uuidString == request.options["space"], displayed?.id.uuidString == request.options["tab"] {
+                        transientMessage = (response["error"] as? [String: Any])?["message"] as? String
+                        refresh()
+                    }
+                } else { presentFailure(response) }
+                return
             }
             if request.command == "space.create", let raw = result["id"] as? String {
                 search.stringValue = ""
@@ -696,11 +700,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     }
     @objc func reloadPage() {
         guard canReload, let space = currentSpace, let tab = displayed else { NSSound.beep(); return }
-        Task { @MainActor in
-            let result = await model.handle(Request(command: "reload", args: [], options: ["space": space.record.id.uuidString, "tab": tab.id.uuidString]), origin: .observer)
-            if result["ok"] as? Bool != true, selectedSpace == space.record.id { transientMessage = (result["error"] as? [String: Any])?["message"] as? String }
-            refresh()
-        }
+        performObserverRequest(Request(command: "reload", args: [], options: ["space": space.record.id.uuidString, "tab": tab.id.uuidString]))
     }
     private func copy(_ value: String, message: String) {
         NSPasteboard.general.clearContents(); NSPasteboard.general.setString(value, forType: .string)

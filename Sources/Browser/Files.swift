@@ -188,6 +188,7 @@ final class DownloadStore: NSObject, WKDownloadDelegate {
         var bytesReceived: Int64 = 0
         var cancelling = false
         var finishing = false
+        var active: Bool { status == "running" || finishing }
         var timer: DispatchWorkItem?
     }
     private struct Limits {
@@ -215,7 +216,8 @@ final class DownloadStore: NSObject, WKDownloadDelegate {
     private var monitor: Timer?
     private var monitorTask: Task<Void, Never>?
     // A timed-out validation still owns file access and its runtime capacity.
-    var hasActive: Bool { entries.contains { $0.status == "running" || $0.finishing } }
+    var activeIDs: Set<String> { Set(entries.lazy.filter(\.active).map(\.id)) }
+    var hasActive: Bool { entries.contains(where: \.active) }
 
     func begin(_ download: WKDownload) {
         guard !stopped else {
@@ -223,7 +225,7 @@ final class DownloadStore: NSObject, WKDownloadDelegate {
         }
         if entries.count >= 64, let index = entries.firstIndex(where: { $0.status != "running" && !$0.finishing }) { entries.remove(at: index) }
         let id = UUID().uuidString
-        guard entries.filter({ $0.status == "running" || $0.finishing }).count < 8 else {
+        guard entries.filter(\.active).count < 8 else {
             entries.append(Entry(id: id, status: "failed", error: "download_capacity"))
             download.cancel(nil); return
         }

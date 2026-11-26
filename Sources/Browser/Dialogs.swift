@@ -22,6 +22,7 @@ final class DialogStore {
     static let limit = 8
 
     var hasPending: Bool { !pending.isEmpty }
+    var pendingIDs: Set<String> { expire(); return Set(pending.map(\.id)) }
     var pendingCount: Int { expire(); return pending.count }
     func expired(since start: UInt64) -> Bool { lastExpiry >= start }
 

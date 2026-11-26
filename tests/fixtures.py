@@ -36,7 +36,7 @@ class Server(socketserver.ThreadingMixIn, socketserver.TCPServer):
     daemon_threads = True
 
 
-def origin(port=0, events=None, tls_context=None):
+def origin(port=0, events=None, tls_context=None, download_gate=None):
     events = events or Events()
     nonce = uuid.uuid4().hex
     html = (Path(__file__).parent / 'site/index.html').read_text().replace('__FIXTURE_NONCE__', nonce)
@@ -94,7 +94,10 @@ def origin(port=0, events=None, tls_context=None):
                 self.end_headers()
                 try:
                     self.wfile.write(body); self.wfile.flush()
-                    if mode == 'slow':
+                    if mode == 'held' and download_gate is not None:
+                        download_gate.wait(timeout=30)
+                        self.wfile.write(b'x' * 100)
+                    elif mode == 'slow':
                         time.sleep(2)
                         self.wfile.write(b'x' * 100)
                 except (BrokenPipeError, ConnectionResetError):
