@@ -97,8 +97,14 @@ extension ObserverWindow {
         case "reload": click(reloadButton)
         case "retry-navigation":
             if !retry.isHiddenOrHasHiddenAncestor { click(retry) }
-        case "delete": click(deleteButton)
-        case "suspend": click(suspendButton)
+        case "create-space": click(createButton)
+        case "delete", "suspend", "resume":
+            guard spaceActions.isEnabled, let menu = spaceActions.menu else { break }
+            NotificationCenter.default.post(name: NSPopUpButton.willPopUpNotification, object: spaceActions)
+            if let index = menu.items.firstIndex(where: { ($0.representedObject as? Request)?.command == "space." + action }) {
+                menu.performActionForItem(at: index)
+                dispatched = true
+            }
         case "dismiss-downloads": downloadsPopover.close()
         case "sheet":
             let buttons = controls(window.attachedSheet?.contentView).compactMap { $0 as? NSButton }

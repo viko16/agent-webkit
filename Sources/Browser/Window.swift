@@ -88,9 +88,10 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     private let infoPopover = NSPopover()
     private let downloadsPopover = NSPopover()
     private weak var downloadsSpace: Space?
-    private let createButton = NSButton(title: "新建", target: nil, action: nil)
-    private let suspendButton = NSButton(title: "休眠", target: nil, action: nil)
-    private let deleteButton = NSButton(title: "删除", target: nil, action: nil)
+    private let createButton = NSButton()
+    private let spaceActions = NSPopUpButton(frame: .zero, pullsDown: true)
+    private let suspensionItem = NSMenuItem()
+    private let deleteItem = NSMenuItem(title: "删除 Space…", action: nil, keyEquivalent: "")
     private var activityExpiry: Task<Void, Never>?
     private var creatingTab = false
     private var tabWidths: [NSLayoutConstraint] = []
@@ -192,28 +193,48 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         noSearchResults.addArrangedSubview(noMatches)
         noSearchResults.addArrangedSubview(searchActions)
         spaceCount.font = .systemFont(ofSize: 12); spaceCount.textColor = .secondaryLabelColor
-        let actions = NSStackView(views: [createButton, suspendButton, deleteButton])
-        actions.distribution = .fillEqually
-        for (button, action) in [(createButton, #selector(createSpace)), (suspendButton, #selector(toggleSuspension)), (deleteButton, #selector(deleteSpace))] {
-            button.target = self
-            button.action = action
-            button.controlSize = .small
+        createButton.target = self
+        createButton.action = #selector(createSpace)
+        createButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)
+        createButton.toolTip = "新建 Space"
+        createButton.setAccessibilityLabel("新建 Space")
+        spaceActions.addItem(withTitle: "")
+        spaceActions.item(at: 0)?.image = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: nil)
+        (spaceActions.cell as? NSPopUpButtonCell)?.arrowPosition = .noArrow
+        spaceActions.toolTip = "所选 Space 的更多操作"
+        spaceActions.setAccessibilityLabel("所选 Space 的更多操作")
+        for item in [suspensionItem, deleteItem] {
+            item.target = self
+            item.action = #selector(performSpaceMenuAction(_:))
         }
+        spaceActions.menu?.addItem(suspensionItem)
+        spaceActions.menu?.addItem(.separator())
+        spaceActions.menu?.addItem(deleteItem)
+        NotificationCenter.default.addObserver(self, selector: #selector(prepareSpaceMenu(_:)),
+                                               name: NSPopUpButton.willPopUpNotification, object: spaceActions)
+        for button in [createButton, spaceActions] {
+            button.isBordered = false
+            button.imagePosition = .imageOnly
+            button.widthAnchor.constraint(equalToConstant: 28).isActive = true
+            button.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        }
+        let actions = NSStackView(views: [createButton, spaceActions])
+        actions.spacing = 2
         [heading, search, scroll, noSearchResults, actions, spaceCount].forEach { $0.translatesAutoresizingMaskIntoConstraints = false; effect.addSubview($0) }
         NSLayoutConstraint.activate([
             search.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 14),
             search.trailingAnchor.constraint(equalTo: effect.trailingAnchor, constant: -14),
-            heading.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 20),
+            actions.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 8),
+            actions.trailingAnchor.constraint(equalTo: search.trailingAnchor),
+            heading.centerYAnchor.constraint(equalTo: actions.centerYAnchor),
             heading.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 20),
-            scroll.topAnchor.constraint(equalTo: heading.bottomAnchor, constant: 6),
+            heading.trailingAnchor.constraint(lessThanOrEqualTo: actions.leadingAnchor, constant: -6),
+            scroll.topAnchor.constraint(equalTo: actions.bottomAnchor, constant: 4),
             scroll.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 4),
             scroll.trailingAnchor.constraint(equalTo: effect.trailingAnchor, constant: -4),
-            scroll.bottomAnchor.constraint(equalTo: actions.topAnchor, constant: -6),
+            scroll.bottomAnchor.constraint(equalTo: spaceCount.topAnchor, constant: -8),
             noSearchResults.centerXAnchor.constraint(equalTo: scroll.centerXAnchor),
             noSearchResults.topAnchor.constraint(equalTo: scroll.topAnchor, constant: 12),
-            actions.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 10),
-            actions.trailingAnchor.constraint(equalTo: effect.trailingAnchor, constant: -10),
-            actions.bottomAnchor.constraint(equalTo: spaceCount.topAnchor, constant: -6),
             spaceCount.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 20)
         ])
     }
@@ -540,9 +561,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         if pending > 0 { spaceCount.stringValue += " · \(pending) 待清理" }
         createButton.isEnabled = !model.restoring
         createFromSearch.isEnabled = createButton.isEnabled
-        suspendButton.title = currentSpace?.suspended == true ? "恢复 Space" : "休眠"
-        suspendButton.isEnabled = table.selectedRow >= 0 && currentSpace?.busy == false && !model.restoring
-        deleteButton.isEnabled = suspendButton.isEnabled
+        spaceActions.isEnabled = table.selectedRow >= 0 && currentSpace?.busy == false && !model.restoring
         activityExpiry?.cancel()
         emptyAction.title = "打开网页"
         emptyText.maximumNumberOfLines = 0
@@ -840,8 +859,8 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         beginAddressEditing()
     }
     @objc private func startBrowsing(_ sender: Any?) {
-        if currentSpace?.suspended == true {
-            toggleSuspension()
+        if let space = currentSpace, space.suspended {
+            performObserverRequest(Request(command: "space.resume", args: [space.record.id.uuidString], options: [:]))
             return
         }
         focusAddress(sender)
@@ -965,13 +984,17 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         }
         split.presentAsSheet(sheet)
     }
-    @objc private func toggleSuspension() {
+    @objc private func prepareSpaceMenu(_ notification: Notification) {
         guard let space = currentSpace else { return }
-        performObserverRequest(Request(command: space.suspended ? "space.resume" : "space.suspend", args: [space.record.id.uuidString], options: [:]))
+        suspensionItem.title = space.suspended ? "恢复 Space" : "休眠 Space…"
+        let target = [space.record.id.uuidString]
+        suspensionItem.representedObject = Request(command: space.suspended ? "space.resume" : "space.suspend", args: target, options: [:])
+        deleteItem.representedObject = Request(command: "space.delete", args: target, options: [:])
     }
-    @objc private func deleteSpace() {
-        guard let space = currentSpace else { return }
-        performObserverRequest(Request(command: "space.delete", args: [space.record.id.uuidString], options: [:]))
+    @objc private func performSpaceMenuAction(_ item: NSMenuItem) {
+        guard spaceActions.isEnabled, let request = item.representedObject as? Request,
+              request.args.first == currentSpace?.record.id.uuidString else { return }
+        performObserverRequest(request)
     }
 
     private func performObserverRequest(_ request: Request, origin: RequestOrigin = .observer) {
@@ -1139,7 +1162,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         if let item = toolbar.visibleItems?.first(where: { $0.itemIdentifier == .downloads }) {
             downloadsPopover.show(relativeTo: item)
         } else {
-            downloadsPopover.show(relativeTo: suspendButton.bounds, of: suspendButton, preferredEdge: .maxY)
+            downloadsPopover.show(relativeTo: spaceActions.bounds, of: spaceActions, preferredEdge: .maxX)
         }
     }
     func popoverDidClose(_ notification: Notification) {

@@ -1,6 +1,6 @@
 # Agent WebKit 界面问题与验证记录
 
-基线为 `6651d9f`。共 27 项，分五批修复和验收。用户指出的表单边距列为第 26 项，随第一批修复；标签页关闭按钮列为第 27 项，随第二批修复。截图保留各批验收时的界面，第五批包含表单的最终布局。
+最初五批以 `6651d9f` 为基线，共 27 项。表单边距列为第 26 项，随第一批修复。标签页关闭按钮列为第 27 项，随第二批修复。第六批以 `982ef57` 为基线，新增第 28 项。截图保留各批验收时的界面。
 
 ## 第一批 · 操作中断、数据和目标
 
@@ -106,3 +106,11 @@
 - 系统选择器实测进入指定的测试目录，取消后保留原路径。用 AppKit 测试面板返回选中的 PEM 文件，经生产回调核对表单和创建请求中的证书路径一致。系统文件列表内的双击未实测。
 
 最终版本通过调试构建、164 个原生窗口回归步骤、34 项导航检查和 10 项连接状态检查。连接检查覆盖三种 Space 证书策略、服务重启后恢复选中页，以及通过 HTTPS 加载测试页时的证书警示。
+
+## 第六批 · Space 侧栏操作
+
+**28 · 新建、休眠和删除在左下角并排，三个等宽按钮让删除和日常操作同样醒目。** 将新建入口放在 Spaces 标题旁，把所选 Space 的休眠、恢复和删除放入原生菜单。底部保留状态文字。[修复前](ui-ux-evidence/after/23-sidebar.png) · [Apple HIG · Sidebars](https://developer.apple.com/design/human-interface-guidelines/sidebars) · [Buttons](https://developer.apple.com/design/human-interface-guidelines/buttons) · [Menus](https://developer.apple.com/design/human-interface-guidelines/menus)
+
+- 在 760 pt 窗口中，「＋」和「更多操作」与 Spaces 标题同排，列表可以一直延伸到底部数量上方。两项控件都有中文辅助功能名称。空资料目录也可以通过「＋」打开创建表单。[侧栏布局](ui-ux-evidence/after/28-sidebar-actions.png)
+- 在独立测试窗口展开原生菜单，活动 Space 显示「休眠 Space…」，休眠后切换为「恢复 Space」。删除始终单独列在分隔线下方。[浅色 · 活动 Space](ui-ux-evidence/after/28-sidebar-menu.png) · [深色 · 休眠 Space](ui-ux-evidence/after/28-sidebar-dark.png)
+- 调试构建通过。修正菜单展开通知的回调签名后重新运行原生窗口回归，最终报告记录了 166 次交互与状态读取。搜索无匹配时「更多操作」停用，「＋」仍能打开表单。选择「恢复 Space」后核对了实际运行状态，选择「删除 Space…」后核对了确认框和取消行为。截图通过独立 AppKit 窗口采集。

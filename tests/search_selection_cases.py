@@ -212,6 +212,8 @@ def main():
             alias = cli('space', 'create', original_id, '--proxy', 'direct')
             legacy = native('confirmation-target', 'choose')['probe']
             assert '1 个标签页' in legacy['emptyText'] and '新标签页' in legacy['emptyText'], legacy
+            assert native('confirmation-target', 'resume')['probe']['dispatched']
+            assert cli('space', 'info', original_id)['lifecycle'] == 'active'
             assert native('confirmation-target', 'delete')['errorSheet']
             assert cli('space', 'delete', original_id)['dataStoreRemoved']
             confirmed = native('', 'sheet', button='删除 Space')
@@ -265,6 +267,9 @@ def main():
             search('no-match', first, [])
             search('no-match', first, [], 'choose')
             before = cli('space', 'list')
+            assert not native('no-match', 'delete')['probe']['dispatched']
+            assert native('no-match', 'create-space')['errorSheet']
+            assert native('no-match', 'sheet', button='取消')['probe']['dispatched']
             blocked = native('no-match', 'new-tab')
             assert not blocked['canCreateTab'] and blocked['query'] == 'no-match', blocked
             assert cli('space', 'list') == before
