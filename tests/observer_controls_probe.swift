@@ -93,6 +93,7 @@ extension ObserverWindow {
             if !retry.isHiddenOrHasHiddenAncestor { click(retry) }
         case "delete": click(deleteButton)
         case "suspend": click(suspendButton)
+        case "dismiss-downloads": downloadsPopover.close()
         case "sheet":
             let buttons = controls(window.attachedSheet?.contentView).compactMap { $0 as? NSButton }
             click(buttons.first { $0.title == request["button"] })
@@ -125,6 +126,7 @@ extension ObserverWindow {
                 "findVisible": !pageFind.isHidden, "canGoForward": canTraverse(back: false),
                 "findFeedback": controls(pageFind).compactMap { ($0 as? NSTextField)?.stringValue },
                 "popupNoticeTabId": popupNotice.isHidden ? NSNull() as Any : announcedPopup?.id.uuidString as Any? ?? NSNull(),
+                "downloadsSpaceId": downloadsPopover.isShown ? downloadsSpace?.record.id.uuidString as Any? ?? NSNull() : NSNull(),
                 "dialogID": dialog?.dialogID as Any? ?? NSNull(),
                 "promptText": controls(dialog).compactMap { $0 as? NSTextField }.first { $0.isEditable }?.stringValue as Any? ?? NSNull(),
                 "tabWaiting": row?.titleButton.toolTip?.contains("网页等待回复") == true,

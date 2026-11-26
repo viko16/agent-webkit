@@ -347,11 +347,11 @@ Socket 建立后，`status.ready` 表示元数据恢复与待删除存储的清�
 
 默认注册表目录为 `~/Library/Application Support/AgentWebKit`。`BROWSER_DATA_DIR` 或 `--data-dir` 可指定独立目录，`BROWSER_SOCKET` 或 `--socket` 可指定 Socket；daemon 与客户端必须使用相同配置。WebKit 网站数据由系统管理，指定注册表目录不会搬移这些数据；`space delete` 才会删除对应 Space 的网站数据。
 
-GUI 的 selectedSpace / selectedTabs 只决定观察哪一个 WebView，并按数据目录记住选择。窗口采用 NSSplitViewController、原生 sidebar、NSToolbar 和系统语义颜色。关闭观察窗口不终止服务。后台 Tab 使用隐藏 NSPanel 持有视图；DOM、Evaluate 和截图不调用 activate / makeKey。GUI 新建、地址栏导航和重新加载都走同一条命令处理路径，遵守 Space 锁及代理检查。没有 Space 时，首次新建显式使用 direct 创建 personal；其余新建沿用当前 Space。分享按钮复制带 Space UUID 和 Tab UUID 的 snapshot 命令。地址栏编辑期间，后台刷新不会覆盖输入。
+GUI 的 selectedSpace / selectedTabs 只决定观察哪一个 WebView，并按数据目录记住选择。窗口采用 NSSplitViewController、原生 sidebar、NSToolbar 和系统语义颜色。关闭观察窗口不终止服务。后台 Tab 使用隐藏 NSPanel 持有视图；DOM、Evaluate 和截图不调用 activate / makeKey。GUI 新建、地址栏导航和重新加载都走同一条命令处理路径，遵守 Space 锁及代理检查。没有 Space 时，首次新建显式使用 direct 创建 personal；其余新建沿用当前 Space。「交给 Agent」按钮复制带 Space UUID 和 Tab UUID 的 snapshot 命令。地址栏编辑期间，后台刷新不会覆盖输入。
 
 侧栏可创建 Direct 或回环 HTTP Proxy Space；创建表单的 TLS 高级选项沿用底层证书校验。休眠后在侧栏恢复，删除前确认登录和网站数据将被清除。若 WebKit 仍需清理数据容器，侧栏展示待清理数，`status.pendingStores` 保留对应 ID。
 
-标签页 × 和 ⌘W 走同一个 `tab.close` 生命周期。Space 执行中的页显示沙漏，最近 5 分钟有 Agent 活动的页显示时钟；GUI 关闭近期页需二次确认。观察窗口保留其他页的选择；当前页被窗口或 CLI 关闭时，优先选原来的右邻页，其次左邻页。状态、快照、截图、列表、只读诊断、读取视口和等待不会刷新近期时间；异步读取仍有执行中保护。GUI 自身操作和未开始的请求也不刷新时间。
+标签页 × 和 ⌘W 走同一个 `tab.close` 生命周期。Space 执行中的页显示沙漏，悬停标签可查看最近 5 分钟的 Agent 活动；GUI 关闭近期页需二次确认。观察窗口保留其他页的选择；当前页被窗口或 CLI 关闭时，优先选原来的右邻页，其次左邻页。状态、快照、截图、列表、只读诊断、读取视口和等待不会刷新近期时间；异步读取仍有执行中保护。GUI 自身操作和未开始的请求也不刷新时间。
 
 手动关闭页、删除 Space、替换无响应 WebView、退出应用均会提示将中断的活跃下载及待处理的网页对话框。普通地址栏导航和重载也会先提示待处理的网页对话框，同一 WebView 的下载可以继续。手动休眠在释放页面前要求确认，提示表单草稿会丢失，并列出待处理的网页对话框。存在活跃下载时拒绝休眠。每次确认重读目标、忙碌状态及受影响资源的 ID，关闭标签页还检查最后一页和近期活动；同样数量的新资源也需重新确认。CLI/IPC 保留原来的显式操作语义。活动只在 daemon 内存中记录，重启后清空。
 

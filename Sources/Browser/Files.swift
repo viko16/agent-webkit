@@ -186,6 +186,7 @@ final class DownloadStore: NSObject, WKDownloadDelegate {
         var error: String?
         var cleanupError: String?
         var bytesReceived: Int64 = 0
+        var expectedBytes: Int64 = -1
         var cancelling = false
         var finishing = false
         var active: Bool { status == "running" || finishing }
@@ -210,6 +211,7 @@ final class DownloadStore: NSObject, WKDownloadDelegate {
         var summary: [String: Any] { ["fileBytes": file, "spaceBytes": space, "totalBytes": total, "minFreeBytes": free] }
     }
     var directory: URL?
+    var activityChanged: (() -> Void)?
     private var entries: [Entry] = []
     private var stopped = false
     private let limits = Limits()
@@ -224,6 +226,7 @@ final class DownloadStore: NSObject, WKDownloadDelegate {
             download.cancel(nil); return
         }
         if entries.count >= 64, let index = entries.firstIndex(where: { $0.status != "running" && !$0.finishing }) { entries.remove(at: index) }
+        defer { activityChanged?() }
         let id = UUID().uuidString
         guard entries.filter(\.active).count < 8 else {
             entries.append(Entry(id: id, status: "failed", error: "download_capacity"))
@@ -259,6 +262,7 @@ final class DownloadStore: NSObject, WKDownloadDelegate {
     func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String,
                   completionHandler: @escaping (URL?) -> Void) {
         guard let index = index(download), entries[index].status == "running", let directory else { completionHandler(nil); return }
+        entries[index].expectedBytes = response.expectedContentLength
         let id = entries[index].id
         Task {
             do {
@@ -309,6 +313,7 @@ final class DownloadStore: NSObject, WKDownloadDelegate {
                 finish(index, status: validationError == nil ? "completed" : "failed", error: validationError)
             }
             entries[index].finishing = false
+            activityChanged?()
             if entries[index].status != "completed" {
                 // Only the returning scan releases file access. Never revive a timed-out result.
                 cleanup(index)
@@ -350,6 +355,7 @@ final class DownloadStore: NSObject, WKDownloadDelegate {
         // Completed downloads are user files; incomplete data is never reported as a result.
         if status != "completed", !entries[index].finishing { cleanup(index) }
         if !entries.contains(where: { $0.status == "running" }) { monitor?.invalidate(); monitor = nil }
+        if !entries[index].finishing { activityChanged?() }
     }
     private func cleanup(_ index: Int) {
         if let directory {
@@ -436,6 +442,30 @@ final class DownloadStore: NSObject, WKDownloadDelegate {
          "error": entry.error as Any? ?? NSNull(), "cleanupError": entry.cleanupError as Any? ?? NSNull(), "requiresForeground": false]
     }
     func snapshot() -> [String: Any] { ["downloads": entries.map(summary), "limit": 64, "activeLimit": 8, "lifetimeMs": 300000, "limits": limits.summary] }
+
+    struct ListItem: Identifiable {
+        let id: String
+        let name: String
+        let status: String
+        let received: Int64
+        let expected: Int64
+        let file: URL?
+        let error: String?
+        let canCancel: Bool
+    }
+
+    var listItems: [ListItem] {
+        entries.reversed().map { entry in
+            let status: String
+            if entry.finishing { status = entry.status == "failed" ? "waitingForCleanup" : "finishing" }
+            else if entry.status == "running" && entry.cancelling { status = "cancelling" }
+            else { status = entry.status }
+            return ListItem(id: entry.id, name: entry.filename.isEmpty ? "下载文件" : entry.filename,
+                            status: status, received: max(entry.bytesReceived, entry.download?.progress.completedUnitCount ?? 0),
+                            expected: entry.expectedBytes, file: entry.status == "completed" ? entry.path : nil,
+                            error: entry.error, canCancel: status == "running")
+        }
+    }
 }
 
 @MainActor

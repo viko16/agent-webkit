@@ -27,11 +27,11 @@
 
 | 编号 | 问题与预期 | 修复前证据 | 状态 | 修复后证据 |
 | --- | --- | --- | --- | --- |
-| 12 | **Agent 交接入口难发现**。通用分享图标和底部短暂反馈相距很远。按钮应说明交给 Agent，并就地反馈已复制。 | [截图](ui-ux-evidence/before/02-new-tab.png) | 待修复 | 待补 |
-| 13 | **Space 忙碌时缺少具体目标**。后台页执行时，当前页地址栏还能编辑，回车却不导航。说明占用页面并保留地址草稿。 | [截图](ui-ux-evidence/before/16-other-tab-busy.png) | 待修复 | 待补 |
-| 14 | **窗口没有下载管理入口**。下载时看不到进度或文件位置，休眠被拒绝后也无法从窗口取消下载。 | [截图](ui-ux-evidence/before/24-manual-download.png) | 待修复 | 待补 |
-| 15 | **固定视口被窗口裁掉**。Agent 固定大视口时，窄窗口看不到右下方控件。应标出视口尺寸并支持缩放预览。 | [截图](ui-ux-evidence/before/18-fixed-viewport.png) | 待修复 | 待补 |
-| 16 | **近期活动掩盖待处理状态**。多个标签只显示近期时钟。正在执行和等人应答应更易分辨。 | [截图](ui-ux-evidence/before/03-working.png) | 待优化，等人应答已随第 1 项标出 | [待回复标记](ui-ux-evidence/after/01-background.png)，其余待补 |
+| 12 | **Agent 交接入口难发现**。通用分享图标和底部短暂反馈相距很远。按钮应说明交给 Agent，并就地反馈已复制。 | [截图](ui-ux-evidence/before/02-new-tab.png) | 已验证 | [按钮原位反馈](ui-ux-evidence/after/12-copy-feedback.png) |
+| 13 | **Space 忙碌时缺少具体目标**。后台页执行时，当前页地址栏还能编辑，回车却不导航。说明占用页面并保留地址草稿。 | [截图](ui-ux-evidence/before/16-other-tab-busy.png) | 已验证 | [忙碌目标与地址草稿](ui-ux-evidence/after/13-busy-draft.png) |
+| 14 | **窗口没有下载管理入口**。下载时看不到进度或文件位置，休眠被拒绝后也无法从窗口取消下载。 | [截图](ui-ux-evidence/before/24-manual-download.png) | 已验证 | [运行中和已完成下载](ui-ux-evidence/after/14-downloads.png) |
+| 15 | **固定视口被窗口裁掉**。Agent 固定大视口时，窄窗口看不到右下方控件。应标出视口尺寸并支持缩放预览。 | [截图](ui-ux-evidence/before/18-fixed-viewport.png) | 已验证 | [窄窗完整预览](ui-ux-evidence/after/15-viewport-preview.png) |
+| 16 | **近期活动掩盖待处理状态**。多个标签只显示近期时钟。正在执行和等人应答应更易分辨。 | [截图](ui-ux-evidence/before/03-working.png) | 已验证 | [执行中的页面](ui-ux-evidence/after/16-executing.png) · [网页待回复](ui-ux-evidence/after/01-background.png) |
 
 ## 第四批 · 报错、恢复与状态反馈
 
@@ -82,3 +82,10 @@
 原先只有标题按钮绘制背景，× 在标签右侧独立占位。[修复前](ui-ux-evidence/before/03-working.png)
 
 参照用户提供的 Safari 截图，将 × 放进标签左侧，图标和页名一起居中。选中页显示 ×，其他页移入指针时才显示，只剩一页时收起。通过窗口鼠标事件点击后台标签的 ×，确认框指出后台页名，取消后原选中页保持不变。[选中状态](ui-ux-evidence/after/27-tabs-selected.png) · [后台页悬停](ui-ux-evidence/after/27-tabs-hover.png) · [Apple · 在 Mac 上的 Safari 中关闭标签页](https://support.apple.com/zh-cn/guide/safari/ibrw27660e60/mac)
+
+## 第三批验收
+
+- 点击「交给 Agent」，按钮原位显示「已复制」。在独立测试剪贴板读回命令，核对 Space 和标签 ID。等待后台页执行时，底栏显示该页标题；按回车保留输入，结束后再次回车才导航。「查看执行页」会选中实际持有操作锁的页。[Apple HIG · Feedback](https://developer.apple.com/design/human-interface-guidelines/feedback)
+- 固定 CSS 视口为 1440 × 900，把窗口缩到 760 pt 后打开静态预览，可以看到页面右下角的「继续」。在打开前、显示时及关闭后读取网页的 `innerWidth` 和 `innerHeight`，三次结果相同。
+- 当前等待用户或仍在执行的页面在标签上显示对应标记。操作结束后，近五分钟的活动可从标签提示查看。
+- 下载面板按标签展示当前 Space 的任务。实测同时显示 41 字节的已完成文件，以及收到 41 / 141 字节的下载。休眠受阻时可直接进入管理面板，取消后由 CLI 核对终态。测试点击「在访达中显示」并截获系统调用，确认目标是实际下载的非空文件。[Apple HIG · Progress indicators](https://developer.apple.com/design/human-interface-guidelines/progress-indicators)

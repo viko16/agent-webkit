@@ -124,6 +124,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     var closeRequested: (() -> Void)?
     var openerTabID: UUID?
     var hasUnreadPopupNotice = false
+    var pendingAddressDraft: String?
     var lastNavigationRejection: BrowserError?
     private(set) var popupSequence = 0
     private var lastPopupID: UUID?
@@ -221,6 +222,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         super.init()
         dialogs.automaticallyDismissed = { [weak self] in self?.suppressedDialogs += 1 }
         dialogs.changed = { [weak self] in self?.statusChanged?() }
+        downloads.activityChanged = { [weak self] in self?.statusChanged?() }
         DiagnosticRouter.shared.logs.setObject(self.diagnostics, forKey: webView)
         self.diagnostics.captureConfigurationChanged = { [weak self] in self?.updateDiagnosticScript() }
         FrameRouter.shared.stores.setObject(frames, forKey: webView)
@@ -1176,6 +1178,7 @@ final class Space {
     var tabs: [Tab] = []
     var activity: [UUID: TabActivity] = [:]
     var busy = false
+    var busyTabID: UUID?
     var resourceBlockedReason: String?
     private(set) var configurationError: BrowserError?
     init(_ record: SpaceRecord, restoring: Bool = false) throws {
@@ -1705,6 +1708,11 @@ final class BrowserModel {
         var trackedTab: UUID?
         var renewsRecent = false
         var didWork = false
+        func setBusy(_ busy: Bool, tab: UUID? = nil) {
+            space.busy = busy
+            space.busyTabID = tab
+            changed?()
+        }
         func beginActivity(_ id: UUID, renewing: Bool) {
             renewsRecent = renewing
             trackedTab = id
@@ -1776,9 +1784,9 @@ final class BrowserModel {
                 if r.options["detail"] == "off" {
                     tab.disableDiagnosticDetails()
                 } else if let detail = r.options["detail"] {
-                    space.busy = true
+                    setBusy(true, tab: tab.id)
                     tab.operationTiming = timing; tab.deadline = monotonicNow() + 2_000_000_000
-                    defer { space.busy = false; tab.operationTiming = nil; tab.deadline = nil }
+                    defer { tab.operationTiming = nil; tab.deadline = nil; setBusy(false) }
                     try await tab.enableDiagnosticDetails(continuous: detail == "continuous", includeInfo: r.options["include-info"] == "true")
                 }
                 didWork = true
@@ -1793,8 +1801,8 @@ final class BrowserModel {
                     "network": space.networkState, "page": tab.state, "busy": space.busy, "value": NSNull()] as [String: Any]
         }
         guard !space.busy else { throw BrowserError("space_busy", "同一 Space 已有操作执行中；先用 state 和 dialog list 检查是否正在等待 JS 对话框，否则等待原操作完成后再顺序执行") }
-        space.busy = true; changed?()
-        defer { space.busy = false; changed?() }
+        setBusy(true, tab: targetTab)
+        defer { setBusy(false) }
         if command != "tab.close", let error = space.networkError { throw error }
         let timeout: Int
         if let raw = r.options["timeout"] {
@@ -1837,6 +1845,7 @@ final class BrowserModel {
             space.tabs.append(tab); bind(space)
             do { try save(space) }
             catch { space.tabs.removeAll { $0 === tab }; tab.close(); throw error }
+            space.busyTabID = tab.id
             beginActivity(tab.id, renewing: true)
             didWork = true
             do {

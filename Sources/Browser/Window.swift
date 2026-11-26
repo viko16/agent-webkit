@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 private final class AddressField: NSTextField {
     var willFocus: (() -> Void)?
@@ -19,11 +20,12 @@ private extension NSToolbarItem.Identifier {
     static let address = Self("observer.address")
     static let copyCommand = Self("observer.copyCommand")
     static let details = Self("observer.details")
+    static let downloads = Self("observer.downloads")
     static let newTab = Self("observer.newTab")
 }
 
 @MainActor
-final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate, NSToolbarDelegate, NSSearchFieldDelegate, NSMenuItemValidation {
+final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate, NSToolbarDelegate, NSSearchFieldDelegate, NSMenuItemValidation, NSPopoverDelegate {
     let model: BrowserModel
     let window: NSWindow
     private let split = NSSplitViewController()
@@ -39,6 +41,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     private let addressIcon = NSImageView()
     private let addressDisplay = NSTextField(labelWithString: "")
     private var editingAddress = false
+    private var addressWasEdited = false
     private var addressDraft = ""
     private let reloadButton = NSButton()
     private let tabStack = NSStackView()
@@ -51,7 +54,12 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     private weak var announcedPopup: Tab?
     private let progress = NSProgressIndicator()
     private let status = NSTextField(labelWithString: "")
+    private let busyTarget = NSButton(title: "查看执行页", target: nil, action: nil)
+    private let handoff = NSButton(title: "交给 Agent", target: nil, action: nil)
+    private var copiedTab: UUID?
+    private var copyFeedbackExpiry: Task<Void, Never>?
     private let security = NSTextField(labelWithString: "")
+    private let viewportButton = NSButton(title: "", target: nil, action: nil)
     private let spaceCount = NSTextField(labelWithString: "")
     private let empty = NSStackView()
     private let emptyTitle = NSTextField(labelWithString: "浏览会话，各自独立")
@@ -69,6 +77,8 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     private let selectionKey: String
     private let socketPath: String
     private let infoPopover = NSPopover()
+    private let downloadsPopover = NSPopover()
+    private weak var downloadsSpace: Space?
     private let createButton = NSButton(title: "新建", target: nil, action: nil)
     private let suspendButton = NSButton(title: "休眠", target: nil, action: nil)
     private let deleteButton = NSButton(title: "删除", target: nil, action: nil)
@@ -243,7 +253,11 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         host.setContentHuggingPriority(.defaultLow, for: .vertical)
         host.clipsToBounds = true
         host.heightAnchor.constraint(greaterThanOrEqualToConstant: 160).isActive = true
-        let footer = NSStackView(views: [status, NSView(), security])
+        viewportButton.target = self; viewportButton.action = #selector(showViewport)
+        viewportButton.bezelStyle = .inline
+        viewportButton.toolTip = "缩放查看整个固定视口"
+        busyTarget.bezelStyle = .inline; busyTarget.target = self; busyTarget.action = #selector(showBusyTab)
+        let footer = NSStackView(views: [status, busyTarget, NSView(), viewportButton, security])
         footer.orientation = .horizontal; footer.edgeInsets = NSEdgeInsets(top: 6, left: 14, bottom: 6, right: 14)
         footer.heightAnchor.constraint(equalToConstant: 32).isActive = true
         for label in [status, security] {
@@ -282,7 +296,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { toolbarDefaultItemIdentifiers(toolbar) }
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.sidebar, .back, .forward, .flexibleSpace, .address, .flexibleSpace, .copyCommand, .details, .newTab]
+        [.sidebar, .back, .forward, .flexibleSpace, .address, .flexibleSpace, .downloads, .copyCommand, .details, .newTab]
     }
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
         let item = NSToolbarItem(itemIdentifier: id); item.target = self; item.autovalidates = false
@@ -338,14 +352,19 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
                 reloadButton.heightAnchor.constraint(equalToConstant: 26)
             ])
             item.view = field; item.label = "页面地址"; item.visibilityPriority = .high
+        } else if id == .copyCommand {
+            handoff.target = self; handoff.action = #selector(copyCommand)
+            handoff.bezelStyle = .texturedRounded
+            item.label = "交给 Agent"; item.toolTip = "复制当前页面的接管命令"
+            item.action = #selector(copyCommand); item.view = handoff
         } else {
             let values: (String, String, Selector)
             switch id {
             case .sidebar: values = ("显示／隐藏侧边栏（⌃⌘S）", "sidebar.left", #selector(toggleSidebar(_:)))
             case .back: values = ("后退（⌘[）", "chevron.backward", #selector(goBack))
             case .forward: values = ("前进（⌘]）", "chevron.forward", #selector(goForward))
-            case .copyCommand: values = ("复制 Agent 接管命令", "square.and.arrow.up", #selector(copyCommand))
             case .details: values = ("Space 信息", "info.circle", #selector(showDetails))
+            case .downloads: values = ("下载", "arrow.down.circle", #selector(showDownloads))
             case .newTab: values = ("新建标签页（⌘T）", "plus", #selector(newTab(_:)))
             default: return nil
             }
@@ -383,11 +402,19 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     }
     func controlTextDidChange(_ notification: Notification) {
         if notification.object as? NSSearchField === search { refresh() }
-        if notification.object as? NSTextField === address { addressDraft = address.stringValue }
+        if notification.object as? NSTextField === address {
+            addressWasEdited = true
+            addressDraft = address.stringValue
+            if currentSpace?.busy == true || displayed?.pendingAddressDraft != nil {
+                displayed?.pendingAddressDraft = addressDraft
+            }
+        }
     }
     private func beginAddressEditing() {
         guard !editingAddress else { return }
         editingAddress = true
+        addressWasEdited = displayed?.pendingAddressDraft != nil
+        if let draft = displayed?.pendingAddressDraft { address.stringValue = draft }
         address.textColor = .labelColor; addressDisplay.isHidden = true
         addressContainer.borderWidth = 3; addressContainer.borderColor = .keyboardFocusIndicatorColor
         addressIcon.isHidden = false
@@ -410,7 +437,13 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
             }
             return true
         }
+        if control === address, selector == #selector(NSResponder.insertNewline(_:)), currentSpace?.busy == true {
+            displayed?.pendingAddressDraft = addressDraft
+            updateStatus()
+            return true
+        }
         guard control === address, selector == #selector(NSResponder.cancelOperation(_:)) else { return false }
+        displayed?.pendingAddressDraft = nil
         window.makeFirstResponder(nil); updateStatus(); return true
     }
     func tableViewSelectionDidChange(_ notification: Notification) {
@@ -495,7 +528,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
             emptyText.stringValue = "网站数据和标签页地址已保留。\n点击打开网页恢复；页面内存和未提交表单不会恢复。"
         } else if blank {
             emptyTitle.stringValue = "新标签页"
-            emptyText.stringValue = "在地址栏输入网址，按回车打开。\n准备好后，点工具栏的分享按钮复制 Agent 接管命令。"
+            emptyText.stringValue = "在地址栏输入网址，按回车打开。\n准备好后，点「交给 Agent」复制接管命令。"
         }
         let now = ContinuousClock.now
         if let expiry = space.activity.values.compactMap(\.recentUntil).filter({ $0 > now }).min() {
@@ -533,7 +566,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
                 let (symbol, activityLabel): (String, String)
                 if candidate.dialogs.hasPending { (symbol, activityLabel) = ("exclamationmark.bubble.fill", "网页等待回复") }
                 else if running { (symbol, activityLabel) = ("hourglass", "正在执行操作") }
-                else if activity?.recent == true { (symbol, activityLabel) = ("clock", "最近 5 分钟有 Agent 活动") }
+                else if activity?.recent == true { (symbol, activityLabel) = ("globe", "最近 5 分钟有 Agent 活动") }
                 else { (symbol, activityLabel) = ("globe", "") }
                 button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: activityLabel)
                 button.imagePosition = .imageLeading
@@ -587,6 +620,18 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
             popupNoticeText.stringValue = title.map { "此网页打开了新标签页「\($0)」" } ?? "此网页打开了新标签页"
             popupNoticeText.toolTip = popupNoticeText.stringValue
         }
+        viewportButton.isHidden = tab?.fixedViewport == nil
+        if let size = tab?.fixedViewport {
+            viewportButton.title = "预览 \(Int(size.width)) × \(Int(size.height))"
+        }
+        if downloadsPopover.isShown && downloadsSpace !== space { downloadsPopover.close() }
+        if let item = window.toolbar?.items.first(where: { $0.itemIdentifier == .downloads }) {
+            let active = space?.tabs.contains { $0.downloads.hasActive } == true
+            item.isEnabled = space != nil
+            item.toolTip = active ? "下载（有下载正在进行）" : "查看此 Space 的下载"
+            item.image = NSImage(systemSymbolName: active ? "arrow.down.circle.fill" : "arrow.down.circle",
+                                 accessibilityDescription: item.toolTip)
+        }
         let pendingDialog = tab?.dialogs.firstPending
         let previousDialog = dialogArea.arrangedSubviews.first as? PageDialogView
         if previousDialog?.dialogID != pendingDialog?.id {
@@ -614,7 +659,19 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         address.isEnabled = (tab != nil || model.spaces.isEmpty) && !model.restoring && !creatingTab
         progress.doubleValue = tab?.webView.isLoading == true ? max(0.03, tab?.webView.estimatedProgress ?? 0) : 0
         progress.alphaValue = tab?.webView.isLoading == true ? 1 : 0
-        status.stringValue = pendingDialog != nil ? "网页等待回复" : model.restoring ? "正在恢复会话…" : transientMessage ?? (tab == nil ? "准备就绪" : space?.busy == true ? "正在处理页面…" : tab?.webView.isLoading == true ? "正在加载…" : "可通过分享按钮交给 Agent")
+        let runningTab = space?.tabs.first { $0.id == space?.busyTabID }
+        if editingAddress, addressWasEdited, space?.busy == true { tab?.pendingAddressDraft = addressDraft }
+        busyTarget.isHidden = runningTab == nil || runningTab === tab
+        if pendingDialog != nil { status.stringValue = "网页等待回复" }
+        else if model.restoring { status.stringValue = "正在恢复会话…" }
+        else if space?.busy == true {
+            let name = runningTab.map(tabTitle) ?? "当前 Space"
+            status.stringValue = editingAddress ? "「\(name)」执行中，结束后按回车打开" : "「\(name)」正在执行"
+        } else { status.stringValue = transientMessage ?? (tab?.webView.isLoading == true ? "正在加载…" : "准备就绪") }
+        status.toolTip = status.stringValue
+        handoff.isEnabled = tab != nil
+        handoff.title = copiedTab != nil && copiedTab == tab?.id ? "已复制 ✓" : "交给 Agent"
+        handoff.setAccessibilityLabel(copiedTab != nil && copiedTab == tab?.id ? "已复制接管命令" : "交给 Agent，复制当前页面的接管命令")
         let insecure = space?.record.tls?.ignoreCertificateErrors == true
         let tls = insecure ? "未校验证书" : space?.record.tls == nil ? "系统证书校验" : "自定义 CA"
         let networkError = space?.networkError
@@ -752,6 +809,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
               url == "about:blank" || (["http", "https"].contains(parsed.scheme?.lowercased() ?? "") && !(parsed.host ?? "").isEmpty && !input.contains(where: \.isWhitespace)) else {
             presentFailure(["error": ["message": "请输入完整网址，例如 https://example.com。"]]); return
         }
+        displayed?.pendingAddressDraft = nil
         window.makeFirstResponder(nil); transientMessage = nil
         if model.spaces.isEmpty { createTab(opening: url); return }
         guard let space = currentSpace, let tab = displayed else { return }
@@ -862,6 +920,17 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
                         transientMessage = (response["error"] as? [String: Any])?["message"] as? String
                         refresh()
                     }
+                } else if request.command == "space.suspend", let space = currentSpace,
+                          request.args.first == space.record.id.uuidString,
+                          space.tabs.contains(where: { $0.downloads.hasActive }) {
+                    let alert = NSAlert()
+                    alert.messageText = "下载期间无法休眠"
+                    alert.informativeText = "等「\(space.record.name)」的下载完成，或在下载列表中取消后，再休眠此 Space。"
+                    alert.addButton(withTitle: "管理下载")
+                    alert.addButton(withTitle: "取消")
+                    alert.beginSheetModal(for: window) { [weak self = self, weak space] response in
+                        if let space, response == .alertFirstButtonReturn, self?.currentSpace === space { self?.showDownloads() }
+                    }
                 } else { presentFailure(response) }
                 return
             }
@@ -887,10 +956,11 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         performObserverRequest(Request(command: "open", args: [target.url.absoluteString],
             options: ["space": space.record.id.uuidString, "tab": tab.id.uuidString]))
     }
-    private func copy(_ value: String, message: String) {
-        NSPasteboard.general.clearContents(); NSPasteboard.general.setString(value, forType: .string)
-        transientMessage = message; updateStatus()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.transientMessage = nil; self?.updateStatus() }
+    @objc private func showBusyTab() {
+        guard let space = currentSpace, let id = space.busyTabID,
+              space.tabs.contains(where: { $0.id == id }) else { return }
+        selectedTabs[space.record.id] = id
+        saveSelection(); refresh()
     }
     private var socketArgument: String {
         let standard = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/AgentWebKit/browser.sock").path
@@ -900,10 +970,21 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         guard let space = currentSpace, let tab = displayed else { return }
         let executable = Bundle.main.executableURL?.path ?? CommandLine.arguments[0]
         let command = "'" + executable.replacingOccurrences(of: "'", with: "'\\''") + "'"
-        copy(command + " snapshot --space \(space.record.id.uuidString) --tab \(tab.id.uuidString)" + socketArgument, message: "已复制接管命令，粘贴给 Agent 即可继续")
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        guard pasteboard.setString(command + " snapshot --space \(space.record.id.uuidString) --tab \(tab.id.uuidString)" + socketArgument, forType: .string) else { return }
+        copiedTab = tab.id; updateStatus()
+        NSAccessibility.post(element: handoff, notification: .announcementRequested,
+                             userInfo: [.announcement: "已复制接管命令", .priority: NSAccessibilityPriorityLevel.medium.rawValue])
+        copyFeedbackExpiry?.cancel()
+        copyFeedbackExpiry = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(2)) } catch { return }
+            self?.copiedTab = nil; self?.updateStatus()
+        }
     }
     @objc private func showDetails(_ sender: Any?) {
         guard let space = currentSpace else { return }
+        downloadsPopover.close()
         if infoPopover.isShown { infoPopover.close(); return }
         let title = NSTextField(labelWithString: space.record.name); title.font = .systemFont(ofSize: 17, weight: .semibold)
         let details = NSTextField(wrappingLabelWithString: "Space ID\n\(space.record.id.uuidString)\n\n网络\n\(space.record.proxy)\n\n证书\n\(security.stringValue)\n\n网站数据保存在此 Space 中，关闭窗口后服务继续运行。")
@@ -915,6 +996,35 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         infoPopover.contentViewController = controller; infoPopover.behavior = .transient
         if let item = window.toolbar?.items.first(where: { $0.itemIdentifier == .details }) {
             infoPopover.show(relativeTo: item)
+        }
+    }
+    @objc private func showViewport() {
+        guard let tab = displayed, let viewport = tab.fixedViewport else { return }
+        split.presentAsSheet(ViewportPreview(webView: tab.webView, viewport: viewport, available: window.frame.size))
+    }
+    @objc private func showDownloads() {
+        guard let space = currentSpace, let toolbar = window.toolbar else { return }
+        if downloadsPopover.isShown { downloadsPopover.close(); return }
+        infoPopover.close()
+        downloadsSpace = space
+        downloadsPopover.behavior = .transient
+        downloadsPopover.delegate = self
+        let content = SpaceDownloadsView(space: space) { [weak self, weak space] message in
+            guard let self, let space, self.currentSpace === space else { return }
+            self.downloadsPopover.close()
+            self.presentFailure(["error": ["message": message]])
+        }
+        downloadsPopover.contentViewController = NSHostingController(rootView: content)
+        if let item = toolbar.visibleItems?.first(where: { $0.itemIdentifier == .downloads }) {
+            downloadsPopover.show(relativeTo: item)
+        } else {
+            downloadsPopover.show(relativeTo: suspendButton.bounds, of: suspendButton, preferredEdge: .maxY)
+        }
+    }
+    func popoverDidClose(_ notification: Notification) {
+        if notification.object as? NSPopover === downloadsPopover {
+            downloadsPopover.contentViewController = nil
+            downloadsSpace = nil
         }
     }
     @objc func toggleSidebar(_ sender: Any?) { split.toggleSidebar(sender) }

@@ -185,6 +185,13 @@ def verify_observer_protection(cli, native, binary, env, base, events):
     def downloads():
         return cmd(first, 'download', 'list')['value']['downloads']
     cancelled = until(downloads)[0]['id']
+    click('pick', second)
+    blocked = click('suspend')
+    assert '管理下载' in blocked['probe']['buttons'], blocked
+    manager = sheet('管理下载')
+    assert manager['probe']['downloadsSpaceId'] == space['id'] and manager['displayedTabId'] == second, manager
+    probe('dismiss-downloads')
+    click('pick', first)
     probe('expire-history')
     assert cmd(first, 'download', 'cancel', cancelled)['value']['status'] == 'cancelled'
     finished = probe()['probe']['finished']
