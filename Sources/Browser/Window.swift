@@ -40,6 +40,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     private var addressWidth: NSLayoutConstraint?
     private let addressIcon = NSImageView()
     private let addressDisplay = NSTextField(labelWithString: "")
+    private let addressHint = NSTextField(labelWithString: "")
     private var editingAddress = false
     private var addressWasEdited = false
     private var addressDraft = ""
@@ -64,6 +65,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     private let empty = NSStackView()
     private let emptyTitle = NSTextField(labelWithString: "浏览会话，各自独立")
     private let emptyText = NSTextField(wrappingLabelWithString: "")
+    private let emptyAction = NSButton(title: "打开网页", target: nil, action: nil)
     private let banner = NSStackView()
     private let bannerText = NSTextField(wrappingLabelWithString: "")
     private let retry = NSButton(title: "重新加载", target: nil, action: nil)
@@ -74,6 +76,13 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     private weak var displayed: Tab?
     private var tabSignature = ""
     private var transientMessage: String?
+    private struct PageActionError {
+        let tab: UUID
+        let navigation: Int
+        let message: String
+        let clearsAfterLoad: Bool
+    }
+    private var pageActionError: PageActionError?
     private let selectionKey: String
     private let socketPath: String
     private let infoPopover = NSPopover()
@@ -276,16 +285,20 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         popupNotice.orientation = .horizontal; popupNotice.spacing = 10
         popupNotice.edgeInsets = NSEdgeInsets(top: 6, left: 16, bottom: 6, right: 16)
         [popupNoticeText, NSView(), viewPopup, dismissNotice].forEach { popupNotice.addArrangedSubview($0) }
-        [tabBar, progress, popupNotice, banner, dialogArea, pageFind, host, footer].forEach {
+        addressHint.font = .systemFont(ofSize: 12)
+        addressHint.textColor = .systemRed
+        addressHint.alignment = .center
+        addressHint.isHidden = true
+        [addressHint, tabBar, progress, popupNotice, banner, dialogArea, pageFind, host, footer].forEach {
             column.addArrangedSubview($0); $0.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
         }
         let icon = NSImageView(image: NSImage(systemSymbolName: "square.stack.3d.up", accessibilityDescription: nil)!)
         icon.contentTintColor = .tertiaryLabelColor; icon.symbolConfiguration = .init(pointSize: 46, weight: .light)
         emptyTitle.font = .systemFont(ofSize: 23, weight: .semibold)
         emptyText.font = .systemFont(ofSize: 13); emptyText.textColor = .secondaryLabelColor; emptyText.alignment = .center
-        let open = NSButton(title: "打开网页", target: self, action: #selector(startBrowsing(_:))); open.bezelStyle = .rounded
+        emptyAction.target = self; emptyAction.action = #selector(startBrowsing(_:)); emptyAction.bezelStyle = .rounded
         empty.orientation = .vertical; empty.alignment = .centerX; empty.spacing = 14
-        [icon, emptyTitle, emptyText, open].forEach { empty.addArrangedSubview($0) }
+        [icon, emptyTitle, emptyText, emptyAction].forEach { empty.addArrangedSubview($0) }
         empty.translatesAutoresizingMaskIntoConstraints = false; host.addSubview(empty)
         NSLayoutConstraint.activate([
             empty.centerXAnchor.constraint(equalTo: host.centerXAnchor), empty.centerYAnchor.constraint(equalTo: host.centerYAnchor),
@@ -405,10 +418,15 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         if notification.object as? NSTextField === address {
             addressWasEdited = true
             addressDraft = address.stringValue
+            clearAddressHint()
             if currentSpace?.busy == true || displayed?.pendingAddressDraft != nil {
                 displayed?.pendingAddressDraft = addressDraft
             }
         }
+    }
+    private func clearAddressHint() {
+        addressHint.isHidden = true
+        address.setAccessibilityHelp(nil)
     }
     private func beginAddressEditing() {
         guard !editingAddress else { return }
@@ -422,6 +440,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     }
     func controlTextDidEndEditing(_ notification: Notification) {
         guard notification.object as? NSTextField === address else { return }
+        clearAddressHint()
         editingAddress = false
         address.textColor = .clear; addressDisplay.isHidden = false
         addressContainer.borderWidth = 0.5; addressContainer.borderColor = .separatorColor
@@ -442,8 +461,14 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
             updateStatus()
             return true
         }
+        if control === address, selector == #selector(NSResponder.insertNewline(_:)) {
+            addressDraft = textView.string
+            openAddress(address)
+            return true
+        }
         guard control === address, selector == #selector(NSResponder.cancelOperation(_:)) else { return false }
         displayed?.pendingAddressDraft = nil
+        clearAddressHint()
         window.makeFirstResponder(nil); updateStatus(); return true
     }
     func tableViewSelectionDidChange(_ notification: Notification) {
@@ -503,10 +528,14 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         if pending > 0 { spaceCount.stringValue += " · \(pending) 待清理" }
         createButton.isEnabled = !model.restoring
         createFromSearch.isEnabled = createButton.isEnabled
-        suspendButton.title = currentSpace?.suspended == true ? "恢复" : "休眠"
+        suspendButton.title = currentSpace?.suspended == true ? "恢复 Space" : "休眠"
         suspendButton.isEnabled = table.selectedRow >= 0 && currentSpace?.busy == false && !model.restoring
         deleteButton.isEnabled = suspendButton.isEnabled
         activityExpiry?.cancel()
+        emptyAction.title = "打开网页"
+        emptyText.maximumNumberOfLines = 0
+        emptyText.toolTip = nil
+        emptyAction.isEnabled = !model.restoring && !creatingTab && currentSpace?.busy != true
         guard let space = currentSpace else {
             displayed?.park(); displayed = nil; empty.isHidden = !search.stringValue.isEmpty
             emptyTitle.stringValue = "浏览会话，各自独立"
@@ -524,8 +553,17 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         let blank = space.suspended || tab?.persistedURL == "about:blank"
         empty.isHidden = !blank
         if space.suspended {
-            emptyTitle.stringValue = "Space 已休眠"
-            emptyText.stringValue = "网站数据和标签页地址已保留。\n点击打开网页恢复；页面内存和未提交表单不会恢复。"
+            emptyTitle.stringValue = "“\(space.record.name)”已休眠"
+            let target = space.record.tabs.first { $0.id == selected } ?? space.record.tabs.first
+            let destination = target.map {
+                if let title = $0.title, !title.isEmpty { return title }
+                if $0.url == "about:blank" { return "新标签页" }
+                return URL(string: $0.url)?.observerDisplayAddress ?? "上次的页面"
+            } ?? "新标签页"
+            emptyText.stringValue = "恢复后将打开 \(space.record.tabs.count) 个标签页，回到“\(destination)”。\n网站数据已保留，未提交的表单内容已清除。"
+            emptyText.maximumNumberOfLines = 3
+            emptyText.toolTip = destination
+            emptyAction.title = "恢复 Space"
         } else if blank {
             emptyTitle.stringValue = "新标签页"
             emptyText.stringValue = "在地址栏输入网址，按回车打开。\n准备好后，点「交给 Agent」复制接管命令。"
@@ -591,6 +629,8 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         }
         if displayed !== tab {
             // An unfinished address belongs to the tab where it was typed.
+            pageActionError = nil
+            clearAddressHint()
             window.endEditing(for: address)
             displayed?.park(); displayed = tab
             if let tab {
@@ -662,27 +702,45 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         let runningTab = space?.tabs.first { $0.id == space?.busyTabID }
         if editingAddress, addressWasEdited, space?.busy == true { tab?.pendingAddressDraft = addressDraft }
         busyTarget.isHidden = runningTab == nil || runningTab === tab
-        if pendingDialog != nil { status.stringValue = "网页等待回复" }
-        else if model.restoring { status.stringValue = "正在恢复会话…" }
-        else if space?.busy == true {
-            let name = runningTab.map(tabTitle) ?? "当前 Space"
-            status.stringValue = editingAddress ? "「\(name)」执行中，结束后按回车打开" : "「\(name)」正在执行"
-        } else { status.stringValue = transientMessage ?? (tab?.webView.isLoading == true ? "正在加载…" : "准备就绪") }
-        status.toolTip = status.stringValue
         handoff.isEnabled = tab != nil
         handoff.title = copiedTab != nil && copiedTab == tab?.id ? "已复制 ✓" : "交给 Agent"
         handoff.setAccessibilityLabel(copiedTab != nil && copiedTab == tab?.id ? "已复制接管命令" : "交给 Agent，复制当前页面的接管命令")
         let insecure = space?.record.tls?.ignoreCertificateErrors == true
         let tls = insecure ? "未校验证书" : space?.record.tls == nil ? "系统证书校验" : "自定义 CA"
         let networkError = space?.networkError
-        security.stringValue = space.map { "\($0.record.proxy == "direct" ? "直连" : "HTTP Proxy")\(networkError == nil ? "" : "已暂停") · \(tls)" } ?? ""
-        security.textColor = insecure || networkError != nil ? .systemOrange : .labelColor.withAlphaComponent(0.7)
+        let proxyState = proxyRecovery(networkError)
+        let recheckProxy = proxyState != .ready
+        let networkPaused = recheckProxy || networkError != nil
+        if pendingDialog != nil { status.stringValue = "网页等待回复" }
+        else if model.restoring { status.stringValue = "正在恢复会话…" }
+        else if networkPaused { status.stringValue = "网络连接已暂停" }
+        else if space?.busy == true {
+            let name = runningTab.map(tabTitle) ?? "当前 Space"
+            status.stringValue = editingAddress ? "「\(name)」执行中，结束后按回车打开" : "「\(name)」正在执行"
+        }
+        else if let transientMessage { status.stringValue = transientMessage }
+        else if space?.suspended == true { status.stringValue = "Space 已休眠" }
+        else if tab?.webView.isLoading == true { status.stringValue = "正在加载…" }
+        else { status.stringValue = "准备就绪" }
+        status.toolTip = status.stringValue
+        security.stringValue = space.map { "\($0.record.proxy == "direct" ? "直连" : "HTTP Proxy")\(networkPaused ? "已暂停" : "") · \(tls)" } ?? ""
+        security.textColor = insecure || networkPaused ? .systemOrange : .labelColor.withAlphaComponent(0.7)
         reloadButton.isEnabled = canReload
-        let error = networkError?.localizedDescription ?? tab?.lastNavigationRejection?.localizedDescription ?? (tab?.unresponsive == true ? "页面未响应。重新加载可恢复标签页；上次操作可能已部分生效。" : tab?.navigationError?.localizedDescription)
-        let failedNavigation = networkError == nil && tab?.lastNavigationRejection == nil && tab?.unresponsive == false && tab?.hasFailedNavigation == true
+        if let notice = pageActionError, notice.tab != tab?.id || notice.navigation != tab?.navigationSequence ||
+            (notice.clearsAfterLoad && tab?.navigationPending == false && tab?.webView.isLoading == false) {
+            pageActionError = nil
+        }
+        let rejection = tab?.observerDismissedRejection == true ? nil : tab?.lastNavigationRejection
+        let actionMessage = pageActionError?.message
+        let error = networkError?.localizedDescription ?? actionMessage ?? rejection?.localizedDescription ?? (tab?.unresponsive == true ? "页面未响应。重新加载可恢复标签页；上次操作可能已部分生效。" : tab?.navigationError?.localizedDescription)
+        let failedNavigation = !networkPaused && actionMessage == nil && rejection == nil && tab?.unresponsive == false && tab?.hasFailedNavigation == true
         let target = failedNavigation ? tab?.failedNavigationTarget : nil
-        if let target, let error {
-            let address = target.displayAddress
+        if recheckProxy {
+            bannerText.stringValue = proxyState == .needsReload ? "系统代理设置已更改。重新检查后可恢复此页面。" : "直连已暂停。请关闭系统代理，然后重新检查。"
+        } else if actionMessage == nil && rejection?.code == "unsupported_navigation" {
+            bannerText.stringValue = "未打开此链接。浏览器支持 HTTP、HTTPS 和 about:blank，当前页面已保留。"
+        } else if let target, let error {
+            let address = target.url.observerDisplayAddress
             let detail = error.replacingOccurrences(of: target.url.absoluteString, with: address)
             bannerText.stringValue = "无法打开 \(address)\n\(detail)"
         } else {
@@ -690,10 +748,17 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         }
         bannerText.toolTip = bannerText.stringValue
         banner.isHidden = error == nil
-        retry.title = failedNavigation ? "重试此网址" : "重新加载"
-        retry.action = failedNavigation ? #selector(retryFailedNavigation) : #selector(reloadPage)
-        retry.isHidden = failedNavigation && target?.isGET != true
-        retry.isEnabled = canReload
+        let dismissible = rejection != nil || actionMessage != nil
+        if recheckProxy {
+            retry.title = "重新检查"; retry.action = #selector(recheckSystemProxy)
+        } else if dismissible {
+            retry.title = "忽略"; retry.action = #selector(dismissPageNotice)
+        } else {
+            retry.title = failedNavigation ? "重试此网址" : "重新加载"
+            retry.action = failedNavigation ? #selector(retryFailedNavigation) : #selector(reloadPage)
+        }
+        retry.isHidden = (networkError != nil && !recheckProxy) || (failedNavigation && target?.isGET != true)
+        retry.isEnabled = recheckProxy ? space != nil && space?.busy == false : dismissible || canReload
         for item in window.toolbar?.items ?? [] where [.copyCommand, .details].contains(item.itemIdentifier) {
             item.isEnabled = tab != nil
         }
@@ -755,12 +820,8 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         beginAddressEditing()
     }
     @objc private func startBrowsing(_ sender: Any?) {
-        if let space = currentSpace, space.suspended {
-            Task { @MainActor in
-                let result = await model.handle(Request(command: "space.resume", args: [space.record.id.uuidString], options: [:]), origin: .observer)
-                if result["ok"] as? Bool != true { presentFailure(result) }
-                refresh()
-            }
+        if currentSpace?.suspended == true {
+            toggleSuspension()
             return
         }
         focusAddress(sender)
@@ -804,12 +865,20 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         let input = addressDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !input.isEmpty else { return }
         // Bare domains and local host:port addresses use HTTPS; explicit HTTP is preserved.
-        let url = input.contains("://") || input == "about:blank" ? input : "https://" + input
+        let hasScheme = URLComponents(string: input)?.scheme != nil
+        // A bare single label followed by a colon can be a URI scheme, such as tel:12345.
+        let hostWithPort = input.range(of: #"^(?:localhost|[A-Z0-9-]+(?:\.[A-Z0-9-]+)+):[0-9]+(?:[/#?]|$)"#,
+                                       options: [.regularExpression, .caseInsensitive]) != nil
+        let url = hasScheme && !hostWithPort ? input : "https://" + input
         guard let parsed = URLComponents(string: url),
               url == "about:blank" || (["http", "https"].contains(parsed.scheme?.lowercased() ?? "") && !(parsed.host ?? "").isEmpty && !input.contains(where: \.isWhitespace)) else {
-            presentFailure(["error": ["message": "请输入完整网址，例如 https://example.com。"]]); return
+            addressHint.stringValue = "请输入有效网址，例如 https://example.com。"
+            addressHint.isHidden = false
+            address.setAccessibilityHelp(addressHint.stringValue)
+            return
         }
         displayed?.pendingAddressDraft = nil
+        clearAddressHint()
         window.makeFirstResponder(nil); transientMessage = nil
         if model.spaces.isEmpty { createTab(opening: url); return }
         guard let space = currentSpace, let tab = displayed else { return }
@@ -915,11 +984,18 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
                 return
             }
             guard response["ok"] as? Bool == true, let result = response["result"] as? [String: Any] else {
-                if request.command == "reload" {
-                    if selectedSpace?.uuidString == request.options["space"], displayed?.id.uuidString == request.options["tab"] {
-                        transientMessage = (response["error"] as? [String: Any])?["message"] as? String
-                        refresh()
+                if ["open", "reload", "back", "forward"].contains(request.command) {
+                    guard let tab = displayed, tab.id.uuidString == request.options["tab"],
+                          selectedSpace?.uuidString == request.options["space"] else { return }
+                    let error = response["error"] as? [String: Any]
+                    let message = error?["message"] as? String ?? "页面操作未完成。"
+                    let visibleRejection = tab.observerDismissedRejection ? nil : tab.lastNavigationRejection
+                    if currentSpace?.networkError == nil, tab.navigationError?.localizedDescription != message,
+                       visibleRejection?.localizedDescription != message {
+                        pageActionError = PageActionError(tab: tab.id, navigation: tab.navigationSequence, message: message,
+                                                          clearsAfterLoad: error?["code"] as? String == "timeout" && tab.navigationPending)
                     }
+                    refresh()
                 } else if request.command == "space.suspend", let space = currentSpace,
                           request.args.first == space.record.id.uuidString,
                           space.tabs.contains(where: { $0.downloads.hasActive }) {
@@ -942,9 +1018,29 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     }
     private func presentFailure(_ response: [String: Any]) {
         let message = (response["error"] as? [String: Any])?["message"] as? String ?? "操作未完成，请重试。"
-        transientMessage = message; updateStatus()
         let alert = NSAlert(); alert.messageText = "无法完成操作"; alert.informativeText = message
         alert.beginSheetModal(for: window)
+    }
+    @objc private func dismissPageNotice() {
+        if pageActionError != nil { pageActionError = nil }
+        else { displayed?.observerDismissedRejection = true }
+        updateStatus()
+    }
+    private enum ProxyRecovery { case ready, blocked, needsReload }
+    private func proxyRecovery(_ networkError: BrowserError?) -> ProxyRecovery {
+        if networkError?.code == "direct_system_proxy_conflict" { return .blocked }
+        if (displayed?.navigationError as? BrowserError)?.code == "direct_system_proxy_conflict" { return .needsReload }
+        return .ready
+    }
+    @objc private func recheckSystemProxy() {
+        switch proxyRecovery(currentSpace?.networkError) {
+        case .blocked:
+            refresh()
+            bannerText.stringValue = "系统代理仍已开启。关闭后可再次检查。"
+            bannerText.toolTip = bannerText.stringValue
+        case .needsReload: reloadPage()
+        case .ready: refresh()
+        }
     }
     @objc func reloadPage() {
         guard canReload, let space = currentSpace, let tab = displayed else { NSSound.beep(); return }

@@ -65,6 +65,12 @@ extension ObserverWindow {
             if let item = items.first(where: { $0.action == selector }), validateMenuItem(item) {
                 dispatched = NSApp.sendAction(selector, to: item.target, from: item)
             }
+        case "address-return":
+            let editor = NSTextView(); editor.string = request["text"] ?? ""
+            beginAddressEditing()
+            address.stringValue = editor.string
+            dispatched = control(address, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:)))
+        case "resume-empty": click(emptyAction)
         case "search-return":
             guard await (window as? ObserverProbeWindow)?.prepareForegroundShortcut() == true,
                   window.makeFirstResponder(search) else { break }
@@ -132,6 +138,10 @@ extension ObserverWindow {
                 "tabWaiting": row?.titleButton.toolTip?.contains("网页等待回复") == true,
                 "tabButtonWidth": row?.bounds.width ?? 0,
                 "lastTabHelp": row?.closeButton.toolTip ?? "",
+                "addressHint": addressHint.isHidden ? "" : addressHint.stringValue,
+                "addressValue": address.stringValue, "footer": status.stringValue,
+                "navigationErrorCode": (displayed?.navigationError as? BrowserError)?.code ?? "",
+                "noticeAction": retry.title, "emptyAction": emptyAction.title, "emptyText": emptyText.stringValue,
                 "bannerText": bannerText.stringValue, "retryVisible": !retry.isHiddenOrHasHiddenAncestor,
                 "buttons": sheet.compactMap { ($0 as? NSButton)?.title },
                 "sheetText": sheet.compactMap { ($0 as? NSTextField)?.stringValue }.joined(separator: " "),

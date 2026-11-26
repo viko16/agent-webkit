@@ -37,10 +37,10 @@
 
 | 编号 | 问题与预期 | 修复前证据 | 状态 | 修复后证据 |
 | --- | --- | --- | --- | --- |
-| 17 | **过期错误占据底栏**。切页、成功导航或下载完成后，仍可能显示上一个操作的错误。 | [截图](ui-ux-evidence/before/14-popup.png) | 待修复 | 待补 |
-| 18 | **轻微错误打断操作，网络错误重复**。地址格式错误弹出模态框，网络错误同时出现在弹框、横幅和底栏。应按操作就地提示。 | [截图](ui-ux-evidence/before/09-invalid-address.png) | 待修复 | 待补 |
-| 19 | **错误操作与原因不符**。不支持的协议也显示重新加载。代理冲突时，底栏仍提示可以交接。 | [截图](ui-ux-evidence/before/15-unsupported-link.png) | 待修复 | 待补 |
-| 20 | **休眠恢复用词不一致**。中央打开网页和侧栏恢复指向相同动作。应显示可恢复的标签数量和目标。 | [截图](ui-ux-evidence/before/20-suspended-front.png) | 待修复 | 待补 |
+| 17 | **过期错误占据底栏**。切页、成功导航或下载完成后，仍可能显示上一个操作的错误。 | [截图](ui-ux-evidence/before/14-popup.png) | 已验证 | [重试成功后旧提示消失](ui-ux-evidence/after/17-recovered.png) |
+| 18 | **轻微错误打断操作，网络错误重复**。地址格式错误弹出模态框，网络错误同时出现在弹框、横幅和底栏。应按操作就地提示。 | [截图](ui-ux-evidence/before/09-invalid-address.png) | 已验证 | [地址栏就地报错](ui-ux-evidence/after/18-invalid-inline.png) · [网络错误横幅](ui-ux-evidence/after/18-single-error.png) |
+| 19 | **错误操作与原因不符**。不支持的协议也显示重新加载。代理冲突时，底栏仍提示可以交接。 | [截图](ui-ux-evidence/before/15-unsupported-link.png) | 已验证 | [忽略外部链接](ui-ux-evidence/after/19-external.png) · [重新检查代理](ui-ux-evidence/after/19-proxy.png) |
+| 20 | **休眠恢复用词不一致**。中央打开网页和侧栏恢复指向相同动作。应显示可恢复的标签数量和目标。 | [截图](ui-ux-evidence/before/20-suspended-front.png) | 已验证 | [恢复目标和标签数](ui-ux-evidence/after/20-resume.png) |
 
 ## 第五批 · 布局、可读性与表单
 
@@ -89,3 +89,10 @@
 - 固定 CSS 视口为 1440 × 900，把窗口缩到 760 pt 后打开静态预览，可以看到页面右下角的「继续」。在打开前、显示时及关闭后读取网页的 `innerWidth` 和 `innerHeight`，三次结果相同。
 - 当前等待用户或仍在执行的页面在标签上显示对应标记。操作结束后，近五分钟的活动可从标签提示查看。
 - 下载面板按标签展示当前 Space 的任务。实测同时显示 41 字节的已完成文件，以及收到 41 / 141 字节的下载。休眠受阻时可直接进入管理面板，取消后由 CLI 核对终态。测试点击「在访达中显示」并截获系统调用，确认目标是实际下载的非空文件。[Apple HIG · Progress indicators](https://developer.apple.com/design/human-interface-guidelines/progress-indicators)
+
+## 第四批验收
+
+- 空资料目录中输入无效网址，原输入保留，提示出现在地址栏下方。访问主动断开连接的本机服务，只有网页横幅提示失败；服务恢复后点击重试，实际 URL 更新，旧错误消失。[Apple HIG · Feedback](https://developer.apple.com/design/human-interface-guidelines/feedback)
+- 另用延迟 18 秒的页面触发等待超时。同一次导航最终成功后横幅自动消失。粘贴 `mailto:` 或 `tel:` 会保留输入并提示修正；单词形式的内网主机如需指定端口，可写完整的 `http://主机名:端口`。
+- 点击不支持的外部链接后选择「忽略」，原页面仍在。仅对测试进程模拟系统代理冲突，横幅和底栏均显示已暂停。重新检查时代理仍开启会继续提示，解除模拟冲突后恢复。
+- 有两个标签页时停留在「评审记录」，确认休眠后，中央显示两个标签页及原页名，侧栏和中央都能「恢复 Space」。恢复后核对原标签 ID 和实际网址；旧记录缺少标题时回退到可读网址或「新标签页」。

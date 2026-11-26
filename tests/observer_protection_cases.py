@@ -1,6 +1,7 @@
 """Observer actions run in the fixture app; Agent requests go through the actual CLI."""
 from concurrent.futures import ThreadPoolExecutor
 import json
+from pathlib import Path
 import subprocess
 import time
 from urllib.parse import urljoin
@@ -86,6 +87,34 @@ def verify_observer_protection(cli, native, binary, env, base, events):
 
     # An interrupted GET leaves its old document intact. The banner and toolbar have different targets.
     click('pick', first)
+    for entry in ('bad address', 'mailto:alice@example.org', 'tel:12345'):
+        invalid = click('address-return', text=entry)
+        assert not invalid['errorSheet'] and invalid['probe']['addressHint'] and invalid['probe']['addressValue'] == entry, invalid
+    click('address-return', text=base)
+    until(lambda: not cli('space', 'info', name)['busy'])
+    assert not probe()['probe']['addressHint']
+
+    cmd(first, 'evaluate', """const link=document.createElement('a');link.href='mailto:test@example.org';
+        document.body.append(link);link.click();true""")
+    until(lambda: probe()['probe']['noticeAction'] == '忽略')
+    ignored = click('retry-navigation')
+    assert not ignored['probe']['retryVisible'] and ignored['displayedURL'] == base, ignored
+    assert cmd(first, 'state')['page']['lastNavigationRejection']['code'] == 'unsupported_navigation'
+
+    proxy_settings = Path(env['AW_TEST_PROXY_SETTINGS'])
+    cmd(first, 'evaluate', "setTimeout(()=>location.assign('?blocked-by-proxy'),350);true")
+    proxy_settings.write_text('{"HTTPEnable":1}')
+    try:
+        paused = probe()['probe']
+        assert paused['noticeAction'] == '重新检查' and '已暂停' in paused['footer'], paused
+        assert '仍已开启' in click('retry-navigation')['probe']['bannerText']
+        until(lambda: probe()['probe']['navigationErrorCode'] == 'direct_system_proxy_conflict')
+    finally:
+        proxy_settings.write_text('{}')
+    click('retry-navigation')
+    until(lambda: not cli('space', 'info', name)['busy'])
+    restored = probe()
+    assert not restored['probe']['retryVisible'] and restored['displayedURL'] == base, restored
     failed_path = '/diagnostic-drop?observer-retry'
     failed_url = urljoin(base, failed_path)
     cmd(first, 'evaluate', f'setTimeout(()=>location.assign({json.dumps(failed_url)}),50);true')
@@ -97,8 +126,7 @@ def verify_observer_protection(cli, native, binary, env, base, events):
     until(lambda: failed_requests() > before_retry)
     until(lambda: not cli('space', 'info', name)['busy'])
     retried = probe()
-    if retried['errorSheet']:
-        sheet(retried['probe']['buttons'][0])
+    assert not retried['errorSheet'] and retried['message'] is None and failed_url in retried['probe']['bannerText'], retried
     click('reload')
     until(lambda: cmd(first, 'state')['page']['requestedURL'] == base)
     cmd(first, 'wait', '#message')
@@ -166,7 +194,10 @@ def verify_observer_protection(cli, native, binary, env, base, events):
     sheet('休眠 Space')
     sleeping = cli('space', 'info', name)
     assert sleeping['lifecycle'] == 'suspended' and sleeping['liveWebViews'] == 0
-    cli('space', 'resume', name)
+    suspended = probe()['probe']
+    assert suspended['emptyAction'] == '恢复 Space' and '2 个标签页' in suspended['emptyText'], suspended
+    assert 'Agent WebKit Fixture' in suspended['emptyText'], suspended
+    assert click('resume-empty')['displayedTabId'] == first
 
     # A delayed GUI confirmation must not wake a Space put to sleep by the Agent.
     cmd(first, 'wait', '#message')
@@ -252,13 +283,13 @@ def verify_observer_protection(cli, native, binary, env, base, events):
     # A concurrent Agent close makes the pending target the final Tab.
     cmd(first, 'tab', 'close')
     guarded = sheet('关闭标签页')
-    assert '最后' in guarded['message'] and guarded['displayedTabId'] == middle, guarded
+    assert '最后' in guarded['probe']['sheetText'] and guarded['displayedTabId'] == middle, guarded
     native(name)  # dismiss fixture error sheet
     first = new_tab()
     click('close', first)
     cmd(first, 'tab', 'close')
     guarded = sheet('关闭标签页')
-    assert '不存在' in guarded['message'] and guarded['displayedTabId'] == middle, guarded
+    assert '不存在' in guarded['probe']['sheetText'] and guarded['displayedTabId'] == middle, guarded
     native(name)
     first = new_tab()
     click('close', first)
@@ -266,7 +297,7 @@ def verify_observer_protection(cli, native, binary, env, base, events):
         waiting = pool.submit(error, middle, 'timeout', 'wait', '#never-created', '--timeout', '1600')
         until(lambda: cli('space', 'info', name)['busy'])
         guarded = sheet('关闭标签页')
-        assert '操作' in guarded['message'], guarded
+        assert '操作' in guarded['probe']['sheetText'], guarded
         waiting.result(timeout=5)
     native(name)
     probe('expire-history', first)

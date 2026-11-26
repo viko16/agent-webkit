@@ -4,7 +4,21 @@ import Network
 import CFNetwork
 import Security
 
-struct TabRecord: Codable { var id: UUID; var url: String; var openerTabID: UUID? = nil }
+struct TabRecord: Codable {
+    var id: UUID
+    var url: String
+    var openerTabID: UUID? = nil
+    var title: String? = nil
+}
+
+extension URL {
+    var observerDisplayAddress: String {
+        var parts = URLComponents(url: self, resolvingAgainstBaseURL: true)
+        parts?.user = nil
+        parts?.password = nil
+        return parts?.string ?? host ?? "目标网址"
+    }
+}
 struct SpaceRecord: Codable {
     var id: UUID
     var name: String
@@ -125,7 +139,10 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     var openerTabID: UUID?
     var hasUnreadPopupNotice = false
     var pendingAddressDraft: String?
-    var lastNavigationRejection: BrowserError?
+    var lastNavigationRejection: BrowserError? {
+        didSet { observerDismissedRejection = false }
+    }
+    var observerDismissedRejection = false
     private(set) var popupSequence = 0
     private var lastPopupID: UUID?
     var suppressedDialogs = 0
@@ -137,13 +154,6 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     struct NavigationTarget {
         let url: URL
         let isGET: Bool
-
-        var displayAddress: String {
-            var parts = URLComponents(url: url, resolvingAgainstBaseURL: true)
-            parts?.user = nil
-            parts?.password = nil
-            return parts?.string ?? url.host ?? "目标网址"
-        }
     }
     private(set) var failedNavigationTarget: NavigationTarget?
     private var nextMainFrameTarget: NavigationTarget?
@@ -1251,7 +1261,7 @@ final class Space {
     var tabStates: [[String: Any]] {
         if !suspended && configurationError == nil { return tabs.map(\.state) }
         return record.tabs.map { tab in
-            ["tabId": tab.id.uuidString, "url": tab.url, "title": "", "loading": false,
+            ["tabId": tab.id.uuidString, "url": tab.url, "title": tab.title ?? "", "loading": false,
              "navigationId": NSNull(), "navigationPhase": "suspended", "httpStatus": NSNull(), "responseURL": NSNull(),
              "httpResponseNavigationId": NSNull(), "redirectCount": 0,
              "webContentTerminated": false, "unresponsive": false, "suspended": true,
@@ -1686,6 +1696,7 @@ final class BrowserModel {
                 try space.checkObserverImpact(command, origin: origin)
                 try save(space)
                 let previous = space.record
+                for (index, tab) in space.tabs.enumerated() { space.record.tabs[index].title = tab.webView.title }
                 space.record.suspended = true
                 do { try save(space) }
                 catch {

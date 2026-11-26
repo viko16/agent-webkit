@@ -11,6 +11,7 @@ from threading import Event
 import uuid
 
 from observer_protection_cases import verify_observer_protection
+from direct_conflict_cases import prepare_proxy_settings
 from fixtures import origin
 from skill_workflow import cleanup_test_services, verify_cleanup
 
@@ -125,8 +126,9 @@ def main():
     out = ROOT / '.artifacts' / time.strftime('fix-gui-search-selection-%Y%m%d-%H%M%S')
     out.mkdir(parents=True)
     binary = search_fixture(out)
+    _, proxy_env = prepare_proxy_settings(out)
     state = Path(tempfile.mkdtemp(prefix='aw-search-'))
-    env = dict(os.environ, BROWSER_DATA_DIR=str(state), BROWSER_SOCKET=str(state / 'browser.sock'),
+    env = dict(os.environ, **proxy_env, BROWSER_DATA_DIR=str(state), BROWSER_SOCKET=str(state / 'browser.sock'),
                BROWSER_MAX_TABS_PER_SPACE='3', BROWSER_TEST_SEARCH_RESPONSE=str(out / 'search-response.json'))
     download_gate = Event()
     site, events = origin(download_gate=download_gate)
@@ -208,10 +210,12 @@ def main():
                 raise AssertionError('Startup timed out')
             frontmost = cli('status')['frontmostPid']
             alias = cli('space', 'create', original_id, '--proxy', 'direct')
+            legacy = native('confirmation-target', 'choose')['probe']
+            assert '1 个标签页' in legacy['emptyText'] and '新标签页' in legacy['emptyText'], legacy
             assert native('confirmation-target', 'delete')['errorSheet']
             assert cli('space', 'delete', original_id)['dataStoreRemoved']
             confirmed = native('', 'sheet', button='删除 Space')
-            assert 'Space 不存在' in confirmed['message'], confirmed
+            assert 'Space 不存在' in confirmed['probe']['sheetText'] and confirmed['message'] is None, confirmed
             assert cli('space', 'info', alias['id'])['id'] == alias['id']
             cli('space', 'delete', alias['id'])
             native('')
@@ -308,14 +312,14 @@ def main():
             try:
                 state.chmod(0o500)
                 failed = native('personal', 'new-tab')
-                assert failed['errorSheet'] and failed['message'] and failed['query'] == 'personal', failed
+                assert failed['errorSheet'] and failed['probe']['sheetText'] and failed['query'] == 'personal', failed
                 assert failed['selectedSpaceId'] == personal['id']
                 assert len(cli('tab', 'list', '--space', personal['id'])) == 2
             finally:
                 state.chmod(permissions)
             new_tab(personal)
             limited = native('personal', 'new-tab')
-            assert limited['errorSheet'] and limited['message'] and limited['query'] == 'personal', limited
+            assert limited['errorSheet'] and limited['probe']['sheetText'] and limited['query'] == 'personal', limited
             assert len(cli('tab', 'list', '--space', personal['id'])) == 3
             assert native('personal', 'sheet', button=limited['probe']['buttons'][0])['probe']['dispatched']
             deferred = cli('space', 'create', 'test-deferred', '--proxy', 'direct')
