@@ -109,8 +109,10 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     private(set) var navigationErrorRevision = 0
     // Space/policy errors have no navigation token; callback failures carry their owning sequence.
     private var navigationErrorSequence: Int?
+    var hasFailedNavigation: Bool { navigationErrorSequence != nil }
     var navigationError: Error? {
         didSet {
+            failedNavigationTarget = nil
             navigationErrorSequence = nil
             if navigationError != nil { navigationErrorRevision += 1 }
         }
@@ -130,6 +132,19 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     private(set) var closed = false
     private(set) var persistedURL: String
     private(set) var requestedURL: String?
+    struct NavigationTarget {
+        let url: URL
+        let isGET: Bool
+
+        var displayAddress: String {
+            var parts = URLComponents(url: url, resolvingAgainstBaseURL: true)
+            parts?.user = nil
+            parts?.password = nil
+            return parts?.string ?? url.host ?? "目标网址"
+        }
+    }
+    private(set) var failedNavigationTarget: NavigationTarget?
+    private var nextMainFrameTarget: NavigationTarget?
     private(set) var committedDocumentURL = "about:blank"
     var deadline: UInt64?
     private var observations: [NSKeyValueObservation] = []
@@ -164,6 +179,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
             case provisionalFailure = "provisional-failure"
         }
         let id = UUID()
+        var target: NavigationTarget?
         var phase = Phase.provisional
         var response: MainDocumentResponse?
         var redirects = 0
@@ -203,6 +219,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         backingWindow = NSPanel(contentRect: webView.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init()
         dialogs.automaticallyDismissed = { [weak self] in self?.suppressedDialogs += 1 }
+        dialogs.changed = { [weak self] in self?.statusChanged?() }
         DiagnosticRouter.shared.logs.setObject(self.diagnostics, forKey: webView)
         self.diagnostics.captureConfigurationChanged = { [weak self] in self?.updateDiagnosticScript() }
         FrameRouter.shared.stores.setObject(frames, forKey: webView)
@@ -523,21 +540,23 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         // A repeated failed load can return nil and still deliver a terminal delegate callback.
         // Never treat the previous document's readyState as completion of this request.
         navigationPending = true
-        navigationResult = NavigationResult()
+        let target = NavigationTarget(url: url, isGET: true)
+        nextMainFrameTarget = nil
+        navigationResult = NavigationResult(target: target)
         let start = monotonicNow()
         navigationStartedAt = start
         if let navigation = webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)) {
-            trackNavigation(navigation, start: start)
+            trackNavigation(navigation, start: start, target: target)
         }
         changed?()
     }
 
-    private func trackNavigation(_ navigation: WKNavigation, start: UInt64) {
+    private func trackNavigation(_ navigation: WKNavigation, start: UInt64, target: NavigationTarget?) {
         discardReleasedNavigations()
         let key = ObjectIdentifier(navigation)
         guard navigationSpan(navigation) == nil else { return }
         navigationSequence += 1
-        let result = NavigationResult()
+        let result = NavigationResult(target: target)
         navigationResult = result
         navigationSpans[key] = NavigationSpan(navigation: navigation, start: start, timing: operationTiming,
             token: operationTiming?.begin("navigation", from: start), sequence: navigationSequence, id: result.id)
@@ -875,6 +894,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         dialogs.cancelAll(code: "dialog_cancelled")
         fileChooser.stop()
         navigationError = nil
+        lastNavigationRejection = nil
         certificateError = nil
         if !navigationPending {
             navigationStartedAt = monotonicNow()
@@ -882,7 +902,8 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         }
         navigationPending = true
         provisionalNavigation = navigation
-        if let navigation { trackNavigation(navigation, start: monotonicNow()) }
+        if let navigation { trackNavigation(navigation, start: monotonicNow(), target: nextMainFrameTarget) }
+        nextMainFrameTarget = nil
         diagnostics.beginNavigation(id: navigationResult?.id)
         changed?()
     }
@@ -961,6 +982,14 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
             if provisional { navigationResult?.response = nil }
             navigationError = certificateError ?? error
             navigationErrorSequence = failedSequence
+            let target = navigationResult?.target
+            let errorURL = native.userInfo[NSURLErrorFailingURLErrorKey] as? URL
+            if let url = errorURL ?? target?.url, Self.supports(url) {
+                // Policy callbacks have no navigation token. Only offer a GET when the target
+                // agrees with this failure or WebKit recorded a redirect on this navigation.
+                let matches = target?.url == url || (navigationResult?.redirects ?? 0) > 0
+                failedNavigationTarget = NavigationTarget(url: url, isGET: target?.isGET == true && matches)
+            }
             changed?()
         }
     }
@@ -1065,7 +1094,10 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
             rejectNavigation(BrowserError("unsupported_navigation", "仅支持 http(s) 与 about:blank；已拒绝外部应用或不支持的 URL scheme"))
             decisionHandler(.cancel); return
         }
-        if navigationAction.targetFrame?.isMainFrame == true { requestedURL = url.absoluteString }
+        if navigationAction.targetFrame?.isMainFrame == true {
+            requestedURL = url.absoluteString
+            nextMainFrameTarget = NavigationTarget(url: url, isGET: navigationAction.request.httpMethod == "GET")
+        }
         decisionHandler(navigationAction.shouldPerformDownload ? .download : .allow)
     }
     private static func supports(_ url: URL) -> Bool {
@@ -1121,6 +1153,7 @@ struct ObserverImpact: Error, Equatable {
     var detail: String {
         var messages: [String] = []
         if command == "space.delete" { messages.append("将移除全部标签页、登录状态和网站数据，无法撤销。") }
+        if command == "space.suspend" { messages.append("休眠会释放此 Space 的所有页面，未提交的表单内容会丢失。标签页地址和网站数据会保留。") }
         if !downloads.isEmpty { messages.append("将中断 \(downloads.count) 项活跃下载。") }
         if !dialogs.isEmpty { messages.append("将关闭 \(dialogs.count) 个待处理的网页对话框。") }
         if recentActivity != nil { messages.append("Agent 在最近 5 分钟内操作过目标标签页。") }
@@ -1171,7 +1204,7 @@ final class Space {
         let dialogs = Set(live.flatMap { $0.dialogs.pendingIDs })
         let closing = tabID.flatMap { activity[$0] }
         let recent = command == "tab.close" && closing?.recent == true ? closing?.agentFinishedAt : nil
-        guard command == "space.delete" || !downloads.isEmpty || !dialogs.isEmpty || recent != nil else { return nil }
+        guard command == "space.delete" || command == "space.suspend" || !downloads.isEmpty || !dialogs.isEmpty || recent != nil else { return nil }
         return ObserverImpact(command: command, spaceID: record.id, spaceName: record.name, tabs: ids,
                               downloads: downloads, dialogs: dialogs, recentActivity: recent)
     }
@@ -1580,7 +1613,7 @@ final class BrowserModel {
         if command == "space.list" { return spaces.map(\.summary) }
         if command == "space.create" {
             let name = try arg(0)
-            guard name.range(of: "^[A-Za-z][A-Za-z0-9_-]{0,63}$", options: .regularExpression) != nil else { throw BrowserError("invalid_name", "名称需为字母开头的 1–64 位字母、数字、下划线或连字符") }
+            guard name.range(of: "^[A-Za-z][A-Za-z0-9_-]{0,63}$", options: .regularExpression) != nil else { throw BrowserError("invalid_name", "名称须以英文字母开头，最多 64 位，可包含英文字母、数字、下划线和连字符。") }
             guard !records.contains(where: { $0.name == name && !$0.deleting }) else { throw BrowserError("space_exists", "Space 已存在") }
             guard let proxy = r.options["proxy"] else { throw BrowserError("proxy_required", "创建 Space 必须显式指定 --proxy direct 或 --proxy http://127.0.0.1:<PORT>") }
             guard r.options["ca-cert"] == nil || r.options["ignore-certificate-errors"] == nil else {

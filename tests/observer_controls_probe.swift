@@ -47,11 +47,30 @@ extension ObserverWindow {
             return [view] + view.subviews.flatMap { controls($0) }
         }
         switch action {
+        case "search-return":
+            guard await (window as? ObserverProbeWindow)?.prepareForegroundShortcut() == true,
+                  window.makeFirstResponder(search) else { break }
+            let enter = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                                         timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                         context: nil, characters: "\r", charactersIgnoringModifiers: "\r",
+                                         isARepeat: false, keyCode: 36)!
+            window.sendEvent(enter)
+            dispatched = true
         case "expire-history":
             if let tabID { currentSpace?.activity[tabID]?.agentFinishedAt = .now.advanced(by: .seconds(-301)); refresh() }
         case "pick": click(row?.arrangedSubviews.first as? NSButton)
+        case "edit-prompt":
+            let prompt = controls(dialogArea).compactMap { $0 as? NSTextField }.first { $0.isEditable }
+            if let prompt {
+                prompt.stringValue = request["text"] ?? ""
+                prompt.delegate?.controlTextDidChange?(Notification(name: NSControl.textDidChangeNotification, object: prompt))
+            }
+        case "answer-dialog":
+            click(controls(dialogArea).compactMap { $0 as? NSButton }.first { $0.title == request["button"] })
         case "close": click(row?.arrangedSubviews.last as? NSButton)
         case "reload": click(reloadButton)
+        case "retry-navigation":
+            if !retry.isHiddenOrHasHiddenAncestor { click(retry) }
         case "delete": click(deleteButton)
         case "suspend": click(suspendButton)
         case "sheet":
@@ -80,7 +99,12 @@ extension ObserverWindow {
         if dispatched { try? await Task.sleep(for: .milliseconds(100)) }
         let activity = tabID.flatMap { currentSpace?.activity[$0] }
         let sheet = controls(window.attachedSheet?.contentView)
+        let dialog = dialogArea.arrangedSubviews.first as? PageDialogView
         return ["dispatched": dispatched, "simulatedKey": simulatedKey, "visible": window.isVisible,
+                "dialogID": dialog?.dialogID as Any? ?? NSNull(),
+                "promptText": controls(dialog).compactMap { $0 as? NSTextField }.first { $0.isEditable }?.stringValue as Any? ?? NSNull(),
+                "tabWaiting": row?.arrangedSubviews.first?.toolTip?.contains("网页等待回复") == true,
+                "bannerText": bannerText.stringValue, "retryVisible": !retry.isHiddenOrHasHiddenAncestor,
                 "buttons": sheet.compactMap { ($0 as? NSButton)?.title },
                 "sheetText": sheet.compactMap { ($0 as? NSTextField)?.stringValue }.joined(separator: " "),
                 "executing": activity?.executing ?? 0, "recent": activity?.recent == true,

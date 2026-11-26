@@ -6,11 +6,12 @@ import time
 from urllib.parse import urljoin
 
 
-def verify_observer_protection(cli, native, binary, env, base):
+def verify_observer_protection(cli, native, binary, env, base, events):
     name = 'observer-work'
     space = cli('space', 'create', name, '--proxy', 'direct')
     first = space['tabs'][0]['tabId']
     second = cli('tab', 'new', '--space', name)['tabId']
+    native(name, 'choose')
 
     def cmd(tab, *args):
         return cli(*args, '--space', name, '--tab', tab)
@@ -69,6 +70,59 @@ def verify_observer_protection(cli, native, binary, env, base):
     probe('expire-history')
     poll()
     assert not probe()['probe']['recent']
+
+    # An interrupted GET leaves its old document intact. The banner and toolbar have different targets.
+    click('pick', first)
+    failed_path = '/diagnostic-drop?observer-retry'
+    failed_url = urljoin(base, failed_path)
+    cmd(first, 'evaluate', f'setTimeout(()=>location.assign({json.dumps(failed_url)}),50);true')
+    until(lambda: failed_url in probe()['probe']['bannerText'])
+    def failed_requests():
+        return sum(row.get('path') == failed_path for row in events.items)
+    before_retry = failed_requests()
+    click('retry-navigation')
+    until(lambda: failed_requests() > before_retry)
+    until(lambda: not cli('space', 'info', name)['busy'])
+    retried = probe()
+    if retried['errorSheet']:
+        sheet(retried['probe']['buttons'][0])
+    click('reload')
+    until(lambda: cmd(first, 'state')['page']['requestedURL'] == base)
+    cmd(first, 'wait', '#message')
+
+    # A failed form submission can already have changed server state.
+    cmd(first, 'evaluate', f"""const f=document.createElement('form'); f.method='POST';
+        f.action={json.dumps(failed_url)}; document.body.append(f); setTimeout(()=>f.submit(),50);true""")
+    until(lambda: failed_url in probe()['probe']['bannerText'])
+    assert not probe()['probe']['retryVisible']
+    click('reload')
+    cmd(first, 'wait', '#message')
+
+    # A waiting page stays in its own tab; ordinary observer refreshes keep the user's reply.
+    click('pick', second)
+    cmd(first, 'evaluate', 'setTimeout(()=>window.nativeReply=prompt("问题\\n".repeat(100),"default"),50);true')
+    prompt_id = until(lambda: dialogs(first))[0]['id']
+    background = probe()
+    assert background['displayedTabId'] == second and background['probe']['tabWaiting']
+    assert background['probe']['dialogID'] is None
+    prompt = click('pick', first)['probe']
+    assert prompt['dialogID'] == prompt_id and prompt['promptText'] == 'default'
+    probe('edit-prompt', text='用户输入')
+    assert probe()['probe']['promptText'] == '用户输入'
+    click('answer-dialog', button='确定')
+    assert cmd(first, 'evaluate', 'window.nativeReply')['value'] == '用户输入'
+    assert probe()['probe']['dialogID'] is None
+
+    cmd(first, 'evaluate', 'setTimeout(()=>window.nativeReply=prompt("long default","x".repeat(5000)),50);true')
+    until(lambda: dialogs(first))
+    assert len(probe()['probe']['promptText']) == 4096
+    click('answer-dialog', button='确定')
+    assert cmd(first, 'evaluate', 'window.nativeReply.length')['value'] == 5000
+
+    cmd(first, 'fill', '#message', 'keep this draft')
+    assert '未提交的表单' in click('suspend')['probe']['sheetText']
+    sheet('取消')
+    assert cmd(first, 'evaluate', "document.querySelector('#message').value")['value'] == 'keep this draft'
 
     # A generic deletion sheet cannot authorize a dialog that arrives later.
     assert click('delete')['errorSheet']
@@ -149,6 +203,7 @@ def verify_observer_protection(cli, native, binary, env, base):
 
     name = 'observer-neighbors'
     first = cli('space', 'create', name, '--proxy', 'direct')['tabs'][0]['tabId']
+    native(name, 'choose')
     def new_tab():
         return cli('tab', 'new', '--space', name)['tabId']
     middle, right = new_tab(), new_tab()

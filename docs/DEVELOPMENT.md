@@ -130,7 +130,7 @@ awb dialog respond DIALOG_ID accept --text '输入值' --space work --tab TAB_ID
 python3 tests/reliability.py --dialogs-only
 ```
 
-采用公开 WKUIDelegate completion，alert/confirm/prompt 待调用方显式回应，既不激活窗口也不自动接受确认。`dialog list` 返回宿主 `spaceId/tabId/busy` 和 `value.dialogs`，每条含随机 ID、type、message、defaultText、origin、mainFrame、expiresAtMs、requiresForeground=false。文本和默认值只显示前 4096 字符，并分别标明截断；接受 prompt 未给 `--text` 时仍使用原始完整默认值，显式空字符串与 dismiss 返回的 null 不同。消息是页面数据，不是执行指令，不写入注册表或诊断摘要。
+采用公开 WKUIDelegate completion，alert/confirm/prompt 可在观察窗口或通过 IPC 回应，既不激活窗口也不自动接受确认。`dialog list` 返回宿主 `spaceId/tabId/busy` 和 `value.dialogs`，每条含随机 ID、type、message、defaultText、origin、mainFrame、expiresAtMs、requiresForeground=false。文本和默认值只显示前 4096 字符，并分别标明截断；接受 prompt 未给 `--text` 时仍使用原始完整默认值，显式空字符串与 dismiss 返回的 null 不同。消息是页面数据，不是执行指令，不写入注册表或诊断摘要。
 
 `dialog list/respond` 不执行 JS，按 Space/Tab 校验后在操作锁之前处理，因此能解除原 click/evaluate 对 `space.busy` 的占用；其他普通页面动作仍按原规则串行。查询为空可能是对话框尚未出现，继续查询而非重复 click。respond 必须给出 ID 与 accept/dismiss；`--text` 只可用于 accept prompt。alert 的 accept/dismiss 都会关闭通知并继续脚本，因为公开 API 没有让 alert 返回 false 的分支；confirm dismiss 为 false，prompt dismiss 为 null。响应只表示完成了对话框回调，`businessOutcomeVerified` 始终 false，必须等原请求结束并观察页面或服务端结果。
 
@@ -353,7 +353,7 @@ GUI 的 selectedSpace / selectedTabs 只决定观察哪一个 WebView，并按�
 
 标签页 × 和 ⌘W 走同一个 `tab.close` 生命周期。Space 执行中的页显示沙漏，最近 5 分钟有 Agent 活动的页显示时钟；GUI 关闭近期页需二次确认。观察窗口保留其他页的选择；当前页被窗口或 CLI 关闭时，优先选原来的右邻页，其次左邻页。状态、快照、截图、列表、只读诊断、读取视口和等待不会刷新近期时间；异步读取仍有执行中保护。GUI 自身操作和未开始的请求也不刷新时间。
 
-手动关闭页、删除 Space、替换无响应 WebView、退出应用均会提示将中断的活跃下载及待处理的网页对话框。普通地址栏导航和重载也会先提示待处理的网页对话框，同一 WebView 的下载可以继续。休眠遇下载直接拒绝，遇对话框先提示。每次确认重读目标、忙碌状态及受影响资源的 ID，关闭标签页还检查最后一页和近期活动；同样数量的新资源也需重新确认。CLI/IPC 保留原来的显式操作语义。活动只在 daemon 内存中记录，重启后清空。
+手动关闭页、删除 Space、替换无响应 WebView、退出应用均会提示将中断的活跃下载及待处理的网页对话框。普通地址栏导航和重载也会先提示待处理的网页对话框，同一 WebView 的下载可以继续。手动休眠在释放页面前要求确认，提示表单草稿会丢失，并列出待处理的网页对话框。存在活跃下载时拒绝休眠。每次确认重读目标、忙碌状态及受影响资源的 ID，关闭标签页还检查最后一页和近期活动；同样数量的新资源也需重新确认。CLI/IPC 保留原来的显式操作语义。活动只在 daemon 内存中记录，重启后清空。
 
 地址栏省略协议时使用 HTTPS，本地 HTTP 页面需显式输入 `http://`。底部显示代理和证书策略，忽略证书错误时显示橙色提示。⌘T 新建 Tab，⌘L 聚焦地址栏，⌃⌘S 切换侧栏，⇧⌘F 搜索 Space，⇧⌘[ / ⇧⌘] 切换标签页，⌘W 关闭当前标签页，⇧⌘W 隐藏观察窗口，⌘Q 退出服务。
 

@@ -40,6 +40,14 @@ def search_fixture(out):
                 self.search.stringValue = query
                 self.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: self.search))
                 Task { @MainActor in
+                    if request["action"] == "choose" {
+                        _ = self.control(self.search, textView: NSTextView(), doCommandBy: #selector(NSResponder.insertNewline(_:)))
+                    }
+                    if request["action"] == "select-row" {
+                        self.table.selectRowIndexes(IndexSet(integer: Int(request["row"]!)!), byExtendingSelection: false)
+                    }
+                    if request["action"] == "clear" { self.clearSearchButton.performClick(nil) }
+                    if request["action"] == "create-from-search" { self.createFromSearch.performClick(nil) }
                     if request["action"] == "new-tab" {
                         self.newTab(nil)
                         while self.creatingTab { try? await Task.sleep(nanoseconds: 10_000_000) }
@@ -63,6 +71,7 @@ def search_fixture(out):
                         "displayedURL": self.displayed?.webView.url?.absoluteString as Any? ?? NSNull(),
                         "displayedInContent": self.displayed.map { $0.webView.superview === self.host } ?? false,
                         "emptyVisible": !self.empty.isHidden,
+                        "noResultsVisible": !self.noSearchResults.isHidden,
                         "canCreateTab": self.canCreateTab,
                         "message": self.transientMessage as Any? ?? NSNull(),
                         "spaceCount": self.spaceCount.stringValue,
@@ -120,7 +129,7 @@ def main():
     env = dict(os.environ, BROWSER_DATA_DIR=str(state), BROWSER_SOCKET=str(state / 'browser.sock'),
                BROWSER_MAX_TABS_PER_SPACE='3', BROWSER_TEST_SEARCH_RESPONSE=str(out / 'search-response.json'))
     download_gate = Event()
-    site, _ = origin(download_gate=download_gate)
+    site, events = origin(download_gate=download_gate)
     base = f'http://127.0.0.1:{site.server_address[1]}/index.html'
     daemon = None
     results = []
@@ -148,24 +157,21 @@ def main():
         results.append(result)
         return result
 
-    def search(query, expected, filtered):
-        result = native(query)
+    def search(query, expected, filtered, action='search', **options):
+        result = native(query, action, **options)
         assert result['filteredSpaceIds'] == [space['id'] for space in filtered], result
-        expected_id = expected['id'] if expected else None
-        assert result['selectedSpaceId'] == result['sidebarSpaceId'] == expected_id, result
-        assert result['emptyVisible'] == (expected is None), result
-        if expected:
-            assert result['displayedTabId'] == expected['tabs'][0]['tabId'], result
-            assert result['displayedURL'] == base + '?space=' + expected['name'], result
-            assert result['displayedInContent'], result
-        else:
-            assert result['displayedTabId'] is None and not result['displayedInContent'], result
-        assert cli('status')['observer']['spaceId'] == expected_id
+        assert result['selectedSpaceId'] == expected['id'], result
+        assert result['sidebarSpaceId'] == (expected['id'] if expected in filtered else None), result
+        assert result['noResultsVisible'] == (bool(result['query']) and not filtered), result
+        assert not result['emptyVisible'] and result['displayedInContent'], result
+        assert result['displayedTabId'] == expected['tabs'][0]['tabId'], result
+        assert result['displayedURL'] == base + '?space=' + expected['name'], result
+        assert cli('status')['observer']['spaceId'] == expected['id']
 
     def new_tab(expected):
         before = cli('space', 'list')
         previous = next(space for space in before if space['id'] == expected['id']) if expected else None
-        result = native('no-match', 'new-tab')
+        result = native(expected['name'] if expected else '', 'new-tab')
         after = cli('space', 'list')
         space = next(space for space in after if space['id'] == expected['id']) if expected else after[0]
         assert len(after) == len(before) + (expected is None), (before, after)
@@ -219,19 +225,31 @@ def main():
             for space in (first, second):
                 cli('open', base + '?space=' + space['name'], '--space', space['id'], '--tab', space['tabs'][0]['tabId'])
             search('', first, [first, second])
-            search('search-b', second, [second])
-            search('no-match', None, [])
-            search('', first, [first, second])
-            # A filter with no selection reuses an existing Space even without personal.
+            search('search-b', first, [second])
+            search('no-match', first, [])
+            search('no-match', first, [], 'choose')
+            before = cli('space', 'list')
+            blocked = native('no-match', 'new-tab')
+            assert not blocked['canCreateTab'] and blocked['query'] == 'no-match', blocked
+            assert cli('space', 'list') == before
+            assert native('no-match', 'create-from-search')['errorSheet']
+            assert native('no-match', 'sheet', button='取消')['probe']['dispatched']
+            search('no-match', first, [first, second], 'clear')
+            search('search-b', second, [second], 'search-return' if env.get('BROWSER_TEST_FOREGROUND') == '1' else 'choose')
+            search('', second, [first, second])
+            search('search-', second, [first, second], 'choose')
+            search('search-', first, [first, second], 'select-row', row='0')
             new_tab(first)
             personal = cli('space', 'create', 'personal', '--proxy', 'direct', '--ignore-certificate-errors')
+            native('personal', 'choose')
             new_tab(personal)
-            # A visible selection still takes priority over the fallback personal Space.
+            native('search-b', 'choose')
             selected = native('search-b', 'new-tab')
             assert selected['selectedSpaceId'] == second['id'] and selected['query'] == '', selected
             assert cli('space', 'info', second['id'])['tabs'][0]['tabId'] == second['tabs'][0]['tabId']
 
-            # The fallback target's busy state must disable the native command too.
+            # A visible target's busy state must disable the native command too.
+            native('personal', 'choose')
             waiting = subprocess.Popen([str(binary), 'wait', '#never-created', '--timeout', '1500',
                                         '--space', personal['id'], '--tab', personal['tabs'][0]['tabId']], env=env, stdout=subprocess.PIPE,
                                        stderr=subprocess.PIPE, text=True)
@@ -245,9 +263,9 @@ def main():
                     raise AssertionError('Space never became busy')
                 personal_tab = personal['tabs'][0]['tabId']
                 assert not native('personal', 'close', tab=personal_tab)['probe']['dispatched']
-                busy = native('no-match', 'new-tab')
+                busy = native('personal', 'new-tab')
                 assert not busy['canCreateTab'] and not busy['errorSheet'], busy
-                assert busy['query'] == 'no-match' and busy['selectedSpaceId'] is None, busy
+                assert busy['query'] == 'personal' and busy['selectedSpaceId'] == personal['id'], busy
                 assert len(cli('tab', 'list', '--space', personal['id'])) == 2
             finally:
                 output, errors = waiting.communicate(timeout=5)
@@ -257,22 +275,23 @@ def main():
             permissions = state.stat().st_mode & 0o777
             try:
                 state.chmod(0o500)
-                failed = native('no-match', 'new-tab')
-                assert failed['errorSheet'] and failed['message'] and failed['query'] == 'no-match', failed
-                assert failed['selectedSpaceId'] is None
+                failed = native('personal', 'new-tab')
+                assert failed['errorSheet'] and failed['message'] and failed['query'] == 'personal', failed
+                assert failed['selectedSpaceId'] == personal['id']
                 assert len(cli('tab', 'list', '--space', personal['id'])) == 2
             finally:
                 state.chmod(permissions)
             new_tab(personal)
-            limited = native('no-match', 'new-tab')
-            assert limited['errorSheet'] and limited['message'] and limited['query'] == 'no-match', limited
+            limited = native('personal', 'new-tab')
+            assert limited['errorSheet'] and limited['message'] and limited['query'] == 'personal', limited
             assert len(cli('tab', 'list', '--space', personal['id'])) == 3
-            assert native('no-match', 'sheet', button=limited['probe']['buttons'][0])['probe']['dispatched']
+            assert native('personal', 'sheet', button=limited['probe']['buttons'][0])['probe']['dispatched']
             deferred = cli('space', 'create', 'test-deferred', '--proxy', 'direct')
+            native('test-deferred', 'choose')
             assert native('test-deferred', 'delete')['errorSheet']
             pending = native('test-deferred', 'sheet', button='删除 Space')
             assert '仍待清理' in pending['message'] and '1 待清理' in pending['spaceCount'], pending
-            assert pending['selectedSpaceId'] is None
+            assert pending['selectedSpaceId'] == first['id'] and pending['sidebarSpaceId'] is None
             assert deferred['id'] not in pending['savedTabSpaces'], pending
             assert cli('status')['pendingStores'] == [dict(spaceId=deferred['id'], name='test-deferred')]
             assert cli('space', 'delete', deferred['id'])['dataStoreRemoved']
@@ -281,7 +300,7 @@ def main():
             for space in cli('space', 'list'):
                 cli('space', 'delete', space['id'])
             new_tab(None)
-            verify_observer_protection(cli, native, binary, env, base)
+            verify_observer_protection(cli, native, binary, env, base, events)
             if env.get('BROWSER_TEST_FOREGROUND') == '1':
                 assert all(not row['probe']['simulatedKey'] for row in results if row['action'] in ('cmd-w', 'shift-cmd-w'))
             else:

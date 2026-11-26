@@ -15,7 +15,10 @@ extension SpaceCreationSheet {
             advanced.performClick(nil)
         }
         var options: [String: String] = [:]
-        submit = { options = $0.options }
+        submit = { [weak self] request in
+            options = request.options
+            self?.finishSubmission()
+        }
         create.performClick(nil)
         return ["enabledWithoutCA": enabledWithoutCA, "options": options]
     }

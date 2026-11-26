@@ -43,6 +43,11 @@ def origin(port=0, events=None, tls_context=None, download_gate=None):
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_POST(self):
+            if self.path == '/diagnostic-drop?observer-retry':
+                self.rfile.read(int(self.headers.get('Content-Length', '0')))
+                self.close_connection = True
+                self.connection.shutdown(socket.SHUT_RDWR)
+                return
             if self.path == '/keyboard-save':
                 payload = json.loads(self.rfile.read(int(self.headers.get('Content-Length', '0'))))
                 events.add(kind='keyboard-save', nonce=nonce, **payload)

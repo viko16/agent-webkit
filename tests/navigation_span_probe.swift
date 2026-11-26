@@ -46,6 +46,10 @@ final class NavigationSpanProbe: NSObject, NSApplicationDelegate {
 
     private func run() async throws {
         let base = CommandLine.arguments[1]
+        let privateURL = URL(string: "https://user:password@example.test:8443/failed")!
+        let target = Tab.NavigationTarget(url: privateURL, isGET: true)
+        try check(target.displayAddress == "https://example.test:8443/failed" && target.url == privateURL,
+                  "Banner omits credentials without modifying the retry target")
         var addresses = Set<String>(), reusedAddresses = 0, cancelledCallbacks = 0
         for batch in 0..<5 {
             tab.operationTiming = RequestTiming()
@@ -90,13 +94,15 @@ final class NavigationSpanProbe: NSObject, NSApplicationDelegate {
                 throw BrowserError("probe_assertion", "Refused connection unexpectedly loaded")
             } catch {
                 let native = error as NSError
-                try check(native.domain == NSURLErrorDomain && native.code == NSURLErrorCannotConnectToHost,
+                try check(native.domain == NSURLErrorDomain && native.code == NSURLErrorCannotConnectToHost
+                          && tab.failedNavigationTarget?.isGET == true
+                          && tab.failedNavigationTarget?.url.absoluteString == CommandLine.arguments[2],
                           "Repeated failure \(index) terminates with the actual connection error")
             }
         }
         tab.load(URL(string: base + "?recovered=1")!)
         try await tab.wait(selector: nil, timeout: 10000)
-        try check(tab.state["url"] as? String == base + "?recovered=1" && tab.navigationError == nil,
+        try check(tab.state["url"] as? String == base + "?recovered=1" && tab.navigationError == nil && tab.failedNavigationTarget == nil,
                   "Navigation recovers after repeated failures")
 
         tab.operationTiming = RequestTiming()
