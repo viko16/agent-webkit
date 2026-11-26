@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 
 from fixtures import origin
 from skill_workflow import cleanup_test_services, verify_cleanup
@@ -28,7 +29,9 @@ def search_fixture(out):
                       let request = try? JSONSerialization.jsonObject(with: data) as? [String: String],
                       let token = request["token"], token != lastSearchToken, let query = request["query"] else { return }
                 lastSearchToken = token
-                if let sheet = self.window.attachedSheet { self.window.endSheet(sheet) }
+                if request["action"] != "confirm-space-delete", let sheet = self.window.attachedSheet {
+                    self.window.endSheet(sheet)
+                }
                 self.search.stringValue = query
                 self.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: self.search))
                 Task { @MainActor in
@@ -45,12 +48,34 @@ def search_fixture(out):
                         let close = Request(command: "tab.close", args: [], options: ["space": space.record.id.uuidString, "tab": tab])
                         closeResult = await self.model.handle(close, origin: action == "confirm-close" ? .confirmedObserverClose : .observer)
                     }
+                    if request["action"] == "delete-space", let space = self.currentSpace {
+                        self.performSpaceRequest(Request(command: "space.delete", args: [space.record.id.uuidString], options: [:]))
+                        for _ in 0..<200 {
+                            if self.transientMessage?.contains("仍待清理") == true { break }
+                            try? await Task.sleep(nanoseconds: 10_000_000)
+                        }
+                    }
+                    var form: [String: Any] = [:]
+                    if let raw = request["policy"], let policy = Int(raw) {
+                        let sheet = SpaceCreationSheet()
+                        self.split.presentAsSheet(sheet)
+                        form = sheet.probeCollapsedTLS(policy)
+                    }
+                    if request["action"] == "begin-space-delete" { self.deleteSpace() }
+                    if request["action"] == "confirm-space-delete", let sheet = self.window.attachedSheet {
+                        self.window.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+                        for _ in 0..<100 {
+                            if self.transientMessage?.contains("Space 不存在") == true { break }
+                            try? await Task.sleep(nanoseconds: 10_000_000)
+                        }
+                    }
                     let row = self.table.selectedRow
                     let sidebar = self.filteredSpaces.indices.contains(row) ? self.filteredSpaces[row].record.id.uuidString : nil
                     let response: [String: Any] = [
-                        "token": token, "query": self.search.stringValue, "close": closeResult,
+                        "token": token, "query": self.search.stringValue, "close": closeResult, "form": form,
                         "filteredSpaceIds": self.filteredSpaces.map { $0.record.id.uuidString },
                         "sidebarSpaceId": sidebar as Any? ?? NSNull(),
+                        "savedTabSpaces": (UserDefaults.standard.dictionary(forKey: self.selectionKey) ?? [:]).keys.sorted(),
                         "selectedSpaceId": self.selectedSpace?.uuidString as Any? ?? NSNull(),
                         "displayedTabId": self.displayed?.id.uuidString as Any? ?? NSNull(),
                         "displayedURL": self.displayed?.webView.url?.absoluteString as Any? ?? NSNull(),
@@ -58,6 +83,7 @@ def search_fixture(out):
                         "emptyVisible": !self.empty.isHidden,
                         "canCreateTab": self.canCreateTab,
                         "message": self.transientMessage as Any? ?? NSNull(),
+                        "spaceCount": self.spaceCount.stringValue,
                         "errorSheet": self.window.attachedSheet != nil]
                     if let result = try? JSONSerialization.data(withJSONObject: response),
                        let output = ProcessInfo.processInfo.environment["BROWSER_TEST_SEARCH_RESPONSE"] {
@@ -80,6 +106,18 @@ def search_fixture(out):
         copied = out / path.name
         if path.name != 'Window.swift':
             text = path.read_text()
+            if path.name == 'Browser.swift':
+                # Report a deferred container once, then let cleanup retry the real store.
+                marker = '    private func removeStore(_ id: UUID) async throws -> Bool {'
+                assert text.count(marker) == 1
+                text = text.replace(marker, '    private var injectDeferredStore = true\n' + marker + """
+        if injectDeferredStore, records.first(where: { $0.id == id })?.name == "test-deferred" {
+            injectDeferredStore = false
+            return false
+        }
+""")
+            if path.name == 'SpaceCreationSheet.swift':
+                text += (ROOT / 'tests/space_creation_probe.swift').read_text()
             if path.name == 'main.swift':
                 text = text.replace('app.setActivationPolicy(.regular)', 'app.setActivationPolicy(.prohibited)')
             copied.write_text(text)
@@ -164,6 +202,11 @@ def main():
         assert cli('status')['observer']['tabId'] == result['displayedTabId'], result
         return space
 
+    # A UUID with a leading letter also qualifies as a legacy Space name.
+    original_id = 'A' + str(uuid.uuid4()).upper()[1:]
+    original = dict(id=original_id, name='confirmation-target', proxy='direct',
+                    suspended=True, deleting=False, tabs=[dict(id=str(uuid.uuid4()), url='about:blank')])
+    (state / 'spaces.json').write_text(json.dumps([original]))
     with (out / 'daemon.log').open('w') as log:
         try:
             daemon = subprocess.Popen([str(binary), 'daemon'], env=env, stdout=log, stderr=log)
@@ -175,6 +218,18 @@ def main():
             else:
                 raise AssertionError('Startup timed out')
             frontmost = cli('status')['frontmostPid']
+            alias = cli('space', 'create', original_id, '--proxy', 'direct')
+            assert native('confirmation-target', 'begin-space-delete')['errorSheet']
+            assert cli('space', 'delete', original_id)['dataStoreRemoved']
+            confirmed = native('', 'confirm-space-delete')
+            assert 'Space 不存在' in confirmed['message'], confirmed
+            assert cli('space', 'info', alias['id'])['id'] == alias['id']
+            cli('space', 'delete', alias['id'])
+            for policy, options in [(0, {}), (1, {'ca-cert': '/tmp/fixture-ca.pem'}),
+                                    (2, {'ignore-certificate-errors': 'true'})]:
+                form = native('', policy=str(policy))['form']
+                assert form['options'] == dict(proxy='direct', **options), form
+                assert form['enabledWithoutCA'] == (policy != 1), form
             first = cli('space', 'create', 'search-a', '--proxy', 'direct')
             second = cli('space', 'create', 'search-b', '--proxy', 'direct')
             for space in (first, second):
@@ -244,6 +299,13 @@ def main():
             assert native('search-a', 'close', tab=recent_tab)['close']['error']['code'] == 'confirmation_required'
             assert native('search-a', 'expire-close', tab=recent_tab)['close']['ok']
             assert cli('status')['observer']['tabId'] == selected_id
+            deferred = cli('space', 'create', 'test-deferred', '--proxy', 'direct')
+            pending = native('test-deferred', 'delete-space')
+            assert '仍待清理' in pending['message'] and '1 待清理' in pending['spaceCount'], pending
+            assert pending['selectedSpaceId'] is None
+            assert deferred['id'] not in pending['savedTabSpaces'], pending
+            assert cli('status')['pendingStores'] == [dict(spaceId=deferred['id'], name='test-deferred')]
+            assert cli('space', 'delete', deferred['id'])['dataStoreRemoved']
             # Only an actually empty model should create the first personal Space.
             native('')
             for space in cli('space', 'list'):

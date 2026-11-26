@@ -32,6 +32,8 @@ Skill 会引导 Agent 读取页面、操作元素并核对结果。如果你想�
 
 点击标签页的 × 可关闭该页，⌘W 关闭当前页，⇧⌘W 隐藏观察窗口。最后一页保留。沙漏表示该页正在执行操作；该页执行中或 Space 正忙时无法关闭。时钟标记表示过去五分钟有 Agent 活动，手动关闭时会请你确认。
 
+侧栏可新建、休眠、恢复和删除 Space。新建时填写名称，选择 Direct 或 HTTP Proxy；折叠 TLS 高级选项会保留已选策略。休眠释放页面，保留地址、Cookie 和 LocalStorage。删除会清除登录和网站数据；若显示数据容器待清理，可从 `awb status` 的 `pendingStores` 查看进度。
+
 **CLI / IPC 破坏性变更（契约 v2）**　对已有页面的操作必须同时提供 `--space` 和 `--tab`，即使 Space 只有一页。创建 Space 后从 `tabs[0].tabId` 取得初始页 ID；`tab new --space SPACE` 直接返回 `tabId`。关闭使用 `tab close --space SPACE --tab ID`。旧的 `tab default` 命令及 `defaultTabId` 字段已移除。现有注册表继续加载，Space、标签页和网站数据沿用原 ID。形如 UUID 的 Space 参数始终按 ID 查找；名称本身是 UUID 的 Space 请使用它自己的 ID。
 
 回退到契约 v1 前，请先正常退出 v2 daemon，再配套启动旧版 daemon 和 CLI。注册表保留旧版所需的默认页 ID：原默认页仍在就沿用，否则取首个现存页。回退后旧版省略 Tab 的调用会使用该页。

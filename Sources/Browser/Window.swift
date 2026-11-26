@@ -93,6 +93,9 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     private let selectionKey: String
     private let socketPath: String
     private let infoPopover = NSPopover()
+    private let createButton = NSButton(title: "新建", target: nil, action: nil)
+    private let suspendButton = NSButton(title: "休眠", target: nil, action: nil)
+    private let deleteButton = NSButton(title: "删除", target: nil, action: nil)
     private var activityExpiry: Task<Void, Never>?
     private var creatingTab = false
     private var tabWidths: [NSLayoutConstraint] = []
@@ -136,6 +139,11 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         model.willRemove = { [weak self] space in
             guard let self else { return }
             if space.tabs.contains(where: { $0 === self.displayed }) { self.displayed?.park(); self.displayed = nil }
+            // Suspension keeps the Space and its selected tab. Deletion has detached it.
+            if !self.model.spaces.contains(where: { $0 === space }) {
+                self.selectedTabs.removeValue(forKey: space.record.id)
+                self.saveSelection()
+            }
         }
         refresh()
         // Agent activity never makes this window key or activates the application.
@@ -170,7 +178,14 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         table.delegate = self; table.dataSource = self; table.setAccessibilityLabel("Spaces")
         scroll.documentView = table
         spaceCount.font = .systemFont(ofSize: 12); spaceCount.textColor = .secondaryLabelColor
-        [heading, search, scroll, spaceCount].forEach { $0.translatesAutoresizingMaskIntoConstraints = false; effect.addSubview($0) }
+        let actions = NSStackView(views: [createButton, suspendButton, deleteButton])
+        actions.distribution = .fillEqually
+        for (button, action) in [(createButton, #selector(createSpace)), (suspendButton, #selector(toggleSuspension)), (deleteButton, #selector(deleteSpace))] {
+            button.target = self
+            button.action = action
+            button.controlSize = .small
+        }
+        [heading, search, scroll, actions, spaceCount].forEach { $0.translatesAutoresizingMaskIntoConstraints = false; effect.addSubview($0) }
         NSLayoutConstraint.activate([
             search.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 14),
             search.trailingAnchor.constraint(equalTo: effect.trailingAnchor, constant: -14),
@@ -179,7 +194,10 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
             scroll.topAnchor.constraint(equalTo: heading.bottomAnchor, constant: 6),
             scroll.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 4),
             scroll.trailingAnchor.constraint(equalTo: effect.trailingAnchor, constant: -4),
-            scroll.bottomAnchor.constraint(equalTo: spaceCount.topAnchor, constant: -12),
+            scroll.bottomAnchor.constraint(equalTo: actions.topAnchor, constant: -6),
+            actions.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 10),
+            actions.trailingAnchor.constraint(equalTo: effect.trailingAnchor, constant: -10),
+            actions.bottomAnchor.constraint(equalTo: spaceCount.topAnchor, constant: -6),
             spaceCount.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 20)
         ])
     }
@@ -324,7 +342,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         icon.contentTintColor = .controlAccentColor
         icon.symbolConfiguration = .init(pointSize: 15, weight: .regular)
         let title = NSTextField(labelWithString: space.record.name); title.font = .systemFont(ofSize: 13, weight: .medium)
-        let route = space.record.proxy == "direct" ? (space.networkError == nil ? "直连" : "直连已暂停") : "Whistle"
+        let route = space.record.proxy == "direct" ? (space.networkError == nil ? "直连" : "直连已暂停") : "HTTP Proxy"
         let subtitle = NSTextField(labelWithString: "\(route) · \(space.tabStates.count) 个标签页\(space.suspended ? " · 已休眠" : space.busy ? " · 运行中" : "")")
         subtitle.font = .systemFont(ofSize: 11); subtitle.textColor = .secondaryLabelColor
         for label in [title, subtitle] { label.lineBreakMode = .byTruncatingTail }
@@ -391,11 +409,17 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         if let row = filteredSpaces.firstIndex(where: { $0.record.id == selectedSpace }) { table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false) }
         else { table.deselectAll(nil) }
         spaceCount.stringValue = search.stringValue.isEmpty ? "\(model.spaces.count) 个 Space · 本机服务" : "找到 \(filteredSpaces.count) 个 Space"
+        let pending = model.records.filter(\.deleting).count
+        if pending > 0 { spaceCount.stringValue += " · \(pending) 待清理" }
+        createButton.isEnabled = !model.restoring
+        suspendButton.title = currentSpace?.suspended == true ? "恢复" : "休眠"
+        suspendButton.isEnabled = currentSpace?.busy == false && !model.restoring
+        deleteButton.isEnabled = suspendButton.isEnabled
         activityExpiry?.cancel()
         guard let space = currentSpace else {
             displayed?.park(); displayed = nil; empty.isHidden = false
             emptyTitle.stringValue = "浏览会话，各自独立"
-            emptyText.stringValue = "先打开网页，再让 Agent 继续。\n首次新建会创建 personal Space，使用直连和系统证书校验。"
+            emptyText.stringValue = search.stringValue.isEmpty ? "先打开网页，再让 Agent 继续。\n首次新建会创建 personal Space，使用直连和系统证书校验。" : "没有匹配的 Space。可更改搜索内容或新建 Space。"
             tabStack.arrangedSubviews.forEach { $0.removeFromSuperview() }; tabSignature = ""
             updateStatus(); return
         }
@@ -500,7 +524,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         let insecure = space?.record.tls?.ignoreCertificateErrors == true
         let tls = insecure ? "未校验证书" : space?.record.tls == nil ? "系统证书校验" : "自定义 CA"
         let networkError = space?.networkError
-        security.stringValue = space.map { "\($0.record.proxy == "direct" ? "直连" : "Whistle")\(networkError == nil ? "" : "已暂停") · \(tls)" } ?? ""
+        security.stringValue = space.map { "\($0.record.proxy == "direct" ? "直连" : "HTTP Proxy")\(networkError == nil ? "" : "已暂停") · \(tls)" } ?? ""
         security.textColor = insecure || networkError != nil ? .systemOrange : .labelColor.withAlphaComponent(0.7)
         reloadButton.isEnabled = canReload
         let error = networkError?.localizedDescription ?? tab?.lastNavigationRejection?.localizedDescription ?? (tab?.unresponsive == true ? "页面未响应。重新加载可恢复标签页；上次操作可能已部分生效。" : tab?.navigationError?.localizedDescription)
@@ -622,6 +646,39 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         alert.addButton(withTitle: "取消")
         alert.addButton(withTitle: action)
         alert.beginSheetModal(for: window) { if $0 == .alertSecondButtonReturn { perform() } }
+    }
+    @objc private func createSpace() {
+        let sheet = SpaceCreationSheet()
+        sheet.submit = { [weak self] request in self?.performSpaceRequest(request) }
+        split.presentAsSheet(sheet)
+    }
+    @objc private func toggleSuspension() {
+        guard let space = currentSpace else { return }
+        performSpaceRequest(Request(command: space.suspended ? "space.resume" : "space.suspend", args: [space.record.id.uuidString], options: [:]))
+    }
+    @objc private func deleteSpace() {
+        guard let space = currentSpace else { return }
+        let id = space.record.id.uuidString
+        confirm("删除 Space「\(space.record.name)」？", detail: "此操作将移除该 Space 的所有标签页、登录状态和网站数据，无法撤销。", action: "删除 Space") {
+            self.performSpaceRequest(Request(command: "space.delete", args: [id], options: [:]))
+        }
+    }
+    private func performSpaceRequest(_ request: Request) {
+        Task { @MainActor in
+            let response = await model.handle(request, origin: .observer)
+            guard response["ok"] as? Bool == true, let result = response["result"] as? [String: Any] else {
+                presentFailure(response); return
+            }
+            if request.command == "space.create", let raw = result["id"] as? String {
+                search.stringValue = ""
+                selectedSpace = UUID(uuidString: raw)
+                saveSelection()
+            }
+            if request.command == "space.delete" {
+                transientMessage = result["cleanupPending"] as? Bool == true ? "Space 已移除，数据容器仍待清理。" : "Space 及网站数据已删除。"
+            } else { transientMessage = nil }
+            refresh()
+        }
     }
     private func presentFailure(_ response: [String: Any]) {
         let message = (response["error"] as? [String: Any])?["message"] as? String ?? "操作未完成，请重试。"
