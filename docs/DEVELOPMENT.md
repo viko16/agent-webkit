@@ -349,7 +349,9 @@ Socket 建立后，`status.ready` 表示元数据恢复与待删除存储的清�
 
 GUI 的 selectedSpace / selectedTabs 只决定观察哪一个 WebView，并按数据目录记住选择。窗口采用 NSSplitViewController、原生 sidebar、NSToolbar 和系统语义颜色。关闭观察窗口不终止服务。后台 Tab 使用隐藏 NSPanel 持有视图；DOM、Evaluate 和截图不调用 activate / makeKey。GUI 新建、地址栏导航和重新加载都走同一条命令处理路径，遵守 Space 锁及代理检查。没有 Space 时，首次新建显式使用 direct 创建 personal；其余新建沿用当前 Space。分享按钮复制带 Space UUID 和 Tab UUID 的 snapshot 命令。地址栏编辑期间，后台刷新不会覆盖输入。
 
-地址栏省略协议时使用 HTTPS，本地 HTTP 页面需显式输入 `http://`。底部显示代理和证书策略，忽略证书错误时显示橙色提示。⌘T 新建 Tab，⌘L 聚焦地址栏，⌃⌘S 切换侧栏，⇧⌘F 搜索 Space，⇧⌘[ / ⇧⌘] 切换标签页，⌘W 隐藏观察窗口，⌘Q 退出服务。
+标签页 × 和 ⌘W 走同一个 `tab.close` 生命周期。Space 执行中的页显示沙漏，最近 5 分钟有 Agent 活动的页显示时钟；GUI 关闭近期页需二次确认。确认绑定原始 Space 和 Tab UUID，重新验证目标存在、最后一页和执行中条件。GUI 导航、重载和新页不会刷新 Agent 时间。活动只在 daemon 内存中记录，重启后清空。
+
+地址栏省略协议时使用 HTTPS，本地 HTTP 页面需显式输入 `http://`。底部显示代理和证书策略，忽略证书错误时显示橙色提示。⌘T 新建 Tab，⌘L 聚焦地址栏，⌃⌘S 切换侧栏，⇧⌘F 搜索 Space，⇧⌘[ / ⇧⌘] 切换标签页，⌘W 关闭当前标签页，⇧⌘W 隐藏观察窗口，⌘Q 退出服务。
 
 运行 `zsh scripts/build.sh release` 后，可用 `python3 tests/gui_security_cases.py` 检查原生证书提示。测试复用正式源码构建独立签名宿主，在三个 Direct Space 间切换，核对系统证书、自定义 CA、忽略证书错误的文字和警告颜色，并验证重启后的策略、选择与 Tab ID 保留、前台不变。需要已登录的 macOS 桌面；临时 CA 不导入钥匙串，退出清理自有 Space 和服务。报告与窗口截图保存在 `.artifacts/gui-security-*/`。本项验证 GUI 策略展示，TLS 网络信任判定仍由证书专项覆盖。
 

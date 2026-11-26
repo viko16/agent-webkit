@@ -36,10 +36,19 @@ def search_fixture(out):
                         self.newTab(nil)
                         while self.creatingTab { try? await Task.sleep(nanoseconds: 10_000_000) }
                     }
+                    var closeResult: [String: Any] = [:]
+                    if let space = self.currentSpace, let tab = request["tab"], let action = request["action"],
+                       ["close", "confirm-close", "expire-close"].contains(action) {
+                        if action == "expire-close", let id = UUID(uuidString: tab) {
+                            space.activity[id]?.agentFinishedAt = ContinuousClock.now.advanced(by: .seconds(-301))
+                        }
+                        let close = Request(command: "tab.close", args: [], options: ["space": space.record.id.uuidString, "tab": tab])
+                        closeResult = await self.model.handle(close, origin: action == "confirm-close" ? .confirmedObserverClose : .observer)
+                    }
                     let row = self.table.selectedRow
                     let sidebar = self.filteredSpaces.indices.contains(row) ? self.filteredSpaces[row].record.id.uuidString : nil
                     let response: [String: Any] = [
-                        "token": token, "query": self.search.stringValue,
+                        "token": token, "query": self.search.stringValue, "close": closeResult,
                         "filteredSpaceIds": self.filteredSpaces.map { $0.record.id.uuidString },
                         "sidebarSpaceId": sidebar as Any? ?? NSNull(),
                         "selectedSpaceId": self.selectedSpace?.uuidString as Any? ?? NSNull(),
@@ -195,6 +204,8 @@ def main():
                     time.sleep(.01)
                 else:
                     raise AssertionError('Space never became busy')
+                personal_tab = personal['tabs'][0]['tabId']
+                assert native('personal', 'confirm-close', tab=personal_tab)['close']['error']['code'] == 'space_busy'
                 busy = native('no-match', 'new-tab')
                 assert not busy['canCreateTab'] and not busy['errorSheet'], busy
                 assert busy['query'] == 'no-match' and busy['selectedSpaceId'] is None, busy
@@ -217,6 +228,22 @@ def main():
             limited = native('no-match', 'new-tab')
             assert limited['errorSheet'] and limited['message'] and limited['query'] == 'no-match', limited
             assert len(cli('tab', 'list', '--space', personal['id'])) == 3
+            # A confirmed close runs the same target, last-tab and busy checks again.
+            first_id = first['tabs'][0]['tabId']
+            selected_id = native('search-a')['displayedTabId']
+            assert selected_id != first_id
+            assert native('search-a', 'close', tab=first_id)['close']['error']['code'] == 'confirmation_required'
+            assert native('search-a', 'confirm-close', tab=first_id)['close']['result']['closed'] == first_id
+            assert native('search-a')['displayedTabId'] == selected_id
+            assert native('search-a', 'confirm-close', tab=first_id)['close']['error']['code'] == 'tab_not_found'
+            assert native('search-a', 'confirm-close', tab=selected_id)['close']['error']['code'] == 'last_tab'
+
+            gui_tab = native('search-a', 'new-tab')['displayedTabId']
+            assert native('search-a', 'close', tab=gui_tab)['close']['ok']
+            recent_tab = cli('tab', 'new', '--space', first['id'])['tabId']
+            assert native('search-a', 'close', tab=recent_tab)['close']['error']['code'] == 'confirmation_required'
+            assert native('search-a', 'expire-close', tab=recent_tab)['close']['ok']
+            assert cli('status')['observer']['tabId'] == selected_id
             # Only an actually empty model should create the first personal Space.
             native('')
             for space in cli('space', 'list'):

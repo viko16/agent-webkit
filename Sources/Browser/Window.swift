@@ -93,6 +93,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     private let selectionKey: String
     private let socketPath: String
     private let infoPopover = NSPopover()
+    private var activityExpiry: Task<Void, Never>?
     private var creatingTab = false
     private var tabWidths: [NSLayoutConstraint] = []
 
@@ -390,6 +391,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         if let row = filteredSpaces.firstIndex(where: { $0.record.id == selectedSpace }) { table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false) }
         else { table.deselectAll(nil) }
         spaceCount.stringValue = search.stringValue.isEmpty ? "\(model.spaces.count) 个 Space · 本机服务" : "找到 \(filteredSpaces.count) 个 Space"
+        activityExpiry?.cancel()
         guard let space = currentSpace else {
             displayed?.park(); displayed = nil; empty.isHidden = false
             emptyTitle.stringValue = "浏览会话，各自独立"
@@ -412,7 +414,18 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
             emptyTitle.stringValue = "新标签页"
             emptyText.stringValue = "在地址栏输入网址，按回车打开。\n准备好后，点工具栏的分享按钮复制 Agent 接管命令。"
         }
-        let signature = space.tabs.map { "\($0.id)|\($0.webView.title ?? "")|\($0.persistedURL)" }.joined() + "\(tab?.id.uuidString ?? "")"
+        let now = ContinuousClock.now
+        if let expiry = space.activity.values.compactMap(\.recentUntil).filter({ $0 > now }).min() {
+            activityExpiry = Task { @MainActor [weak self] in
+                do { try await Task.sleep(until: expiry, clock: .continuous) }
+                catch { return }
+                self?.refresh()
+            }
+        }
+        let signature = space.tabs.map {
+            let activity = space.activity[$0.id]
+            return "\($0.id)|\($0.webView.title ?? "")|\($0.persistedURL)|\(activity?.executing ?? 0)|\(activity?.recent == true)"
+        }.joined() + "\(tab?.id.uuidString ?? "")|\(space.busy)"
         if signature != tabSignature {
             tabSignature = signature; tabStack.arrangedSubviews.forEach { $0.removeFromSuperview() }; tabWidths = []
             for (index, candidate) in space.tabs.enumerated() {
@@ -427,13 +440,26 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
                 button.setAccessibilityValue(candidate === tab ? 1 : 0)
                 button.contentTintColor = candidate === tab ? .labelColor : .secondaryLabelColor
                 button.cell?.lineBreakMode = .byTruncatingTail
-                button.image = NSImage(systemSymbolName: "globe", accessibilityDescription: nil)
+                let activity = space.activity[candidate.id]
+                let running = (activity?.executing ?? 0) > 0
+                let activityLabel = running ? "正在执行操作" : activity?.recent == true ? "最近 5 分钟有 Agent 活动" : ""
+                button.image = NSImage(systemSymbolName: running ? "hourglass" : activity?.recent == true ? "clock" : "globe", accessibilityDescription: activityLabel)
                 button.imagePosition = .imageLeading
-                button.toolTip = "\(title)\n\(candidate.persistedURL)\n\(candidate.id.uuidString)"
-                button.setAccessibilityLabel(title)
-                let width = button.widthAnchor.constraint(equalToConstant: 220)
+                button.toolTip = [title, candidate.persistedURL, activityLabel, candidate.id.uuidString].filter { !$0.isEmpty }.joined(separator: "\n")
+                button.setAccessibilityLabel([title, activityLabel].filter { !$0.isEmpty }.joined(separator: "，"))
+                let close = NSButton(image: NSImage(systemSymbolName: "xmark", accessibilityDescription: "关闭标签页")!, target: self, action: #selector(closeTabButton(_:)))
+                close.isBordered = false
+                close.identifier = NSUserInterfaceItemIdentifier(candidate.id.uuidString)
+                close.toolTip = "关闭 " + title
+                close.setAccessibilityLabel("关闭 " + title)
+                close.isEnabled = space.tabs.count > 1 && !space.busy && !running
+                close.widthAnchor.constraint(equalToConstant: 22).isActive = true
+                let row = NSStackView(views: [button, close])
+                row.spacing = 0
+                let width = row.widthAnchor.constraint(equalToConstant: 220)
                 width.isActive = true; tabWidths.append(width)
-                button.heightAnchor.constraint(equalToConstant: 30).isActive = true; tabStack.addArrangedSubview(button)
+                button.heightAnchor.constraint(equalToConstant: 30).isActive = true
+                tabStack.addArrangedSubview(row)
             }
             resizeTabs()
         }
@@ -494,6 +520,10 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     }
     func windowDidResize(_ notification: Notification) { resizeTabs() }
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(closeCurrentTab(_:)) {
+            guard window.isKeyWindow, let space = currentSpace, let tab = displayed else { return false }
+            return !space.busy && space.tabs.count > 1 && (space.activity[tab.id]?.executing ?? 0) == 0
+        }
         if menuItem.action == #selector(reloadPage) { return canReload }
         if menuItem.action == #selector(newTab(_:)) { return canCreateTab }
         if menuItem.action == #selector(focusAddress(_:)) { return address.isEnabled }
@@ -560,6 +590,38 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
             if result["ok"] as? Bool != true { presentFailure(result) }
             refresh()
         }
+    }
+
+    @objc func closeCurrentTab(_ sender: Any?) {
+        guard window.isKeyWindow, let space = currentSpace, let tab = displayed else { return }
+        closeTab(spaceID: space.record.id, tabID: tab.id)
+    }
+    @objc private func closeTabButton(_ sender: NSButton) {
+        guard let space = currentSpace, let raw = sender.identifier?.rawValue, let tabID = UUID(uuidString: raw) else { return }
+        closeTab(spaceID: space.record.id, tabID: tabID)
+    }
+    private func closeTab(spaceID: UUID, tabID: UUID, confirmed: Bool = false) {
+        let request = Request(command: "tab.close", args: [], options: ["space": spaceID.uuidString, "tab": tabID.uuidString])
+        Task { @MainActor in
+            let response = await model.handle(request, origin: confirmed ? .confirmedObserverClose : .observer)
+            if response["ok"] as? Bool == true {
+                transientMessage = nil
+                refresh()
+                return
+            }
+            if let error = response["error"] as? [String: String], error["code"] == "confirmation_required" {
+                confirm("关闭最近有 Agent 活动的标签页？", detail: error["message"] ?? "", action: "关闭标签页") {
+                    self.closeTab(spaceID: spaceID, tabID: tabID, confirmed: true)
+                }
+            } else { presentFailure(response) }
+        }
+    }
+    private func confirm(_ title: String, detail: String, action: String, perform: @escaping () -> Void) {
+        let alert = NSAlert()
+        alert.messageText = title; alert.informativeText = detail
+        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: action)
+        alert.beginSheetModal(for: window) { if $0 == .alertSecondButtonReturn { perform() } }
     }
     private func presentFailure(_ response: [String: Any]) {
         let message = (response["error"] as? [String: Any])?["message"] as? String ?? "操作未完成，请重试。"

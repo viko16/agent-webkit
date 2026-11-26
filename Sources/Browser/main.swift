@@ -47,7 +47,11 @@ final class Application: NSObject, NSApplicationDelegate {
         let location = file.addItem(withTitle: "打开网址…", action: #selector(ObserverWindow.focusAddress(_:)), keyEquivalent: "l")
         location.target = observer
         file.addItem(.separator())
-        file.addItem(withTitle: "关闭窗口", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        let close = file.addItem(withTitle: "关闭当前标签页", action: #selector(ObserverWindow.closeCurrentTab(_:)), keyEquivalent: "w")
+        close.target = observer
+        let hide = file.addItem(withTitle: "隐藏观察窗口", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        hide.keyEquivalentModifierMask = [.command, .shift]
+        hide.target = observer?.window
         let edit = section("编辑")
         edit.addItem(withTitle: "拷贝", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         edit.addItem(withTitle: "粘贴", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
