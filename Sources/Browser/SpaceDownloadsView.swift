@@ -1,45 +1,68 @@
+import AppKit
+import Combine
 import SwiftUI
+import WebKit
+
+@MainActor
+final class DownloadsRefreshToken: ObservableObject {
+    @Published var tick = 0
+}
 
 @MainActor
 struct SpaceDownloadsView: View {
     weak var space: Space?
+    @ObservedObject var refreshToken: DownloadsRefreshToken
     let onError: (String) -> Void
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 0.5)) { _ in
-            let groups = (space?.tabs ?? []).enumerated().compactMap { index, tab in
-                let items = tab.downloads.listItems
-                let title = tab.webView.title ?? URL(string: tab.persistedURL)?.host
-                return items.isEmpty ? nil : (id: tab.id, index: index + 1, title: title, store: tab.downloads, items: items)
-            }
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Text("下载").font(.headline)
-                    Spacer()
-                    Text(space?.record.name ?? "").foregroundStyle(.secondary).lineLimit(1)
+        let _ = refreshToken.tick
+        let hasActive = space?.tabs.contains(where: { $0.downloads.hasActive }) == true
+        Group {
+            if hasActive {
+                TimelineView(.periodic(from: .now, by: 0.5)) { _ in
+                    content
                 }
-                if groups.isEmpty {
-                    Text("此 Space 暂无下载记录").foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, minHeight: 64)
-                } else {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 12) {
-                            ForEach(groups, id: \.id) { group in
-                                Text("标签页 \(group.index)" + (group.title.map { " · " + $0 } ?? ""))
-                                    .font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-                                ForEach(group.items) { item in
-                                    downloadRow(item, store: group.store)
+            } else {
+                content
+            }
+        }
+    }
+
+    private var content: some View {
+        let groups = (space?.tabs ?? []).enumerated().compactMap { index, tab in
+            let items = tab.downloads.listItems
+            let title = tab.webView.title.flatMap { $0.isEmpty ? nil : $0 } ?? URL(string: tab.persistedURL)?.host
+            return items.isEmpty ? nil : (id: tab.id, index: index + 1, title: title, store: tab.downloads, items: items)
+        }
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("下载").font(.headline)
+                Spacer()
+                Text(space?.record.name ?? "").foregroundStyle(.secondary).lineLimit(1)
+            }
+            if groups.isEmpty {
+                Text("此 Space 暂无下载记录").foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 64)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        ForEach(Array(groups.enumerated()), id: \.element.id) { groupIndex, group in
+                            Text("标签页 \(group.index)" + (group.title.map { " · " + $0 } ?? ""))
+                                .font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                            ForEach(Array(group.items.enumerated()), id: \.element.id) { itemIndex, item in
+                                downloadRow(item, store: group.store)
+                                if itemIndex < group.items.count - 1 || groupIndex < groups.count - 1 {
                                     Divider()
                                 }
                             }
                         }
                     }
-                    .frame(height: CGFloat(min(340, groups.reduce(0) { $0 + 34 + 78 * $1.items.count })))
                 }
+                .frame(height: CGFloat(min(340, groups.reduce(0) { $0 + 34 + 78 * $1.items.count })))
             }
-            .padding(16)
-            .frame(width: 380)
         }
+        .padding(16)
+        .frame(width: 380)
     }
 
     private func downloadRow(_ item: DownloadStore.ListItem, store: DownloadStore) -> some View {

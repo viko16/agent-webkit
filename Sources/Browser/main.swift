@@ -75,6 +75,15 @@ final class Application: NSObject, NSApplicationDelegate {
         }
         let reload = view.addItem(withTitle: "重新加载页面", action: #selector(ObserverWindow.reloadPage), keyEquivalent: "r")
         reload.target = observer
+        let stop = view.addItem(withTitle: "停止加载", action: #selector(ObserverWindow.stopLoadingPage), keyEquivalent: ".")
+        stop.target = observer
+        view.addItem(.separator())
+        for (title, action, key) in [("实际大小", #selector(ObserverWindow.resetZoom(_:)), "0"),
+                                     ("放大", #selector(ObserverWindow.zoomIn(_:)), "="),
+                                     ("缩小", #selector(ObserverWindow.zoomOut(_:)), "-")] {
+            view.addItem(withTitle: title, action: action, keyEquivalent: key).target = observer
+        }
+        view.addItem(.separator())
         let sidebar = view.addItem(withTitle: "隐藏侧边栏", action: #selector(ObserverWindow.toggleSidebar(_:)), keyEquivalent: "s")
         sidebar.keyEquivalentModifierMask = [.command, .control]; sidebar.target = observer
         let search = view.addItem(withTitle: "搜索 Space", action: #selector(ObserverWindow.focusSpaces(_:)), keyEquivalent: "f")
@@ -83,6 +92,15 @@ final class Application: NSObject, NSApplicationDelegate {
             let item = view.addItem(withTitle: title, action: selector, keyEquivalent: key)
             item.keyEquivalentModifierMask = [.command, .shift]; item.target = observer
         }
+        let tabSubmenuItem = NSMenuItem(title: "选择标签页", action: nil, keyEquivalent: "")
+        let tabSubmenu = NSMenu(title: "选择标签页")
+        for number in 1...9 {
+            let title = number == 9 ? "最后一个标签页" : "标签页 \(number)"
+            let item = tabSubmenu.addItem(withTitle: title, action: #selector(ObserverWindow.selectTabShortcut(_:)), keyEquivalent: "\(number)")
+            item.tag = number; item.target = observer
+        }
+        tabSubmenuItem.submenu = tabSubmenu
+        view.addItem(tabSubmenuItem)
         let windows = section("窗口")
         windows.addItem(withTitle: "最小化", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         windows.addItem(withTitle: "缩放", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
@@ -106,13 +124,17 @@ final class Application: NSObject, NSApplicationDelegate {
             if !impacts.isEmpty && impacts != consent {
                 if let window = observer?.window, window.attachedSheet == nil {
                     let alert = NSAlert()
+                    alert.alertStyle = .warning
                     alert.messageText = "退出 Agent WebKit？"
                     alert.informativeText = impacts.map { "「\($0.spaceName)」\n\($0.detail)" }.joined(separator: "\n")
-                    alert.addButton(withTitle: "取消")
-                    alert.addButton(withTitle: "退出")
+                    let quitButton = alert.addButton(withTitle: "退出")
+                    quitButton.hasDestructiveAction = true
+                    quitButton.keyEquivalent = ""
+                    let cancelButton = alert.addButton(withTitle: "取消")
+                    cancelButton.keyEquivalent = "\u{1b}"
                     window.orderFront(nil)
                     alert.beginSheetModal(for: window) { response in
-                        guard response == .alertSecondButtonReturn else { return }
+                        guard response == .alertFirstButtonReturn else { return }
                         self.confirmedQuit = impacts
                         sender.terminate(nil)
                     }

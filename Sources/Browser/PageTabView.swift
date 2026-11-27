@@ -11,16 +11,25 @@ final class PageTabButton: NSButton {
         get { CenteredTabCell.self }
         set {}
     }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        (superview as? PageTabView)?.menu(for: event) ?? super.menu(for: event)
+    }
 }
 
 final class PageTabView: NSView {
+    let tabID: UUID
     let titleButton: NSButton
     let closeButton: NSButton
+    var onMiddleClick: (() -> Void)?
+    var contextMenuProvider: (() -> NSMenu?)?
     private var tracking: NSTrackingArea?
     private var hovered = false
-    private let isSelected: Bool
+    private var middleMouseDown = false
+    private var isSelected: Bool
 
-    init(titleButton: NSButton, closeButton: NSButton) {
+    init(tabID: UUID, titleButton: NSButton, closeButton: NSButton) {
+        self.tabID = tabID
         self.titleButton = titleButton
         self.closeButton = closeButton
         isSelected = titleButton.state == .on
@@ -45,6 +54,21 @@ final class PageTabView: NSView {
             closeButton.heightAnchor.constraint(equalToConstant: 22),
             heightAnchor.constraint(equalToConstant: 30)
         ])
+        syncAccessibilityActions()
+        updateCloseButton()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func update(selected: Bool, canClose: Bool) {
+        isSelected = selected
+        titleButton.state = selected ? .on : .off
+        closeButton.isEnabled = canClose
+        syncAccessibilityActions()
+        updateCloseButton()
+    }
+
+    private func syncAccessibilityActions() {
         if closeButton.isEnabled {
             let action = NSAccessibilityCustomAction(name: "关闭标签页") { [weak closeButton] in
                 guard let closeButton, closeButton.isEnabled else { return false }
@@ -52,11 +76,10 @@ final class PageTabView: NSView {
                 return true
             }
             titleButton.setAccessibilityCustomActions([action])
+        } else {
+            titleButton.setAccessibilityCustomActions([])
         }
-        updateCloseButton()
     }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -72,6 +95,31 @@ final class PageTabView: NSView {
 
     override func mouseEntered(with event: NSEvent) { hovered = true; updateCloseButton() }
     override func mouseExited(with event: NSEvent) { hovered = false; updateCloseButton() }
+
+    override func otherMouseDown(with event: NSEvent) {
+        if event.buttonNumber == 2, closeButton.isEnabled {
+            middleMouseDown = true
+            return
+        }
+        super.otherMouseDown(with: event)
+    }
+
+    override func otherMouseUp(with event: NSEvent) {
+        if event.buttonNumber == 2 {
+            let wasDown = middleMouseDown
+            middleMouseDown = false
+            let location = convert(event.locationInWindow, from: nil)
+            if wasDown, closeButton.isEnabled, bounds.contains(location) {
+                onMiddleClick?()
+                return
+            }
+        }
+        super.otherMouseUp(with: event)
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        contextMenuProvider?()
+    }
 
     private func updateCloseButton() {
         closeButton.isHidden = !closeButton.isEnabled || !(isSelected || hovered)
