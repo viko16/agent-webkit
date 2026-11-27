@@ -943,25 +943,26 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         func executeBatch() {
             Task { @MainActor in
                 for entry in impacts {
-                    guard let liveSpace = self.model.spaces.first(where: { $0.record.id == target.spaceID }),
-                          liveSpace.tabs.contains(where: { $0.id == target.tabID }),
-                          liveSpace.tabs.count > 1 else { break }
                     let request = Request(command: "tab.close", args: [], options: ["space": target.spaceID.uuidString, "tab": entry.tabID.uuidString])
-                    let origin: RequestOrigin = entry.impact.map(RequestOrigin.confirmed) ?? .observer
-                    var changedImpact: ObserverImpact?
-                    let response = await self.model.handle(request, origin: origin) { changedImpact = $0 }
-                    if let impact = changedImpact {
-                        self.confirm("标签页状态已变化，继续关闭？", detail: impact.detail, action: "关闭标签页", destructive: true) {
-                            self.performObserverRequest(request, origin: .confirmed(impact))
+                    var consent = entry.impact
+                    while true {
+                        var changedImpact: ObserverImpact?
+                        let origin = RequestOrigin.closingOtherTabs(keeping: target.tabID, consent: consent)
+                        let response = await self.model.handle(request, origin: origin) { changedImpact = $0 }
+                        if let impact = changedImpact {
+                            let alert = self.confirmationAlert("标签页状态已变化，继续关闭？",
+                                detail: impact.detail + "\n取消将停止本次操作，已关闭的标签页不会恢复。",
+                                action: "关闭并继续", destructive: true)
+                            guard await alert.beginSheetModal(for: self.window) == .alertFirstButtonReturn else { return }
+                            consent = impact
+                            continue
+                        }
+                        if response["ok"] as? Bool != true,
+                           (response["error"] as? [String: Any])?["code"] as? String != "tab_not_found" {
+                            self.presentFailure(response)
+                            return
                         }
                         break
-                    }
-                    if response["ok"] as? Bool != true {
-                        let code = (response["error"] as? [String: Any])?["code"] as? String
-                        if code != "tab_not_found" {
-                            self.presentFailure(response)
-                            break
-                        }
                     }
                 }
                 self.refresh()
@@ -1339,6 +1340,11 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         performObserverRequest(Request(command: "tab.close", args: [], options: ["space": spaceID.uuidString, "tab": tabID.uuidString]))
     }
     private func confirm(_ title: String, detail: String, action: String, destructive: Bool = false, critical: Bool = false, perform: @escaping () -> Void) {
+        let alert = confirmationAlert(title, detail: detail, action: action, destructive: destructive, critical: critical)
+        alert.beginSheetModal(for: window) { if $0 == .alertFirstButtonReturn { perform() } }
+    }
+
+    private func confirmationAlert(_ title: String, detail: String, action: String, destructive: Bool, critical: Bool = false) -> NSAlert {
         let alert = NSAlert()
         alert.alertStyle = critical ? .critical : .warning
         alert.messageText = title; alert.informativeText = detail
@@ -1349,7 +1355,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         }
         let cancelButton = alert.addButton(withTitle: "取消")
         cancelButton.keyEquivalent = "\u{1b}"
-        alert.beginSheetModal(for: window) { if $0 == .alertFirstButtonReturn { perform() } }
+        return alert
     }
     @objc private func createSpace() {
         let sheet = SpaceCreationSheet()

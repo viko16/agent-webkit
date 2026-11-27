@@ -1164,6 +1164,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
 
 enum RequestOrigin: Equatable {
     case agent, observer, confirmed(ObserverImpact)
+    case closingOtherTabs(keeping: UUID, consent: ObserverImpact?)
 }
 
 // In-process only. Bind a sheet's consent to the exact work it described.
@@ -1216,8 +1217,19 @@ final class Space {
         }
     }
     func checkObserverImpact(_ command: String, tabID: UUID? = nil, origin: RequestOrigin) throws {
-        guard origin != .agent, let impact = try observerImpact(command, tabID: tabID) else { return }
-        guard origin == .confirmed(impact) else { throw impact }
+        let consent: ObserverImpact?
+        switch origin {
+        case .agent: return
+        case .observer: consent = nil
+        case .confirmed(let impact): consent = impact
+        case let .closingOtherTabs(keeping, approved):
+            // Under the same Space lock as the close, including after every sheet.
+            guard command == "tab.close", keeping != tabID, tabs.contains(where: { $0.id == keeping }) else {
+                throw BrowserError("batch_target_unavailable", "已停止关闭其他标签页：要保留的标签页已关闭，或 Space 已休眠。")
+            }
+            consent = approved
+        }
+        if let impact = try observerImpact(command, tabID: tabID), impact != consent { throw impact }
     }
 
     func observerImpact(_ command: String, tabID: UUID? = nil) throws -> ObserverImpact? {
