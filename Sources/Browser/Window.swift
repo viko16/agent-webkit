@@ -123,6 +123,13 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     private let emptyCreateSpace = NSButton(title: "新建 Space…", target: nil, action: nil)
     private let banner = ChromeBarView()
     private let bannerText = NSTextField(wrappingLabelWithString: "")
+    private let errorTextLayout = NSLayoutManager()
+    private let errorMessageColumn = NSStackView()
+    private let errorDisclosure = NSButton(title: "展开", target: nil, action: nil)
+    private let errorScroll = NSScrollView()
+    private let fullError = NSTextView()
+    private var errorExpanded = false
+    private var errorTab: UUID?
     private let retry = NSButton(title: "重新加载", target: nil, action: nil)
     private var refreshing = false
     private var selectedSpace: UUID? {
@@ -357,7 +364,32 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         bannerText.font = .systemFont(ofSize: 12); bannerText.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         bannerText.maximumNumberOfLines = 2
         retry.target = self; retry.action = #selector(reloadPage); retry.bezelStyle = .rounded
-        [warning, bannerText, retry].forEach { banner.addArrangedSubview($0) }
+        errorMessageColumn.orientation = .vertical
+        errorMessageColumn.alignment = .leading
+        errorMessageColumn.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        fullError.isEditable = false; fullError.isSelectable = true; fullError.drawsBackground = false
+        fullError.font = bannerText.font; fullError.textColor = .labelColor
+        fullError.setAccessibilityLabel("完整错误信息")
+        fullError.isVerticallyResizable = true; fullError.isHorizontallyResizable = false
+        fullError.autoresizingMask = [.width]; fullError.textContainer?.widthTracksTextView = true
+        errorScroll.documentView = fullError; errorScroll.hasVerticalScroller = true
+        errorScroll.autohidesScrollers = true; errorScroll.drawsBackground = false
+        errorScroll.heightAnchor.constraint(equalToConstant: 100).isActive = true
+        for view in [bannerText, errorScroll] as [NSView] {
+            errorMessageColumn.addArrangedSubview(view)
+            view.widthAnchor.constraint(equalTo: errorMessageColumn.widthAnchor).isActive = true
+        }
+        errorScroll.isHidden = true
+        errorDisclosure.target = self; errorDisclosure.action = #selector(toggleErrorDetails)
+        errorDisclosure.bezelStyle = .rounded; errorDisclosure.isHidden = true
+        errorDisclosure.keyEquivalent = "E"
+        errorDisclosure.keyEquivalentModifierMask = [.command, .shift]
+        errorDisclosure.toolTip = "展开或收起完整错误信息（⇧⌘E）"
+        errorDisclosure.setAccessibilityHelp(errorDisclosure.toolTip)
+        errorMessageColumn.postsFrameChangedNotifications = true
+        NotificationCenter.default.addObserver(self, selector: #selector(updateErrorDisclosure),
+            name: NSView.frameDidChangeNotification, object: errorMessageColumn)
+        [warning, errorMessageColumn, errorDisclosure, retry].forEach { banner.addArrangedSubview($0) }
         host.setContentHuggingPriority(.defaultLow, for: .vertical)
         host.clipsToBounds = true
         host.heightAnchor.constraint(greaterThanOrEqualToConstant: 160).isActive = true
@@ -1147,6 +1179,12 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         } else {
             bannerText.stringValue = error ?? ""
         }
+        if errorTab != tab?.id || fullError.string != bannerText.stringValue || error == nil {
+            errorExpanded = false
+            errorTab = tab?.id
+            fullError.string = bannerText.stringValue
+            fullError.scrollRangeToVisible(NSRange(location: 0, length: 0))
+        }
         bannerText.toolTip = bannerText.stringValue
         banner.isHidden = error == nil
         let dismissible = rejection != nil || actionMessage != nil
@@ -1159,6 +1197,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
             retry.action = failedNavigation ? #selector(retryFailedNavigation) : #selector(reloadPage)
         }
         retry.isHidden = (networkError != nil && !recheckProxy) || (failedNavigation && target?.isGET != true)
+        updateErrorDisclosure()
         retry.isEnabled = recheckProxy ? space != nil && space?.busy == false : dismissible || canReload
         window.toolbar?.items.first { $0.itemIdentifier == .copyCommand }?.isEnabled = tab != nil
         window.toolbar?.items.first { $0.itemIdentifier == .details }?.isEnabled = space != nil
@@ -1166,6 +1205,26 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         window.toolbar?.items.first { $0.itemIdentifier == .newTab }?.isEnabled = canCreateTab
         window.toolbar?.items.first { $0.itemIdentifier == .back }?.isEnabled = canTraverse(back: true)
         window.toolbar?.items.first { $0.itemIdentifier == .forward }?.isEnabled = canTraverse(back: false)
+    }
+    @objc private func toggleErrorDetails() {
+        guard !errorDisclosure.isHiddenOrHasHiddenAncestor, window.attachedSheet == nil else { return }
+        errorExpanded.toggle()
+        updateErrorDisclosure()
+    }
+    @objc private func updateErrorDisclosure() {
+        // Measure at the width the compact text would have without the disclosure button.
+        let width = errorMessageColumn.bounds.width + (errorDisclosure.isHidden ? 0 : errorDisclosure.bounds.width + banner.spacing)
+        let font = bannerText.font ?? NSFont.systemFont(ofSize: 12)
+        let height = (bannerText.stringValue as NSString).boundingRect(with: NSSize(width: max(1, width), height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font]).height
+        let truncated = !banner.isHidden && width > 0 && ceil(height) > 2 * ceil(errorTextLayout.defaultLineHeight(for: font))
+        if !truncated { errorExpanded = false }
+        errorDisclosure.isHidden = !truncated
+        errorDisclosure.title = errorExpanded ? "收起" : "展开"
+        errorDisclosure.setAccessibilityLabel(errorExpanded ? "收起错误信息" : "展开完整错误信息")
+        errorDisclosure.setAccessibilityExpanded(errorExpanded)
+        errorScroll.isHidden = !errorExpanded
+        bannerText.isHidden = errorExpanded
     }
     private var canCreateTab: Bool {
         !model.restoring && !creatingTab && currentSpace?.busy != true && (search.stringValue.isEmpty || table.selectedRow >= 0)
