@@ -70,7 +70,11 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     private let bannerText = NSTextField(wrappingLabelWithString: "")
     private let retry = NSButton(title: "重新加载", target: nil, action: nil)
     private var refreshing = false
-    private var selectedSpace: UUID?
+    private var selectedSpace: UUID? {
+        didSet {
+            if selectedSpace != oldValue { infoPopover.close() }
+        }
+    }
     private var selectedTabs: [UUID: UUID] = [:]
     private var filteredSpaces: [Space] = []
     private weak var displayed: Tab?
@@ -798,9 +802,8 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         }
         retry.isHidden = (networkError != nil && !recheckProxy) || (failedNavigation && target?.isGET != true)
         retry.isEnabled = recheckProxy ? space != nil && space?.busy == false : dismissible || canReload
-        for item in window.toolbar?.items ?? [] where [.copyCommand, .details].contains(item.itemIdentifier) {
-            item.isEnabled = tab != nil
-        }
+        window.toolbar?.items.first { $0.itemIdentifier == .copyCommand }?.isEnabled = tab != nil
+        window.toolbar?.items.first { $0.itemIdentifier == .details }?.isEnabled = space != nil
         window.toolbar?.items.first { $0.itemIdentifier == .newTab }?.isEnabled = canCreateTab
         window.toolbar?.items.first { $0.itemIdentifier == .back }?.isEnabled = canTraverse(back: true)
         window.toolbar?.items.first { $0.itemIdentifier == .forward }?.isEnabled = canTraverse(back: false)

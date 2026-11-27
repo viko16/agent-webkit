@@ -103,8 +103,9 @@ final class SpaceCreationSheet: NSViewController, NSTextFieldDelegate {
         caRow.isHidden = tlsRow.isHidden || tls.indexOfSelectedItem != 1
         create.isEnabled = !submitting && !name.stringValue.isEmpty && (proxyRow.isHidden || !proxy.stringValue.isEmpty)
             && (tls.indexOfSelectedItem != 1 || !ca.stringValue.isEmpty)
+        let policy = tls.indexOfSelectedItem == 1 && ca.stringValue.isEmpty ? "需选择 CA 证书" : tls.titleOfSelectedItem
         advanced.title = tlsRow.isHidden && tls.indexOfSelectedItem > 0
-            ? "显示 TLS 高级选项（" + (tls.titleOfSelectedItem ?? "") + "）" : "显示 TLS 高级选项"
+            ? "显示 TLS 高级选项（" + (policy ?? "") + "）" : "显示 TLS 高级选项"
         preferredContentSize = view.fittingSize
     }
     @objc private func cancelSheet() { dismiss(self) }
