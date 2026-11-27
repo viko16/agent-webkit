@@ -174,6 +174,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
                 if let space = UUID(uuidString: key), let tab = UUID(uuidString: value) { selectedTabs[space] = tab }
             }
         }
+        window.collectionBehavior.insert(.fullScreenPrimary)
         window.title = "Agent WebKit"; window.titleVisibility = .hidden
         window.toolbarStyle = .unified; window.minSize = NSSize(width: 760, height: 480)
         window.isReleasedWhenClosed = false; window.delegate = self
@@ -575,7 +576,14 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         }
     }
     @objc private func contextCopySpaceID(_ sender: NSMenuItem) {
-        guard let spaceID = sender.representedObject as? UUID, copyToPasteboard(spaceID.uuidString) else { return }
+        guard let spaceID = sender.representedObject as? UUID else { return }
+        copySpaceID(spaceID)
+    }
+    @objc func copyCurrentSpaceID() {
+        if let id = currentSpace?.record.id { copySpaceID(id) }
+    }
+    private func copySpaceID(_ spaceID: UUID) {
+        guard copyToPasteboard(spaceID.uuidString) else { return }
         showTransientMessage("已复制 Space ID")
     }
     @objc private func contextSpaceRequest(_ sender: NSMenuItem) {
@@ -702,6 +710,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
             selectedSpace = model.spaces.first?.record.id
             saveSelection()
         }
+        window.title = currentSpace.map { "\($0.record.name) — Agent WebKit" } ?? "Agent WebKit"
         noSearchResults.isHidden = search.stringValue.isEmpty || !filteredSpaces.isEmpty
         table.enclosingScrollView?.isHidden = !noSearchResults.isHidden
         table.reloadData()
@@ -900,11 +909,9 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         closeItem.isEnabled = space.tabs.count > 1 && canOperate && !running
         menu.addItem(closeItem)
 
-        let otherTabs = space.tabs.filter { $0.id != tabID }
-        let anyOtherExecuting = otherTabs.contains { (space.activity[$0.id]?.executing ?? 0) > 0 }
         let closeOthersItem = NSMenuItem(title: "关闭其他标签页", action: #selector(contextCloseOtherTabs(_:)), keyEquivalent: "")
         closeOthersItem.target = self; closeOthersItem.representedObject = target
-        closeOthersItem.isEnabled = !otherTabs.isEmpty && canOperate && !anyOtherExecuting
+        closeOthersItem.isEnabled = canCloseOthers(in: space, keeping: tabID)
         menu.addItem(closeOthersItem)
         return menu
     }
@@ -927,12 +934,23 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         guard let target = sender.representedObject as? TabMenuTarget else { return }
         closeTab(spaceID: target.spaceID, tabID: target.tabID)
     }
+    private func canCloseOthers(in space: Space, keeping tabID: UUID) -> Bool {
+        !model.restoring && !space.busy && window.attachedSheet == nil && space.tabs.count > 1
+            && space.tabs.contains { $0.id == tabID }
+            && !space.tabs.contains { $0.id != tabID && (space.activity[$0.id]?.executing ?? 0) > 0 }
+    }
+    @objc func closeOtherTabs(_ sender: NSMenuItem) {
+        guard let space = currentSpace, let tab = displayed else { return }
+        closeOtherTabs(in: space, keeping: tab.id)
+    }
     @objc private func contextCloseOtherTabs(_ sender: NSMenuItem) {
         guard let target = sender.representedObject as? TabMenuTarget,
-              let space = model.spaces.first(where: { $0.record.id == target.spaceID }),
-              !space.busy, !model.restoring,
-              space.tabs.contains(where: { $0.id == target.tabID }) else { return }
-        let others = space.tabs.filter { $0.id != target.tabID }
+              let space = model.spaces.first(where: { $0.record.id == target.spaceID }) else { return }
+        closeOtherTabs(in: space, keeping: target.tabID)
+    }
+    private func closeOtherTabs(in space: Space, keeping tabID: UUID) {
+        guard canCloseOthers(in: space, keeping: tabID) else { return }
+        let others = space.tabs.filter { $0.id != tabID }
         guard !others.isEmpty else { return }
         var impacts: [(tabID: UUID, impact: ObserverImpact?)] = []
         var downloadCount = 0
@@ -955,11 +973,11 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         func executeBatch() {
             Task { @MainActor in
                 for entry in impacts {
-                    let request = Request(command: "tab.close", args: [], options: ["space": target.spaceID.uuidString, "tab": entry.tabID.uuidString])
+                    let request = Request(command: "tab.close", args: [], options: ["space": space.record.id.uuidString, "tab": entry.tabID.uuidString])
                     var consent = entry.impact
                     while true {
                         var changedImpact: ObserverImpact?
-                        let origin = RequestOrigin.closingOtherTabs(keeping: target.tabID, consent: consent)
+                        let origin = RequestOrigin.closingOtherTabs(keeping: tabID, consent: consent)
                         let response = await self.model.handle(request, origin: origin) { changedImpact = $0 }
                         if let impact = changedImpact {
                             let alert = self.confirmationAlert("标签页状态已变化，继续关闭？",
@@ -1144,6 +1162,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         retry.isEnabled = recheckProxy ? space != nil && space?.busy == false : dismissible || canReload
         window.toolbar?.items.first { $0.itemIdentifier == .copyCommand }?.isEnabled = tab != nil
         window.toolbar?.items.first { $0.itemIdentifier == .details }?.isEnabled = space != nil
+        window.toolbar?.items.first { $0.itemIdentifier == .downloads }?.isEnabled = space != nil
         window.toolbar?.items.first { $0.itemIdentifier == .newTab }?.isEnabled = canCreateTab
         window.toolbar?.items.first { $0.itemIdentifier == .back }?.isEnabled = canTraverse(back: true)
         window.toolbar?.items.first { $0.itemIdentifier == .forward }?.isEnabled = canTraverse(back: false)
@@ -1192,20 +1211,34 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         return false
     }
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        let lastTab = currentSpace?.record.tabs.count == 1
+        if menuItem.action == #selector(closeCurrentTab(_:)) { menuItem.title = lastTab ? "隐藏观察窗口" : "关闭当前标签页" }
+        if menuItem.action == #selector(toggleSpaceSuspension(_:)) || menuItem.action == #selector(deleteCurrentSpace(_:)) {
+            bindSpaceAction(menuItem, space: currentSpace, delete: menuItem.action == #selector(deleteCurrentSpace(_:)))
+        }
         if menuItem.action == #selector(toggleSidebar(_:)) {
             menuItem.title = split.splitViewItems.first?.isCollapsed == true ? "显示侧边栏" : "隐藏侧边栏"
         }
         guard window.isVisible, !window.isMiniaturized, window.attachedSheet == nil else { return false }
         if let key = NSApp.keyWindow, key !== window, isMainMenuItem(menuItem) { return false }
         if menuItem.action == #selector(closeCurrentTab(_:)) {
+            if lastTab { return window.isKeyWindow }
             guard window.isKeyWindow, let space = currentSpace, let tab = displayed else { return false }
             return !space.busy && space.tabs.count > 1 && (space.activity[tab.id]?.executing ?? 0) == 0
         }
+        if menuItem.action == #selector(createSpace) { return !model.restoring }
+        if menuItem.action == #selector(copyCommand) { return displayed != nil }
+        if menuItem.action == #selector(closeOtherTabs(_:)) {
+            guard let space = currentSpace, let tab = displayed else { return false }
+            return canCloseOthers(in: space, keeping: tab.id)
+        }
+        if menuItem.action == #selector(showDetails(_:)) || menuItem.action == #selector(showDownloads) || menuItem.action == #selector(copyCurrentSpaceID) { return currentSpace != nil }
+        if menuItem.action == #selector(toggleSpaceSuspension(_:)) || menuItem.action == #selector(deleteCurrentSpace(_:)) { return spaceActions.isEnabled }
         if menuItem.action == #selector(reloadPage) { return canReload }
         if menuItem.action == #selector(stopLoadingPage) { return canStopLoading }
-        if menuItem.action == #selector(zoomIn(_:)) { return displayed != nil && (displayed?.webView.pageZoom ?? 1) < 3.0 }
-        if menuItem.action == #selector(zoomOut(_:)) { return displayed != nil && (displayed?.webView.pageZoom ?? 1) > 0.5 }
-        if menuItem.action == #selector(resetZoom(_:)) { return displayed != nil && abs((displayed?.webView.pageZoom ?? 1) - 1.0) > 0.01 }
+        if menuItem.action == #selector(zoomIn(_:)) { return canZoom && (displayed?.webView.pageZoom ?? 1) < 3.0 }
+        if menuItem.action == #selector(zoomOut(_:)) { return canZoom && (displayed?.webView.pageZoom ?? 1) > 0.5 }
+        if menuItem.action == #selector(resetZoom(_:)) { return canZoom && abs((displayed?.webView.pageZoom ?? 1) - 1.0) > 0.01 }
         if menuItem.action == #selector(newTab(_:)) { return canCreateTab }
         if menuItem.action == #selector(focusAddress(_:)) { return address.isEnabled }
         if menuItem.action == #selector(goBack) { return canTraverse(back: true) }
@@ -1326,11 +1359,15 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         guard canStopLoading else { return }
         displayed?.stopLoadingByObserver()
     }
+    private var canZoom: Bool {
+        guard let space = currentSpace, displayed != nil, !space.busy, !model.restoring, window.attachedSheet == nil else { return false }
+        return !space.activity.values.contains { $0.executing > 0 }
+    }
     @objc func zoomIn(_ sender: Any?) { adjustZoom(by: 0.1) }
     @objc func zoomOut(_ sender: Any?) { adjustZoom(by: -0.1) }
-    @objc func resetZoom(_ sender: Any?) { displayed?.webView.pageZoom = 1.0 }
+    @objc func resetZoom(_ sender: Any?) { if canZoom { displayed?.webView.pageZoom = 1.0 } }
     private func adjustZoom(by delta: CGFloat) {
-        guard let webView = displayed?.webView else { return }
+        guard canZoom, let webView = displayed?.webView else { return }
         let next = ((webView.pageZoom + delta) * 10).rounded() / 10
         webView.pageZoom = min(3.0, max(0.5, next))
     }
@@ -1341,7 +1378,9 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     }
 
     @objc func closeCurrentTab(_ sender: Any?) {
-        guard window.isKeyWindow, let space = currentSpace, let tab = displayed else { return }
+        guard window.isKeyWindow, window.attachedSheet == nil, let space = currentSpace else { return }
+        if space.record.tabs.count == 1 { hideWindow(sender); return }
+        guard let tab = displayed, !space.busy, (space.activity[tab.id]?.executing ?? 0) == 0 else { return }
         closeTab(spaceID: space.record.id, tabID: tab.id)
     }
     @objc private func closeTabButton(_ sender: NSButton) {
@@ -1369,7 +1408,8 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         cancelButton.keyEquivalent = "\u{1b}"
         return alert
     }
-    @objc private func createSpace() {
+    @objc func createSpace() {
+        guard !model.restoring, window.attachedSheet == nil else { return }
         let sheet = SpaceCreationSheet()
         sheet.submit = { [weak self, weak sheet] request in
             guard let self, let sheet else { return }
@@ -1390,16 +1430,23 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         }
         split.presentAsSheet(sheet)
     }
+    @objc func toggleSpaceSuspension(_ sender: NSMenuItem) { performSpaceMenuAction(sender) }
+    @objc func deleteCurrentSpace(_ sender: NSMenuItem) { performSpaceMenuAction(sender) }
+    private func bindSpaceAction(_ item: NSMenuItem, space: Space?, delete: Bool) {
+        item.title = delete ? "删除 Space…" : space?.suspended == true ? "恢复 Space" : "休眠 Space…"
+        item.representedObject = space.map {
+            Request(command: delete ? "space.delete" : $0.suspended ? "space.resume" : "space.suspend", args: [$0.record.id.uuidString], options: [:])
+        }
+    }
     @objc private func prepareSpaceMenu(_ notification: Notification) {
         guard let space = currentSpace else { return }
-        suspensionItem.title = space.suspended ? "恢复 Space" : "休眠 Space…"
-        let target = [space.record.id.uuidString]
-        suspensionItem.representedObject = Request(command: space.suspended ? "space.resume" : "space.suspend", args: target, options: [:])
-        deleteItem.representedObject = Request(command: "space.delete", args: target, options: [:])
+        bindSpaceAction(suspensionItem, space: space, delete: false)
+        bindSpaceAction(deleteItem, space: space, delete: true)
     }
     @objc private func performSpaceMenuAction(_ item: NSMenuItem) {
-        guard spaceActions.isEnabled, let request = item.representedObject as? Request,
-              request.args.first == currentSpace?.record.id.uuidString else { return }
+        guard window.attachedSheet == nil, spaceActions.isEnabled, let request = item.representedObject as? Request,
+              let space = currentSpace, request.args.first == space.record.id.uuidString else { return }
+        if request.command == "space.resume" && !space.suspended || request.command == "space.suspend" && space.suspended { return }
         performObserverRequest(request)
     }
 
@@ -1546,7 +1593,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
             self.updateStatus()
         }
     }
-    @objc private func copyCommand() {
+    @objc func copyCommand() {
         guard let space = currentSpace, let tab = displayed else { return }
         copyHandoffCommand(space: space, tab: tab)
     }
@@ -1572,16 +1619,17 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         return space.record.tls == nil ? "系统证书校验" : "系统证书及自定义 CA"
     }
     private func showPopover(_ popover: NSPopover, toolbarItemID: NSToolbarItem.Identifier) {
-        if let item = window.toolbar?.visibleItems?.first(where: { $0.itemIdentifier == toolbarItemID }) {
+        if let toolbar = window.toolbar, toolbar.isVisible,
+           let item = toolbar.visibleItems?.first(where: { $0.itemIdentifier == toolbarItemID }) {
             popover.show(relativeTo: item)
-        } else if spaceActions.window != nil, !spaceActions.isHiddenOrHasHiddenAncestor {
+        } else if split.splitViewItems.first?.isCollapsed == false, spaceActions.window != nil, !spaceActions.isHiddenOrHasHiddenAncestor {
             popover.show(relativeTo: spaceActions.bounds, of: spaceActions, preferredEdge: .maxX)
         } else {
             let anchor = NSRect(x: max(0, host.bounds.maxX - 1), y: max(0, host.bounds.maxY - 1), width: 1, height: 1)
             popover.show(relativeTo: anchor, of: host, preferredEdge: .maxY)
         }
     }
-    @objc private func showDetails(_ sender: Any?) {
+    @objc func showDetails(_ sender: Any?) {
         guard let space = currentSpace else { return }
         if infoPopover.isShown && infoSpace === space { infoPopover.close(); return }
         presentDetails(for: space)
@@ -1610,7 +1658,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         guard let tab = displayed, let viewport = tab.fixedViewport else { return }
         split.presentAsSheet(ViewportPreview(webView: tab.webView, viewport: viewport, available: window.frame.size))
     }
-    @objc private func showDownloads() {
+    @objc func showDownloads() {
         guard let space = currentSpace else { return }
         if downloadsPopover.isShown { downloadsPopover.close(); return }
         infoPopover.close()

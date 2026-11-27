@@ -43,11 +43,14 @@ final class Application: NSObject, NSApplicationDelegate {
         app.addItem(withTitle: "隐藏 Agent WebKit", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         app.addItem(withTitle: "退出 Agent WebKit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         let file = section("文件")
+        file.addItem(withTitle: "新建 Space…", action: #selector(ObserverWindow.createSpace), keyEquivalent: "").target = observer
         let newTab = file.addItem(withTitle: "新建标签页", action: #selector(ObserverWindow.newTab(_:)), keyEquivalent: "t")
         newTab.target = observer
         let location = file.addItem(withTitle: "打开网址…", action: #selector(ObserverWindow.focusAddress(_:)), keyEquivalent: "l")
         location.target = observer
         file.addItem(.separator())
+        file.addItem(withTitle: "交给 Agent", action: #selector(ObserverWindow.copyCommand), keyEquivalent: "").target = observer
+        file.addItem(withTitle: "关闭其他标签页", action: #selector(ObserverWindow.closeOtherTabs(_:)), keyEquivalent: "").target = observer
         let close = file.addItem(withTitle: "关闭当前标签页", action: #selector(ObserverWindow.closeCurrentTab(_:)), keyEquivalent: "w")
         close.target = observer
         let hide = file.addItem(withTitle: "隐藏观察窗口", action: #selector(ObserverWindow.hideWindow(_:)), keyEquivalent: "W")
@@ -79,10 +82,14 @@ final class Application: NSObject, NSApplicationDelegate {
         stop.target = observer
         view.addItem(.separator())
         for (title, action, key) in [("实际大小", #selector(ObserverWindow.resetZoom(_:)), "0"),
-                                     ("放大", #selector(ObserverWindow.zoomIn(_:)), "="),
+                                     ("放大", #selector(ObserverWindow.zoomIn(_:)), "+"),
                                      ("缩小", #selector(ObserverWindow.zoomOut(_:)), "-")] {
             view.addItem(withTitle: title, action: action, keyEquivalent: key).target = observer
         }
+        // Keep the unshifted equals key available alongside the displayed plus shortcut.
+        let zoomEquals = NSMenuItem(title: "放大", action: #selector(ObserverWindow.zoomIn(_:)), keyEquivalent: "=")
+        zoomEquals.target = observer; zoomEquals.isHidden = true; zoomEquals.allowsKeyEquivalentWhenHidden = true
+        view.addItem(zoomEquals)
         view.addItem(.separator())
         let sidebar = view.addItem(withTitle: "隐藏侧边栏", action: #selector(ObserverWindow.toggleSidebar(_:)), keyEquivalent: "s")
         sidebar.keyEquivalentModifierMask = [.command, .control]; sidebar.target = observer
@@ -101,10 +108,19 @@ final class Application: NSObject, NSApplicationDelegate {
         }
         tabSubmenuItem.submenu = tabSubmenu
         view.addItem(tabSubmenuItem)
+        let fullscreen = view.addItem(withTitle: "进入全屏", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
+        fullscreen.keyEquivalentModifierMask = [.control, .command]
+        let spaces = section("Space")
+        spaces.addItem(withTitle: "Space 信息", action: #selector(ObserverWindow.showDetails(_:)), keyEquivalent: "").target = observer
+        spaces.addItem(withTitle: "复制 Space ID", action: #selector(ObserverWindow.copyCurrentSpaceID), keyEquivalent: "").target = observer
+        spaces.addItem(.separator())
+        spaces.addItem(withTitle: "休眠 Space…", action: #selector(ObserverWindow.toggleSpaceSuspension(_:)), keyEquivalent: "").target = observer
+        spaces.addItem(withTitle: "删除 Space…", action: #selector(ObserverWindow.deleteCurrentSpace(_:)), keyEquivalent: "").target = observer
         let windows = section("窗口")
         windows.addItem(withTitle: "最小化", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         windows.addItem(withTitle: "缩放", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
         windows.addItem(.separator())
+        windows.addItem(withTitle: "查看下载", action: #selector(ObserverWindow.showDownloads), keyEquivalent: "").target = observer
         let show = windows.addItem(withTitle: "显示观察窗口", action: #selector(NSWindow.makeKeyAndOrderFront(_:)), keyEquivalent: "")
         show.target = observer?.window
         NSApp.windowsMenu = windows; NSApp.mainMenu = menu
