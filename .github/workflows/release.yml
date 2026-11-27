@@ -53,14 +53,7 @@ jobs:
           ARCHIVE: ${{ steps.package.outputs.archive }}
         run: |
           notes="$RUNNER_TEMP/release-notes.md"
-          version_notes="docs/releases/$GITHUB_REF_NAME.md"
-          if [[ -f "$version_notes" ]]; then
-            cat "$version_notes" > "$notes"
-            echo >> "$notes"
-          else
-            : > "$notes"
-          fi
-          echo '适用于 Apple Silicon（M 系列），macOS 14+。解压后将 Agent WebKit.app 放入 /Applications；CLI 为应用包内的 awb。应用使用 ad-hoc 签名，首次打开可能需要在「系统设置 → 隐私与安全性」中选择「仍要打开」。更新前请先退出应用。' >> "$notes"
+          echo '适用于 Apple Silicon（M 系列），macOS 14+。解压后将 Agent WebKit.app 放入 /Applications；CLI 为应用包内的 awb。应用使用 ad-hoc 签名，首次打开可能需要在「系统设置 → 隐私与安全性」中选择「仍要打开」。更新前请先退出应用。' > "$notes"
           gh release create "$GITHUB_REF_NAME" "$ARCHIVE" \
             --verify-tag --title "Agent WebKit $GITHUB_REF_NAME" --generate-notes \
             --notes-file "$notes"

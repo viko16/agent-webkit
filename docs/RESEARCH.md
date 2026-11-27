@@ -43,7 +43,7 @@ Apple 的 [WWDC23 Network Relay 介绍](https://developer.apple.com/videos/play/
 
 定向 `callAsyncJavaScript` 也能返回隔离文档代号；保留引用的挂起Promise验证150ms宿主超时，另一Store/Tab的异步调用仍可用。未保留引用的Promise曾返回“Completion handler for function call is no longer reachable”；SDK明确允许thenable被GC后报不可达错误，不能把任意不resolve表达式都假定会等到宿主期限。宿主超时不代表取消JS。
 
-结论：公开 API 足以支持受控的跨源定向 DOM bridge。正式 CLI 据此提供 `frame list` 与 snapshot/click/fill/wait 的显式 `--frame` 文档目标，使用宿主文档 ID、同回合代号检查及有界注册表；不提供推断父子路径，现有 `>>>` 仍限同源。见[跨源 frame DOM 操作](DEVELOPMENT.md#跨源-frame-dom-操作)。不扩展到 closed Shadow Root。跨源外层可见性/坐标、截图/上传/对话框定向、sandbox/opaque origin、进程切换、CSP/跨站跟踪策略和任意网站兼容性均未由该独立实验验证。
+结论：公开 API 足以支持受控的跨源定向 DOM bridge。正式 CLI 据此提供 `frame list` 与 snapshot/click/fill/wait 的显式 `--frame` 文档目标，使用宿主文档 ID、同回合代号检查及有界注册表；不提供推断父子路径，现有 `>>>` 仍限同源。见[核心能力与边界速查](DEVELOPMENT.md#核心能力与边界速查)。不扩展到 closed Shadow Root。跨源外层可见性/坐标、截图/上传/对话框定向、sandbox/opaque origin、进程切换、CSP/跨站跟踪策略和任意网站兼容性均未由该独立实验验证。
 
 ## 后台 Hover/键盘可行性
 
@@ -59,7 +59,7 @@ Apple 的 [WWDC23 Network Relay 介绍](https://developer.apple.com/videos/play/
 
 脚本执行本身是混杂因素：[WebKit 的 WKWebView 实现](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/API/Cocoa/WKWebView.mm)中公开 evaluate/callAsync 入口使用强制手势参数。实验最初的 JS 准备就令 sticky activation 为真，后改为每轮新文档、页面自身初始化与计时器消息，原生动作前确认 active/sticky 均为 false。实际原生键盘轮次中，Escape 不产生激活，其他已测按键的事件内出现激活；这符合 [WebKit User Activation 说明](https://webkit.org/blog/13862/the-user-activation-api/)中对 Escape 的区分。现有产品 fill/click 则分别观察到非可信 input/click 与 JS 执行期间的激活，且 click 后 submit 可为可信；这些标记均不能证明物理用户输入。
 
-结论：公开 AppKit 路线足以实现一部分后台键盘行为。正式 CLI 已提供显式绑定 Space/Tab 的有限 focus/key，区分 DOM 焦点、宿主 responder、事件送达和业务成功；逐键核对结果，有界等待后观察，不能重放副作用。用法与当前覆盖见[后台 focus/key](DEVELOPMENT.md#后台-focuskey)。原独立实验中的 hover requiresForeground 仍是人工回退策略，不证明所有公开 API 都不可能，也没有自动前台输入。WebKit 对本机宿主构造事件的可信标记不扩展为物理输入或所有受限 API 可用。
+结论：公开 AppKit 路线足以实现一部分后台键盘行为。正式 CLI 已提供显式绑定 Space/Tab 的有限 focus/key，区分 DOM 焦点、宿主 responder、事件送达和业务成功；逐键核对结果，有界等待后观察，不能重放副作用。用法与当前覆盖见[核心能力与边界速查](DEVELOPMENT.md#核心能力与边界速查)。原独立实验中的 hover requiresForeground 仍是人工回退策略，不证明所有公开 API 都不可能，也没有自动前台输入。WebKit 对本机宿主构造事件的可信标记不扩展为物理输入或所有受限 API 可用。
 
 #13 在同一系统版本重跑了 hover 与 Command+A 实验，并在观察窗口宿主中补做 iframe 实验。同源与跨源 iframe 均可通过文档 ID 聚焦输入框，顶层 activeElement 指向对应 iframe，定向 Shift+X 使子文档收到按键并插入 X。将焦点移回主文档后，相同的 AppKit 调用改写主文档输入框。AppKit 事件只能定向到 WebView，公开入口无法在派发时约束到已检查的 iframe 文档。因此 CLI 继续拒绝 iframe focus/key。复现命令为 `python3 tests/input_probe.py` 和 `python3 tests/reliability.py --keyboard-only`。
 
@@ -71,7 +71,7 @@ Apple 的 [WWDC23 Network Relay 介绍](https://developer.apple.com/videos/play/
 
 无域限制时，普通 HTTPS 域名实际产生了 CONNECT；本地代理故意返回 403，WebKit 导航失败，没有绕过此代理。另以 `agent-webkit.test` 作为仅由测试代理解析的域名，加载本地站点并比较 TCP 来源端口，证明普通域名的 HTTP 路径也经过了代理。这个附加实验没有替代 localhost 验收，也不能证明 HTTPS、WebSocket、Service Worker、媒体和全部子资源已全面隔离。
 
-代理路径回归使用真实域名经本机 Whistle 映射到本地服务，loopback 路由不作保证；复现方法见[域名代理回归](DEVELOPMENT.md#复现域名代理路径)。域名映射由 Whistle 完成，浏览器保留原 URL，不修改系统代理或 hosts。
+代理路径回归使用真实域名经本机 Whistle 映射到本地服务，loopback 路由不作保证；配置方式见[代理与 TLS 策略](DEVELOPMENT.md#代理与-tls-策略)。域名映射由 Whistle 完成，浏览器保留原 URL，不修改系统代理或 hosts。
 
 ## HTTPS 证书策略
 
