@@ -10,6 +10,7 @@ import time
 from threading import Event
 import uuid
 
+from observer_hig_cases import verify_observer_hig
 from observer_regression_cases import verify_observer_regressions
 from observer_protection_cases import verify_observer_protection
 from direct_conflict_cases import prepare_proxy_settings
@@ -22,12 +23,19 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def search_fixture(out):
     source = (ROOT / 'Sources/Browser/Window.swift').read_text()
+    # Menu copy actions write to a fixture-only pasteboard.
+    assert source.count("NSPasteboard.general") == source.count("let pasteboard = NSPasteboard.general") == 1
+    source = source.replace('let pasteboard = NSPasteboard.general', 'let pasteboard = NSPasteboard(name: .init(model.storagePath + ".hig-test"))')
     window_init = 'let observerWindow = ObserverKeyWindow(contentRect:'
     assert source.count(window_init) == 1
     source = source.replace(window_init, 'let observerWindow = ObserverProbeWindow(contentRect:')
     marker = '        window.orderBack(nil)\n'
     assert source.count(marker) == 1
-    source = source.replace(marker, marker + '''        var lastSearchToken = ""
+    source = source.replace(marker, marker + '''        // WindowServer can defer popover animations indefinitely in a background-only app.
+        if ProcessInfo.processInfo.environment["BROWSER_TEST_FOREGROUND"] != "1" {
+            infoPopover.animates = false; downloadsPopover.animates = false
+        }
+        var lastSearchToken = ""
         Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
@@ -39,8 +47,13 @@ def search_fixture(out):
                 if ["new-tab", "search"].contains(request["action"] ?? ""), let sheet = self.window.attachedSheet {
                     self.window.endSheet(sheet)
                 }
-                self.search.stringValue = query
-                self.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: self.search))
+                if self.search.stringValue != query || request["action"] == "search" {
+                    self.search.stringValue = query
+                    self.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: self.search))
+                } else if request["action"] == "inspect" {
+                    // Re-read the injected proxy settings without changing the field editor.
+                    self.refresh()
+                }
                 Task { @MainActor in
                     if request["action"] == "choose" {
                         _ = self.control(self.search, textView: NSTextView(), doCommandBy: #selector(NSResponder.insertNewline(_:)))
@@ -248,8 +261,8 @@ def main():
             for policy, options in [(0, {}), (1, {'ca-cert': '/tmp/fixture-ca.pem'}),
                                     (2, {'ignore-certificate-errors': 'true'})]:
                 form = native('', policy=str(policy))['form']
-                assert form['options'] == dict(proxy='direct', **options), form
                 assert form['progressAndRetry'], form
+                assert form['options'] == dict(proxy='direct', **options), form
                 assert form['enabledWithoutCA'] == (policy != 1), form
             assert native('')['probe']['addressEnabled']
             assert native('', 'submit-address', url=base)['probe']['dispatched']
@@ -366,6 +379,7 @@ def main():
             for space in cli('space', 'list'):
                 cli('space', 'delete', space['id'])
             new_tab(None)
+            verify_observer_hig(cli, native, base)
             verify_observer_regressions(cli, native, base)
             verify_observer_protection(cli, native, binary, env, base, events)
             if env.get('BROWSER_TEST_FOREGROUND') == '1':
