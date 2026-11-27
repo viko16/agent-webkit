@@ -1,15 +1,44 @@
 import AppKit
 import SwiftUI
 
-private final class AddressField: NSTextField {
-    var willFocus: (() -> Void)?
-    override func selectText(_ sender: Any?) {
-        willFocus?()
-        super.selectText(sender)
+// Supply the complete URL before AppKit populates its shared field editor, for both
+// mouse editing and key-view selection. The field draws its own bezel and focus ring.
+private final class AddressCell: NSTextFieldCell {
+    var willEdit: (() -> Void)?
+    override func edit(withFrame frame: NSRect, in view: NSView, editor: NSText, delegate: Any?, event: NSEvent?) {
+        willEdit?()
+        super.edit(withFrame: frame, in: view, editor: editor, delegate: delegate, event: event)
     }
-    override func mouseDown(with event: NSEvent) {
-        willFocus?()
-        super.mouseDown(with: event)
+    override func select(withFrame frame: NSRect, in view: NSView, editor: NSText, delegate: Any?, start: Int, length: Int) {
+        willEdit?()
+        super.select(withFrame: frame, in: view, editor: editor, delegate: delegate, start: start, length: length)
+    }
+}
+
+// A custom toolbar field and the content views live in separate AppKit key-view loops.
+// Treat the address as the stop immediately following the sidebar search field.
+private class ObserverKeyWindow: NSWindow {
+    weak var spaceSearch: NSSearchField?
+    weak var locationField: NSTextField?
+
+    private var addressInLoop: NSTextField? {
+        guard let field = locationField, toolbar?.isVisible == true, field.window === self,
+              !field.isHiddenOrHasHiddenAncestor, field.canBecomeKeyView else { return nil }
+        return field
+    }
+    override func selectKeyView(following view: NSView) {
+        if let search = spaceSearch, !search.isHiddenOrHasHiddenAncestor, let address = addressInLoop {
+            if view === search, makeFirstResponder(address) { return }
+            if view === address { super.selectKeyView(following: search); return }
+        }
+        super.selectKeyView(following: view)
+    }
+    override func selectKeyView(preceding view: NSView) {
+        if let search = spaceSearch, !search.isHiddenOrHasHiddenAncestor, let address = addressInLoop {
+            if view === address, search.canBecomeKeyView, makeFirstResponder(search) { return }
+            if view.previousValidKeyView === search, makeFirstResponder(address) { return }
+        }
+        super.selectKeyView(preceding: view)
     }
 }
 
@@ -62,11 +91,8 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     private let clearSearchButton = NSButton(title: "清除搜索", target: nil, action: nil)
     private let createFromSearch = NSButton(title: "新建 Space", target: nil, action: nil)
     private let host = NSView()
-    private let address = AddressField()
-    private let addressContainer = NSBox()
+    private let address = NSTextField()
     private var addressWidth: NSLayoutConstraint?
-    private let addressIcon = NSImageView()
-    private let addressDisplay = NSTextField(labelWithString: "")
     private let addressHint = NSTextField(labelWithString: "")
     private let addressHintBar = ChromeBarView()
     private var editingAddress = false
@@ -138,8 +164,9 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         self.model = model
         self.socketPath = socketPath
         selectionKey = "observer.selection.\(model.storagePath)"
-        window = NSWindow(contentRect: NSRect(x: 120, y: 140, width: 1220, height: 800),
+        let observerWindow = ObserverKeyWindow(contentRect: NSRect(x: 120, y: 140, width: 1220, height: 800),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        window = observerWindow
         super.init()
         if let saved = UserDefaults.standard.dictionary(forKey: selectionKey) as? [String: String] {
             selectedSpace = saved["space"].flatMap(UUID.init(uuidString:))
@@ -162,6 +189,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         let toolbar = NSToolbar(identifier: "AgentWebKit.Observer.Toolbar")
         toolbar.delegate = self; toolbar.displayMode = .iconOnly; toolbar.allowsUserCustomization = false
         window.toolbar = toolbar
+        observerWindow.spaceSearch = search; observerWindow.locationField = address
         model.changed = { [weak self] in self?.refresh() }
         model.observerState = { [weak self] in
             guard let self else { return [:] }
@@ -405,53 +433,28 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         }
         let item = NSToolbarItem(itemIdentifier: id); item.target = self; item.autovalidates = false
         if id == .address {
-            address.isEditable = true; address.isSelectable = true; address.isBezeled = false
+            let cell = AddressCell(textCell: "")
+            cell.willEdit = { [weak self] in self?.beginAddressEditing() }
+            address.cell = cell
+            address.isEditable = true; address.isSelectable = true
+            address.isBezeled = true; address.bezelStyle = .roundedBezel; address.focusRingType = .default
             address.delegate = self; address.target = self; address.action = #selector(openAddress(_:))
-            address.willFocus = { [weak self] in self?.beginAddressEditing() }
-            address.drawsBackground = false; address.textColor = .clear
-            address.focusRingType = .none
-            address.alignment = .left; address.font = .systemFont(ofSize: 13); address.lineBreakMode = .byTruncatingMiddle
-            address.placeholderString = "输入网址"; address.setAccessibilityLabel("页面地址")
-            address.translatesAutoresizingMaskIntoConstraints = false
-            let field = addressContainer
-            field.boxType = .custom; field.cornerRadius = 18
-            field.borderWidth = 0.5; field.borderColor = .separatorColor; field.fillColor = .controlBackgroundColor
-            field.contentViewMargins = .zero
-            field.translatesAutoresizingMaskIntoConstraints = false
+            address.font = .systemFont(ofSize: 13); address.lineBreakMode = .byTruncatingMiddle
+            address.placeholderString = "输入网址"; cell.setAccessibilityLabel("页面地址")
+            let field = NSStackView(views: [address, reloadButton])
+            field.alignment = .centerY; field.spacing = 4
             reloadButton.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "重新加载")
             reloadButton.target = self; reloadButton.action = #selector(reloadPage)
             reloadButton.isBordered = false; reloadButton.bezelStyle = .texturedRounded
             reloadButton.contentTintColor = .labelColor; reloadButton.toolTip = "重新加载（⌘R）"
             reloadButton.setAccessibilityLabel("重新加载")
             reloadButton.translatesAutoresizingMaskIntoConstraints = false
-            let content = field.contentView!
-            addressIcon.image = NSImage(systemSymbolName: "globe", accessibilityDescription: nil)
-            addressIcon.contentTintColor = .secondaryLabelColor; addressIcon.isHidden = true
-            addressIcon.translatesAutoresizingMaskIntoConstraints = false
-            content.addSubview(addressIcon); content.addSubview(address); content.addSubview(reloadButton)
-            addressDisplay.font = address.font; addressDisplay.alignment = .center
-            addressDisplay.lineBreakMode = .byTruncatingMiddle
-            addressDisplay.translatesAutoresizingMaskIntoConstraints = false
-            addressDisplay.setAccessibilityElement(false)
-            content.addSubview(addressDisplay, positioned: .below, relativeTo: address)
             let preferred = field.widthAnchor.constraint(equalToConstant: preferredAddressWidth)
             preferred.priority = .defaultHigh; preferred.isActive = true
             addressWidth = preferred
             NSLayoutConstraint.activate([
                 field.widthAnchor.constraint(greaterThanOrEqualToConstant: 150),
                 field.heightAnchor.constraint(equalToConstant: 36),
-                addressIcon.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
-                addressIcon.centerYAnchor.constraint(equalTo: content.centerYAnchor),
-                addressIcon.widthAnchor.constraint(equalToConstant: 16),
-                addressIcon.heightAnchor.constraint(equalToConstant: 16),
-                address.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 32),
-                address.centerYAnchor.constraint(equalTo: content.centerYAnchor),
-                addressDisplay.leadingAnchor.constraint(equalTo: address.leadingAnchor),
-                addressDisplay.trailingAnchor.constraint(equalTo: address.trailingAnchor),
-                addressDisplay.centerYAnchor.constraint(equalTo: address.centerYAnchor),
-                address.trailingAnchor.constraint(equalTo: reloadButton.leadingAnchor, constant: -6),
-                reloadButton.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -6),
-                reloadButton.centerYAnchor.constraint(equalTo: content.centerYAnchor),
                 reloadButton.widthAnchor.constraint(equalToConstant: 24),
                 reloadButton.heightAnchor.constraint(equalToConstant: 26)
             ])
@@ -605,22 +608,30 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         guard !editingAddress else { return }
         editingAddress = true
         addressWasEdited = displayed?.pendingAddressDraft != nil
-        if let draft = displayed?.pendingAddressDraft { address.stringValue = draft }
-        address.textColor = .labelColor; addressDisplay.isHidden = true
-        addressContainer.borderWidth = 3; addressContainer.borderColor = .keyboardFocusIndicatorColor
-        addressIcon.isHidden = false
+        let url = displayed?.persistedURL
+        address.stringValue = displayed?.pendingAddressDraft ?? (url == "about:blank" ? "" : url ?? "")
+        address.alignment = .natural
         addressDraft = address.stringValue
     }
     func controlTextDidEndEditing(_ notification: Notification) {
         guard notification.object as? NSTextField === address else { return }
+        finishAddressEditing()
+    }
+    private func finishAddressEditing() {
+        guard editingAddress else { return }
         clearAddressHint()
         editingAddress = false
-        address.textColor = .clear; addressDisplay.isHidden = false
-        addressContainer.borderWidth = 0.5; addressContainer.borderColor = .separatorColor
-        addressIcon.isHidden = true
         updateStatus()
     }
+    private func endAddressSession() {
+        guard editingAddress else { return }
+        if addressWasEdited { displayed?.pendingAddressDraft = addressDraft }
+        window.endEditing(for: address)
+        finishAddressEditing()
+    }
+    func windowDidResignKey(_ notification: Notification) { endAddressSession() }
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        guard !textView.hasMarkedText() else { return false }
         if control === search, selector == #selector(NSResponder.insertNewline(_:)) {
             if !search.stringValue.isEmpty, !filteredSpaces.isEmpty {
                 let index = filteredSpaces.indices.contains(table.selectedRow) ? table.selectedRow : 0
@@ -642,7 +653,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         guard control === address, selector == #selector(NSResponder.cancelOperation(_:)) else { return false }
         displayed?.pendingAddressDraft = nil
         clearAddressHint()
-        window.makeFirstResponder(nil); updateStatus(); return true
+        window.makeFirstResponder(nil); finishAddressEditing(); return true
     }
     func tableViewSelectionDidChange(_ notification: Notification) {
         guard !refreshing else { return }
@@ -711,6 +722,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         emptyCreateSpace.isEnabled = !model.restoring
         emptyCreateSpace.isHidden = !model.spaces.isEmpty
         guard let space = currentSpace else {
+            endAddressSession()
             displayed?.park(); displayed = nil; empty.isHidden = !search.stringValue.isEmpty
             emptyTitle.stringValue = "浏览会话，各自独立"
             emptyText.stringValue = "在地址栏输入网址，按回车打开。\n首次打开会创建 personal Space，使用直连和系统证书校验。"
@@ -762,7 +774,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
             // An unfinished address belongs to the tab where it was typed.
             pageActionError = nil
             clearAddressHint()
-            window.endEditing(for: address)
+            endAddressSession()
             displayed?.park(); displayed = tab
             if let tab {
                 tab.inputFocusConflict = { [weak self] in
@@ -1030,14 +1042,16 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         }
         let url = tab?.persistedURL == "about:blank" ? "" : tab?.persistedURL ?? ""
         if !editingAddress {
+            let compact: String
             if var origin = URLComponents(string: url), let scheme = origin.scheme?.lowercased(),
                ["http", "https"].contains(scheme), origin.host != nil {
                 origin.user = nil; origin.password = nil
                 origin.path = ""; origin.query = nil; origin.fragment = nil
                 if origin.port == (scheme == "https" ? 443 : 80) { origin.port = nil }
-                addressDisplay.stringValue = origin.string ?? url
-            } else { addressDisplay.stringValue = url }
-            if address.stringValue != url { address.stringValue = url }
+                compact = origin.string ?? url
+            } else { compact = url }
+            address.alignment = .center
+            if address.stringValue != compact { address.stringValue = compact }
         }
         address.toolTip = tab?.persistedURL
         address.placeholderString = "输入网址"
@@ -1211,9 +1225,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     }
     @objc func focusAddress(_ sender: Any?) {
         guard address.isEnabled else { return }
-        beginAddressEditing()
-        window.makeFirstResponder(address); address.selectText(nil)
-        beginAddressEditing()
+        if window.makeFirstResponder(address) { address.currentEditor()?.selectAll(nil) }
     }
     @objc private func startBrowsing(_ sender: Any?) {
         if let space = currentSpace, space.suspended {

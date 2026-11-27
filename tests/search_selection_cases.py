@@ -22,9 +22,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def search_fixture(out):
     source = (ROOT / 'Sources/Browser/Window.swift').read_text()
-    window_init = 'window = NSWindow(contentRect:'
+    window_init = 'let observerWindow = ObserverKeyWindow(contentRect:'
     assert source.count(window_init) == 1
-    source = source.replace(window_init, 'window = ObserverProbeWindow(contentRect:')
+    source = source.replace(window_init, 'let observerWindow = ObserverProbeWindow(contentRect:')
     marker = '        window.orderBack(nil)\n'
     assert source.count(marker) == 1
     source = source.replace(marker, marker + '''        var lastSearchToken = ""

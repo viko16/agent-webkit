@@ -1,7 +1,7 @@
 
 // A prohibited background application cannot be the WindowServer's key window.
 // Supply that precondition only during synchronous AppKit menu dispatch.
-private final class ObserverProbeWindow: NSWindow {
+private final class ObserverProbeWindow: ObserverKeyWindow {
     var dispatchAsKey = false
     private var previousApp: NSRunningApplication?
 
@@ -171,7 +171,7 @@ extension ObserverWindow {
         let sheet = controls(window.attachedSheet?.contentView)
         let dialog = dialogArea.arrangedSubviews.first as? PageDialogView
         return ["dispatched": dispatched, "simulatedKey": simulatedKey, "visible": window.isVisible,
-                "addressEnabled": address.isEnabled, "addressDisplay": addressDisplay.stringValue,
+                "addressEnabled": address.isEnabled, "addressDisplay": address.stringValue,
                 "findVisible": !pageFind.isHidden, "canGoForward": canTraverse(back: false),
                 "findFeedback": controls(pageFind).compactMap { ($0 as? NSTextField)?.stringValue },
                 "popupNoticeTabId": popupNotice.isHidden ? NSNull() as Any : announcedPopup?.id.uuidString as Any? ?? NSNull(),
