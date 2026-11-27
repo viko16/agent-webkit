@@ -4,8 +4,20 @@ import SwiftUI
 import WebKit
 
 @MainActor
-final class SpaceDetailsRefreshToken: ObservableObject {
-    @Published var tick = 0
+final class SpaceDetailsState: ObservableObject {
+    @Published private(set) var copiedKey: String?
+    private var resetTask: Task<Void, Never>?
+
+    func didCopy(_ key: String) {
+        resetTask?.cancel()
+        copiedKey = key
+        resetTask = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(1.5)) } catch { return }
+            self?.copiedKey = nil
+        }
+    }
+
+    deinit { resetTask?.cancel() }
 }
 
 @MainActor
@@ -13,18 +25,7 @@ struct SpaceDetailsView: View {
     weak var space: Space?
     weak var model: BrowserModel?
     let activeTabProvider: () -> Tab?
-    @ObservedObject var refreshToken: SpaceDetailsRefreshToken
-    @State private var inspectable: Bool
-    @State private var copiedKey: String?
-    @State private var resetTask: Task<Void, Never>?
-
-    init(space: Space, model: BrowserModel, activeTabProvider: @escaping () -> Tab?, refreshToken: SpaceDetailsRefreshToken) {
-        self.space = space
-        self.model = model
-        self.activeTabProvider = activeTabProvider
-        self.refreshToken = refreshToken
-        _inspectable = State(initialValue: activeTabProvider()?.webView.isInspectable ?? false)
-    }
+    @ObservedObject var state: SpaceDetailsState
 
     private func lifecycleLabel(for space: Space) -> (text: String, color: Color) {
         if space.configurationError != nil { return ("配置异常", .red) }
@@ -39,13 +40,12 @@ struct SpaceDetailsView: View {
     }
 
     var body: some View {
-        let _ = refreshToken.tick
         if let space {
             let tab = activeTabProvider()
             let badge = lifecycleLabel(for: space)
             let pendingStores = (model?.records ?? []).filter(\.deleting).map { (id: $0.id, name: $0.name) }
             VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .firstBaseline, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(space.record.name)
                         .font(.headline)
                         .lineLimit(1)
@@ -73,7 +73,7 @@ struct SpaceDetailsView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     infoRow(key: "space-id", label: "Space ID", value: space.record.id.uuidString, monospace: true, copyable: true)
                     if let tab {
-                        infoRow(key: "tab-id", label: "当前标签页 ID", value: tab.id.uuidString, monospace: true, copyable: true)
+                        infoRow(key: tab.id.uuidString, label: "当前标签页 ID", value: tab.id.uuidString, monospace: true, copyable: true)
                     }
                     infoRow(
                         key: "proxy",
@@ -94,19 +94,16 @@ struct SpaceDetailsView: View {
                         Text("当前标签页排障")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Toggle("允许 Safari 网页检查器", isOn: $inspectable)
-                            .toggleStyle(.switch)
-                            .controlSize(.small)
-                            .onChange(of: inspectable) { _, enabled in
-                                guard let liveTab = activeTabProvider(), !liveTab.closed else { return }
-                                if liveTab.webView.isInspectable != enabled {
-                                    liveTab.webView.isInspectable = enabled
-                                }
+                        Toggle("允许 Safari 网页检查器", isOn: Binding(
+                            get: { tab.webView.isInspectable },
+                            set: { enabled in
+                                guard activeTabProvider() === tab, !tab.closed else { return }
+                                tab.webView.isInspectable = enabled
+                                state.objectWillChange.send()
                             }
-                            .onChange(of: refreshToken.tick) { _, _ in
-                                let actual = activeTabProvider()?.webView.isInspectable ?? false
-                                if inspectable != actual { inspectable = actual }
-                            }
+                        ))
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
                         HStack {
                             Text("详细诊断")
                                 .font(.caption)
@@ -144,10 +141,6 @@ struct SpaceDetailsView: View {
             }
             .padding(16)
             .frame(width: 360)
-            .onDisappear {
-                resetTask?.cancel()
-                resetTask = nil
-            }
         }
     }
 
@@ -172,7 +165,7 @@ struct SpaceDetailsView: View {
             Text(label)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            HStack(alignment: .firstBaseline, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(value)
                     .font(monospace ? .caption.monospaced() : .callout)
                     .textSelection(.enabled)
@@ -183,12 +176,12 @@ struct SpaceDetailsView: View {
                     Button {
                         copyValue(value, key: key)
                     } label: {
-                        Image(systemName: copiedKey == key ? "checkmark" : "doc.on.doc")
+                        Image(systemName: state.copiedKey == key ? "checkmark" : "doc.on.doc")
                             .font(.caption)
-                            .foregroundStyle(copiedKey == key ? Color.green : Color.secondary)
+                            .foregroundStyle(state.copiedKey == key ? Color.green : Color.secondary)
                     }
                     .buttonStyle(.borderless)
-                    .help(copiedKey == key ? "已复制" : "复制\(label)")
+                    .help(state.copiedKey == key ? "已复制" : "复制\(label)")
                     .accessibilityLabel("复制\(label)")
                 }
             }
@@ -199,11 +192,6 @@ struct SpaceDetailsView: View {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         guard pasteboard.setString(value, forType: .string) else { return }
-        copiedKey = key
-        resetTask?.cancel()
-        resetTask = Task { @MainActor in
-            do { try await Task.sleep(for: .seconds(1.5)) } catch { return }
-            if copiedKey == key { copiedKey = nil }
-        }
+        state.didCopy(key)
     }
 }

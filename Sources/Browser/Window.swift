@@ -121,7 +121,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     private let selectionKey: String
     private let socketPath: String
     private let infoPopover = NSPopover()
-    private let infoRefreshToken = SpaceDetailsRefreshToken()
+    private weak var detailsState: SpaceDetailsState?
     private weak var infoSpace: Space?
     private let downloadsPopover = NSPopover()
     private let downloadsRefreshToken = DownloadsRefreshToken()
@@ -1000,7 +1000,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         }
         if infoPopover.isShown {
             if let infoSpace, !model.spaces.contains(where: { $0 === infoSpace }) { infoPopover.close() }
-            else { infoRefreshToken.tick &+= 1 }
+            else { detailsState?.objectWillChange.send() }
         }
         if downloadsPopover.isShown {
             if downloadsSpace !== space { downloadsPopover.close() }
@@ -1572,11 +1572,13 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         downloadsPopover.close()
         if infoPopover.isShown { infoPopover.close() }
         infoSpace = space
+        let state = SpaceDetailsState()
+        detailsState = state
         let content = SpaceDetailsView(space: space, model: model, activeTabProvider: { [weak self, weak space] in
             guard let self, let space else { return nil }
             if space === self.currentSpace { return self.displayed }
             return space.tabs.first { $0.id == self.selectedTabs[space.record.id] } ?? space.tabs.first
-        }, refreshToken: infoRefreshToken)
+        }, state: state)
         infoPopover.contentViewController = NSHostingController(rootView: content)
         infoPopover.behavior = .transient
         infoPopover.delegate = self
