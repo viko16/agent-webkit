@@ -6,7 +6,9 @@ final class SpaceCreationSheet: NSViewController, NSTextFieldDelegate {
     private let mode = NSPopUpButton()
     private let proxy = NSTextField()
     private let proxyHint = NSTextField(wrappingLabelWithString: "仅支持本机代理，如 Whistle：http://127.0.0.1:8899")
-    private let advanced = NSButton(checkboxWithTitle: "显示 TLS 高级选项", target: nil, action: nil)
+    private let advanced = NSButton()
+    private let advancedLabel = NSTextField(labelWithString: "TLS 高级选项")
+    private let progress = NSProgressIndicator()
     private let tls = NSPopUpButton()
     private let tlsWarning = NSTextField(wrappingLabelWithString: "仅限受控开发环境：将跳过证书链、域名和有效期校验。")
     private let ca = NSTextField()
@@ -43,6 +45,14 @@ final class SpaceCreationSheet: NSViewController, NSTextFieldDelegate {
         ca.setAccessibilityLabel("CA 证书路径")
         chooseCA.target = self; chooseCA.action = #selector(chooseCertificate)
         chooseCA.setAccessibilityLabel("选择 CA 证书文件")
+        advanced.setButtonType(.onOff)
+        advanced.bezelStyle = .disclosure
+        advanced.title = ""
+        advanced.setAccessibilityLabel("TLS 高级选项")
+        advanced.setAccessibilityRole(.disclosureTriangle)
+        advancedLabel.setAccessibilityElement(false)
+        let disclosure = NSStackView(views: [advanced, advancedLabel])
+        disclosure.alignment = .centerY; disclosure.spacing = 4
         for control: NSControl in [mode, advanced, tls] {
             control.target = self
             control.action = #selector(inputChanged)
@@ -74,8 +84,11 @@ final class SpaceCreationSheet: NSViewController, NSTextFieldDelegate {
         ca.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         chooseCA.setContentHuggingPriority(.required, for: .horizontal)
         let divider = NSBox(); divider.boxType = .separator
-        let actions = NSStackView(views: [NSView(), cancel, create])
-        for control: NSView in [title, nameRow, divider, modeRow, proxyRow, proxyHint, advanced, tlsRow, tlsWarning, caRow, errorLabel, actions] {
+        progress.style = .spinning; progress.controlSize = .small
+        progress.isDisplayedWhenStopped = false; progress.isHidden = true
+        progress.setAccessibilityLabel("正在创建 Space")
+        let actions = NSStackView(views: [NSView(), progress, cancel, create])
+        for control: NSView in [title, nameRow, divider, modeRow, proxyRow, proxyHint, disclosure, tlsRow, tlsWarning, caRow, errorLabel, actions] {
             stack.addArrangedSubview(control)
         }
         stack.setCustomSpacing(16, after: title)
@@ -102,9 +115,16 @@ final class SpaceCreationSheet: NSViewController, NSTextFieldDelegate {
 
     override func viewDidAppear() {
         super.viewDidAppear()
+        view.window?.defaultButtonCell = create.cell as? NSButtonCell
         view.window?.makeFirstResponder(name)
     }
 
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy command: Selector) -> Bool {
+        guard !textView.hasMarkedText() else { return false }
+        if command == #selector(NSResponder.insertNewline(_:)) { createSpace(); return true }
+        if command == #selector(NSResponder.cancelOperation(_:)) { cancelSheet(); return true }
+        return false
+    }
     func controlTextDidChange(_ notification: Notification) { inputChanged() }
     @objc private func inputChanged() {
         errorLabel.isHidden = true
@@ -122,11 +142,13 @@ final class SpaceCreationSheet: NSViewController, NSTextFieldDelegate {
         create.isEnabled = !submitting && !trimmedName.isEmpty && (proxyRow.isHidden || !trimmedProxy.isEmpty)
             && (tls.indexOfSelectedItem != 1 || !trimmedCA.isEmpty)
         let policy = tls.indexOfSelectedItem == 1 && trimmedCA.isEmpty ? "需选择 CA 证书" : tls.titleOfSelectedItem
-        advanced.title = tlsRow.isHidden && tls.indexOfSelectedItem > 0
-            ? "显示 TLS 高级选项（" + (policy ?? "") + "）" : "显示 TLS 高级选项"
+        advancedLabel.stringValue = tlsRow.isHidden && tls.indexOfSelectedItem > 0
+            ? "TLS 高级选项（" + (policy ?? "") + "）" : "TLS 高级选项"
+        advanced.setAccessibilityLabel(advancedLabel.stringValue)
+        advanced.setAccessibilityExpanded(!tlsRow.isHidden)
         preferredContentSize = view.fittingSize
     }
-    @objc private func cancelSheet() { dismiss(self) }
+    @objc private func cancelSheet() { if !submitting { dismiss(self) } }
     @objc private func chooseCertificate() {
         guard let window = view.window else { return }
         let panel = NSOpenPanel()
@@ -171,6 +193,9 @@ final class SpaceCreationSheet: NSViewController, NSTextFieldDelegate {
 
     private func setSubmitting(_ value: Bool) {
         submitting = value
+        create.title = value ? "正在创建…" : "创建"
+        progress.isHidden = !value
+        if value { progress.startAnimation(nil) } else { progress.stopAnimation(nil) }
         for control: NSControl in [name, mode, proxy, advanced, tls, ca, chooseCA, cancel] {
             control.isEnabled = !value
         }

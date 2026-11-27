@@ -1,5 +1,23 @@
 
 extension SpaceCreationSheet {
+    func probeInput(name value: String?, key: String?) -> [String: Any] {
+        if let value { name.stringValue = value; inputChanged() }
+        var handled = false
+        if let key, let window = view.window {
+            let cancel = key == "escape"
+            let text = cancel ? "\u{1b}" : "\r"
+            let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+                characters: text, charactersIgnoringModifiers: text, isARepeat: false, keyCode: cancel ? 53 : 36)!
+            handled = window.performKeyEquivalent(with: event)
+            if !handled, let editor = window.firstResponder as? NSTextView {
+                editor.doCommand(by: cancel ? #selector(NSResponder.cancelOperation(_:)) : #selector(NSResponder.insertNewline(_:)))
+                handled = submitting || view.window?.sheetParent == nil
+            }
+        }
+        return ["handled": handled, "name": name.stringValue, "error": errorLabel.isHidden ? "" : errorLabel.stringValue,
+                "enabled": create.isEnabled, "tls": tls.indexOfSelectedItem]
+    }
     // Compiled into the test sheet's source file so these are the real controls and actions.
     func probeCollapsedTLS(_ policy: Int) -> [String: Any] {
         _ = view
@@ -27,11 +45,25 @@ extension SpaceCreationSheet {
             advanced.performClick(nil)
         }
         var options: [String: String] = [:]
+        var sends = 0
+        var progressAndRetry = false
         submit = { [weak self] request in
+            guard let self else { return }
+            sends += 1
+            if sends == 1 {
+                let blocked = !create.isEnabled && !cancel.isEnabled && submitting && !progress.isHidden && create.title == "正在创建…"
+                createSpace()
+                finishSubmission(error: "测试校验错误")
+                progressAndRetry = blocked && sends == 1 && create.isEnabled && cancel.isEnabled && !submitting
+                    && progress.isHidden && create.title == "创建" && !errorLabel.isHidden && advanced.bezelStyle == .disclosure
+                    && name.stringValue == "test-policy" && tls.indexOfSelectedItem == policy
+                return
+            }
             options = request.options
-            self?.finishSubmission()
+            finishSubmission()
         }
         create.performClick(nil)
-        return ["enabledWithoutCA": enabledWithoutCA, "options": options]
+        create.performClick(nil)
+        return ["progressAndRetry": progressAndRetry && sends == 2, "enabledWithoutCA": enabledWithoutCA, "options": options]
     }
 }

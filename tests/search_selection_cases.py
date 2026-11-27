@@ -249,6 +249,7 @@ def main():
                                     (2, {'ignore-certificate-errors': 'true'})]:
                 form = native('', policy=str(policy))['form']
                 assert form['options'] == dict(proxy='direct', **options), form
+                assert form['progressAndRetry'], form
                 assert form['enabledWithoutCA'] == (policy != 1), form
             assert native('')['probe']['addressEnabled']
             assert native('', 'submit-address', url=base)['probe']['dispatched']
