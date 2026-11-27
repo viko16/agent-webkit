@@ -10,6 +10,7 @@ import time
 from threading import Event
 import uuid
 
+from observer_regression_cases import verify_observer_regressions
 from observer_protection_cases import verify_observer_protection
 from direct_conflict_cases import prepare_proxy_settings
 from fixtures import origin
@@ -108,6 +109,29 @@ def search_fixture(out):
             return false
         }
 """)
+                # Deliver a real WebKit cancellation after its replacement has finished.
+                marker = '    private func failNavigation(_ navigation: WKNavigation?, error: Error, provisional: Bool) {'
+                assert text.count(marker) == 1
+                text = text.replace(marker, '''    var holdNextCancellation = false
+    var heldCancellation: (() -> Void)?
+''' + marker + '''
+        let cocoaError = error as NSError
+        if holdNextCancellation, cocoaError.domain == NSURLErrorDomain, cocoaError.code == NSURLErrorCancelled {
+            holdNextCancellation = false
+            heldCancellation = { [weak self] in self?.failNavigation(navigation, error: error, provisional: provisional) }
+            return
+        }
+''')
+            if path.name == 'SpaceDetailsView.swift':
+                # Observe the ID row's real SwiftUI lifecycle, even without accessibility permission.
+                marker = 'infoRow(key: tab.id.uuidString, label: "当前标签页 ID", value: tab.id.uuidString, monospace: true, copyable: true)'
+                assert text.count(marker) == 1
+                text = text.replace(marker, marker + '''
+                            .onAppear { Self.probeDisplayedTab = tab.id }
+                            .onChange(of: tab.id) { _, id in Self.probeDisplayedTab = id }
+                            .onDisappear { Self.probeDisplayedTab = nil }
+''')
+                text += '\nextension SpaceDetailsView { @MainActor static var probeDisplayedTab: UUID? }\n'
             if path.name == 'SpaceCreationSheet.swift':
                 text += (ROOT / 'tests/space_creation_probe.swift').read_text()
             if path.name == 'main.swift':
@@ -341,6 +365,7 @@ def main():
             for space in cli('space', 'list'):
                 cli('space', 'delete', space['id'])
             new_tab(None)
+            verify_observer_regressions(cli, native, base)
             verify_observer_protection(cli, native, binary, env, base, events)
             if env.get('BROWSER_TEST_FOREGROUND') == '1':
                 assert all(not row['probe']['simulatedKey'] for row in results if row['action'] in ('cmd-w', 'shift-cmd-w'))

@@ -47,6 +47,43 @@ extension ObserverWindow {
             return [view] + view.subviews.flatMap { controls($0) }
         }
         switch action {
+        case "details":
+            if let item = window.toolbar?.items.first(where: { $0.itemIdentifier == .details }),
+               let action = item.action, item.isEnabled {
+                dispatched = NSApp.sendAction(action, to: item.target, from: item)
+            }
+        case "inspect-details":
+            return ["tabID": SpaceDetailsView.probeDisplayedTab?.uuidString as Any? ?? NSNull(),
+                    "visible": infoPopover.isShown && infoPopover.contentViewController?.view.window?.isVisible == true]
+        case "close-others":
+            if let menu = row?.contextMenuProvider?(),
+               let index = menu.items.firstIndex(where: { $0.action == #selector(contextCloseOtherTabs(_:)) }),
+               menu.items[index].isEnabled {
+                menu.performActionForItem(at: index)
+                dispatched = true
+            }
+        case "stop", "stop-delay-callback":
+            if reloadButton.action == #selector(stopLoadingPage), reloadButton.isEnabled {
+                displayed?.holdNextCancellation = action == "stop-delay-callback"
+                click(reloadButton)
+            }
+        case "inspect-cancellation":
+            return ["held": displayed?.heldCancellation != nil, "pending": displayed?.navigationPending == true]
+        case "stop-subresources":
+            guard let tab = displayed, !tab.navigationPending else { break }
+            if reloadButton.action == #selector(stopLoadingPage) && reloadButton.isEnabled {
+                click(reloadButton)
+            } else {
+                // Some WebKit versions keep the toolbar in reload mode for a background fetch.
+                tab.stopLoadingByObserver()
+                dispatched = true
+            }
+        case "release-cancellation":
+            if let tab = displayed, let callback = tab.heldCancellation {
+                tab.heldCancellation = nil
+                callback()
+                dispatched = true
+            }
         case "submit-address":
             guard address.isEnabled, let url = request["url"] else { break }
             focusAddress(nil)
@@ -129,7 +166,7 @@ extension ObserverWindow {
         default: break
         }
         // Allow the control's MainActor task and sheet completion to run.
-        if dispatched { try? await Task.sleep(for: .milliseconds(100)) }
+        if dispatched && !action.hasPrefix("stop") { try? await Task.sleep(for: .milliseconds(100)) }
         let activity = tabID.flatMap { currentSpace?.activity[$0] }
         let sheet = controls(window.attachedSheet?.contentView)
         let dialog = dialogArea.arrangedSubviews.first as? PageDialogView
