@@ -114,3 +114,35 @@
 - 在 760 pt 窗口中，「＋」和「更多操作」与 Spaces 标题同排，列表可以一直延伸到底部数量上方。两项控件都有中文辅助功能名称。空资料目录也可以通过「＋」打开创建表单。[侧栏布局](ui-ux-evidence/after/28-sidebar-actions.png)
 - 在独立测试窗口展开原生菜单，活动 Space 显示「休眠 Space…」，休眠后切换为「恢复 Space」。删除始终单独列在分隔线下方。[浅色 · 活动 Space](ui-ux-evidence/after/28-sidebar-menu.png) · [深色 · 休眠 Space](ui-ux-evidence/after/28-sidebar-dark.png)
 - 调试构建通过。修正菜单展开通知的回调签名后重新运行原生窗口回归，最终报告记录了 166 次交互与状态读取。搜索无匹配时「更多操作」停用，「＋」仍能打开表单。选择「恢复 Space」后核对了实际运行状态，选择「删除 Space…」后核对了确认框和取消行为。截图通过独立 AppKit 窗口采集。
+
+## 第二轮 · 键盘、窗口和 Space 状态
+
+本轮从 `9a70961` 的调试构建重新启动 App。第 29、30、33、35 项能对应到 HIG 的具体指引。第 31、32、34 项依据 HIG 对反馈和浮层的建议，结合观察窗口的实际行为作出调整。
+
+| 编号 | 复现与影响 | 修复与验证 | Apple HIG |
+| --- | --- | --- | --- |
+| 29 | 在新建 Space 的名称中输入 `review`，再追加 `-edited`。按 ⌘Z 后追加的文字仍在。「编辑」菜单缺少撤销、重做和剪切。[修复前](ui-ux-evidence/before/29-edit.png) | 补齐标准编辑命令，由当前编辑控件处理。前台表单中，⌘Z 恢复为 `review`，⇧⌘Z 恢复为 `review-edited`。[撤销后](ui-ux-evidence/after/29-edit.png) | [标准快捷键](https://developer.apple.com/design/human-interface-guidelines/keyboards#Standard-keyboard-shortcuts) · [编辑菜单](https://developer.apple.com/design/human-interface-guidelines/the-menu-bar#Edit-menu) |
+| 30 | 只有一页时隐藏观察窗口，按 ⌘T，再打开窗口，已经有两页。「关于」面板在前时也能改变背后的观察窗口。[修复前](ui-ux-evidence/before/30-hidden-tabs.png) | 观察窗口隐藏、最小化、带有附属表单，或其他窗口正在接收输入时，停用相应的观察菜单命令。「窗口 → 显示观察窗口」可找回隐藏或最小化的窗口。重复原操作后仍只有一页。[修复后](ui-ux-evidence/after/30-hidden-tabs.png) | [菜单项的可用状态](https://developer.apple.com/design/human-interface-guidelines/the-menu-bar#Best-practices) |
+| 31 | 打开 `personal` 的资料，再通过 CLI 删除该测试 Space。主窗口自动选中 `staging`，浮层仍然显示已删除 Space 的名称和证书策略。[旧浮层](ui-ux-evidence/before/31-stale-space.png) | 选中另一个 Space 时关闭旧资料。实测删除后浮层已关闭，再打开时标题和 ID 都属于 `staging`。[重新打开](ui-ux-evidence/after/31-current-space.png) | [浮层与来源控件](https://developer.apple.com/design/human-interface-guidelines/popovers) |
+| 32 | 休眠 Space 后，「Space 信息」随网页操作一起停用。要查看连接方式或证书策略，只能先恢复网页。[休眠时的工具栏](ui-ux-evidence/before/32-suspended-space.png) | 按所选 Space 决定信息按钮是否可用。打开休眠 Space 的资料后，CLI 读回的状态仍为 `suspended`。[休眠页与资料浮层](ui-ux-evidence/after/32-suspended-space.png) | [在当前上下文中提供状态](https://developer.apple.com/design/human-interface-guidelines/feedback) |
+| 33 | 选择「使用自定义 CA」，留空证书路径，再折叠高级选项。「创建」停用，可见字段看起来都已填好。[修复前](ui-ux-evidence/before/33-missing-ca.png) | 折叠控件直接提示「需选择 CA 证书」。展开后仍可输入路径或打开系统选择器，保留已选的证书策略。[修复后](ui-ux-evidence/after/33-missing-ca.png) | [让用户知道哪些数据必填](https://developer.apple.com/design/human-interface-guidelines/entering-data#Best-practices) |
+| 34 | 模拟直连 Space 的系统代理冲突。点「重新检查」后出现「系统代理仍已开启」，同一 Space 的侧栏一刷新，横幅就恢复首次提示，用户难以判断刚才的检查结果。[刷新后丢失反馈](ui-ux-evidence/before/34-proxy-recheck.png) | 为当前 Space 保留这次检查的结果。同样的刷新后仍显示「系统代理仍已开启」。解除测试冲突并重新检查后，横幅消失。[修复后](ui-ux-evidence/after/34-proxy-recheck.png) | [反馈与操作结果](https://developer.apple.com/design/human-interface-guidelines/feedback) |
+| 35 | 侧栏展开和折叠时，「显示」菜单都写「显示／隐藏侧边栏」。没有标签页时，「上一个」「下一个」也可选，点击没有效果。[空窗口的菜单](ui-ux-evidence/before/35-sidebar-menu.png) | 菜单根据布局显示「隐藏侧边栏」或「显示侧边栏」，沿用 ⌃⌘S。当前 Space 有两页及以上才启用切换命令。[侧栏已折叠](ui-ux-evidence/after/35-sidebar-menu.png) | [显示菜单的切换命令](https://developer.apple.com/design/human-interface-guidelines/the-menu-bar#View-menu) · [菜单项的可用状态](https://developer.apple.com/design/human-interface-guidelines/the-menu-bar#Best-practices) |
+
+### 本轮覆盖与边界
+
+| 界面 | 实际检查 |
+| --- | --- |
+| 首次启动、侧栏与标签 | 从空资料目录输入网址。检查零匹配、清除筛选、折叠后搜索、Space 操作菜单、六标签溢出列表和选中目标。通过标签的辅助功能关闭动作唤起确认框，取消后保留原页。 |
+| 新建表单与文件选择器 | 切换直连、HTTP 代理和自定义 CA。验证非法名称就地报错、五行左右边距、取消选证书后保留路径。名称字段按 Tab 移到代理地址，⇧Tab 返回名称，Esc 关闭表单。 |
+| 网页、工具栏与提示 | 执行后退、前进、页内查找、复制交接命令。通过网页读回 alert 继续执行、confirm 取消及 prompt 默认回复。核对固定视口预览关闭后网页仍是 1440 × 900。 |
+| 浮层、确认框与窗口菜单 | 打开 Space 资料和空下载面板。查看跨标签的进行中及已完成下载，核对取消后的终态，并在测试进程中截获「在访达中显示」请求，确认目标是已下载文件。验证休眠与删除确认可取消，检查「关于」、隐藏及重新显示观察窗口。 |
+| 尺寸、外观与辅助功能 | 分别在 760 和 1220 pt 宽的窗口切换浅深色。核对地址栏、交接、新标签仍在工具栏，底栏文字随外观切换。读取侧栏和表单的辅助功能名称、六个标签的角色、完整名称及选中值。 |
+
+测试 App 使用独立资料目录、回环测试网页和专用交接剪贴板。通过独立的辅助功能客户端，在打包后的 App 中读取地址栏、搜索框及侧栏按钮的名称，用 AXPress 打开新建表单，再取消。其余专项在同一套产品源码构建的 App 中，从进程内派发原生菜单、键盘和控件操作。剪切核对菜单可用状态，撤销和重做另行核对字段实际内容。
+
+窗口截图按测试窗口编号采集。菜单图在测试窗口内展开实际的「显示」菜单。PNG 转为标准 sRGB 后，只保留图像数据及颜色标记。VoiceOver 的实际朗读顺序、盲文显示及系统级「完全键盘控制」未实测。
+
+复审时另测了「文件 → 隐藏观察窗口」。原先「关于」在前时按 ⇧⌘W 仍会隐藏背后的观察窗口。修正后，「关于」或创建表单在前时观察窗口保持可见，观察窗口在前时同一快捷键正常隐藏它。
+
+最终调试构建通过。运行 `BROWSER_TEST_FOREGROUND=1 python3 tests/search_selection_cases.py` 后，回归报告记录了 170 次控件操作与状态读取。测试覆盖后台页执行、弹出子页、导航失败及重试、休眠与恢复、下载阻止退出，以及确认期间关闭目标发生变化。关闭与隐藏快捷键均由真实前台窗口接收。
