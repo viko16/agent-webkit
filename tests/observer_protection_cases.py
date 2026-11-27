@@ -108,6 +108,7 @@ def verify_observer_protection(cli, native, binary, env, base, events):
         paused = probe()['probe']
         assert paused['noticeAction'] == '重新检查' and '已暂停' in paused['footer'], paused
         assert '仍已开启' in click('retry-navigation')['probe']['bannerText']
+        assert '仍已开启' in probe()['probe']['bannerText']
         until(lambda: probe()['probe']['navigationErrorCode'] == 'direct_system_proxy_conflict')
     finally:
         proxy_settings.write_text('{}')

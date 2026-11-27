@@ -233,8 +233,8 @@ def main():
             tab_id = personal['tabs'][0]['tabId']
             def wait_display(url):
                 for _ in range(80):
-                    result = native('')
                     state = cli('space', 'info', 'personal')
+                    result = native('')
                     if result['displayedURL'] == url and not state['busy'] and not state['tabs'][0]['loading']:
                         return result
                     time.sleep(.05)

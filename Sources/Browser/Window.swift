@@ -87,6 +87,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         let clearsAfterLoad: Bool
     }
     private var pageActionError: PageActionError?
+    private var checkedBlockedProxySpace: UUID?
     private let selectionKey: String
     private let socketPath: String
     private let infoPopover = NSPopover()
@@ -742,6 +743,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         handoff.setAccessibilityLabel(copiedTab != nil && copiedTab == tab?.id ? "已复制接管命令" : "交给 Agent，复制当前页面的接管命令")
         let networkError = space?.networkError
         let proxyState = proxyRecovery(networkError)
+        if proxyState != .blocked || checkedBlockedProxySpace != selectedSpace { checkedBlockedProxySpace = nil }
         let recheckProxy = proxyState != .ready
         let networkPaused = recheckProxy || networkError != nil
         if pendingDialog != nil { status.stringValue = "网页等待回复" }
@@ -778,7 +780,9 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         let error = networkError?.localizedDescription ?? actionMessage ?? rejection?.localizedDescription ?? (tab?.unresponsive == true ? "页面未响应。重新加载可恢复标签页；上次操作可能已部分生效。" : tab?.navigationError?.localizedDescription)
         let failedNavigation = !networkPaused && actionMessage == nil && rejection == nil && tab?.unresponsive == false && tab?.hasFailedNavigation == true
         let target = failedNavigation ? tab?.failedNavigationTarget : nil
-        if recheckProxy {
+        if checkedBlockedProxySpace != nil {
+            bannerText.stringValue = "系统代理仍已开启。关闭后可再次检查。"
+        } else if recheckProxy {
             bannerText.stringValue = proxyState == .needsReload ? "系统代理设置已更改。重新检查后可恢复此页面。" : "直连已暂停。请关闭系统代理，然后重新检查。"
         } else if actionMessage == nil && rejection?.code == "unsupported_navigation" {
             bannerText.stringValue = "未打开此链接。浏览器支持 HTTP、HTTPS 和 about:blank，当前页面已保留。"
@@ -1089,9 +1093,8 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     @objc private func recheckSystemProxy() {
         switch proxyRecovery(currentSpace?.networkError) {
         case .blocked:
+            checkedBlockedProxySpace = selectedSpace
             refresh()
-            bannerText.stringValue = "系统代理仍已开启。关闭后可再次检查。"
-            bannerText.toolTip = bannerText.stringValue
         case .needsReload: reloadPage()
         case .ready: refresh()
         }
