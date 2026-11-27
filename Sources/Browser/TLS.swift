@@ -45,12 +45,15 @@ struct TLSConfiguration: Codable {
     }
 
     var certificate: SecCertificate? { certificateDER.flatMap { SecCertificateCreateWithData(nil, $0 as CFData) } }
+    var caSHA256: String? {
+        certificateDER.map { SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined() }
+    }
     var summary: [String: Any] {
         if ignoreCertificateErrors == true {
             return ["policy": "insecure", "hostnameValidation": false, "certificateErrorsIgnored": true,
                     "warning": "Only for controlled development: certificate chain, hostname and expiry errors are accepted in this Space."]
         }
-        return ["policy": "custom-ca", "caSHA256": SHA256.hash(data: certificateDER ?? Data()).map { String(format: "%02x", $0) }.joined(),
+        return ["policy": "custom-ca", "caSHA256": caSHA256 ?? "",
          "systemAnchorsAllowed": true, "hostnameValidation": true, "certificateErrorsIgnored": false]
     }
 

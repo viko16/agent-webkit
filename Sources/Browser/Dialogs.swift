@@ -21,7 +21,7 @@ final class DialogStore {
         fileprivate let defaultText: String?
         let origin: String
         fileprivate let mainFrame: Bool
-        fileprivate let deadline: UInt64
+        let deadline: UInt64
         fileprivate let expiresAt: Double
         fileprivate let reply: (Bool, String?) -> Void
         fileprivate let timer: DispatchWorkItem

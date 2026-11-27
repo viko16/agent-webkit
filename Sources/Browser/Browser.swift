@@ -204,6 +204,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     private(set) var navigationSequence = 0
     private var completedNavigationSequence = 0
     private var completedNavigationWasDownload = false
+    private var observerStoppedNavigationSequence: Int?
     private weak var provisionalNavigation: WKNavigation?
     private(set) var navigationPending = false
     private var navigationStartedAt: UInt64?
@@ -549,6 +550,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         dialogs.cancelAll(code: "dialog_cancelled")
         fileChooser.stop()
         requestedURL = url.absoluteString
+        observerStoppedNavigationSequence = nil
         navigationError = nil; lastNavigationRejection = nil; certificateError = nil; tlsChallenge = [:]; terminated = false
         // A repeated failed load can return nil and still deliver a terminal delegate callback.
         // Never treat the previous document's readyState as completion of this request.
@@ -975,6 +977,10 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         failNavigation(navigation, error: error, provisional: true)
     }
+    func stopLoadingByObserver() {
+        observerStoppedNavigationSequence = navigationSequence
+        webView.stopLoading()
+    }
     private func failNavigation(_ navigation: WKNavigation?, error: Error, provisional: Bool) {
         // Unknown cancelled callbacks may belong to a superseded navigation.
         let native = error as NSError
@@ -986,8 +992,15 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
             changed?()
             return
         }
-        recordNavigation("navigation-failed", navigation: navigation, error: error)
         let failedSequence = navigationSpan(navigation)?.sequence ?? navigationSequence
+        if native.domain == NSURLErrorDomain, native.code == NSURLErrorCancelled,
+           observerStoppedNavigationSequence == failedSequence {
+            observerStoppedNavigationSequence = nil
+            _ = finishNavigation(navigation)
+            changed?()
+            return
+        }
+        recordNavigation("navigation-failed", navigation: navigation, error: error)
         let latest = finishNavigation(navigation)
         // A replacement load cancels the previous request. Its late failure must not poison the new one.
         if latest {
@@ -1189,6 +1202,7 @@ final class Space {
     var activity: [UUID: TabActivity] = [:]
     var busy = false
     var busyTabID: UUID?
+    var busyOrigin: RequestOrigin?
     var resourceBlockedReason: String?
     private(set) var configurationError: BrowserError?
     init(_ record: SpaceRecord, restoring: Bool = false) throws {
@@ -1722,6 +1736,7 @@ final class BrowserModel {
         func setBusy(_ busy: Bool, tab: UUID? = nil) {
             space.busy = busy
             space.busyTabID = tab
+            space.busyOrigin = busy ? origin : nil
             changed?()
         }
         func beginActivity(_ id: UUID, renewing: Bool) {

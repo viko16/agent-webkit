@@ -32,6 +32,12 @@ final class DiagnosticLog: NSObject {
 
     var documentStartConfiguration: [String: Any]? { continuous ? configuration : nil }
 
+    var detailSummary: String {
+        guard detailGeneration != nil else { return "未开启" }
+        let scope = continuous ? "持续捕获" : "当前文档"
+        return includeInfo ? "\(scope)（含 info）" : scope
+    }
+
     func setDetail(_ enabled: Bool, continuous: Bool = false, includeInfo: Bool = false) {
         expiryTask?.cancel(); expiryTask = nil
         // Disabling also erases details already retained; preserve the existing summary ring.
