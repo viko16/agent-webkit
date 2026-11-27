@@ -200,11 +200,11 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     private var committedNavigationID: UUID?
     private static let historyResponseLimit = 128
     private var historyResponses: [HistoryResponse] = []
+    private let observerStoppedNavigations = NSHashTable<WKNavigation>.weakObjects()
     private var navigationSpans: [ObjectIdentifier: NavigationSpan] = [:]
     private(set) var navigationSequence = 0
     private var completedNavigationSequence = 0
     private var completedNavigationWasDownload = false
-    private var observerStoppedNavigationSequence: Int?
     private weak var provisionalNavigation: WKNavigation?
     private(set) var navigationPending = false
     private var navigationStartedAt: UInt64?
@@ -255,7 +255,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
                     guard let self, !self.webView.isLoading, !self.navigationPending,
                           self.navigationSequence == self.completedNavigationSequence,
                           let url = self.webView.url else { return }
-                    if self.navigationError == nil {
+                    if self.navigationError == nil && self.navigationResult?.phase != .provisionalFailure {
                         self.persistedURL = url.absoluteString
                         self.committedDocumentURL = url.absoluteString
                         self.changed?()
@@ -550,7 +550,6 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         dialogs.cancelAll(code: "dialog_cancelled")
         fileChooser.stop()
         requestedURL = url.absoluteString
-        observerStoppedNavigationSequence = nil
         navigationError = nil; lastNavigationRejection = nil; certificateError = nil; tlsChallenge = [:]; terminated = false
         // A repeated failed load can return nil and still deliver a terminal delegate callback.
         // Never treat the previous document's readyState as completion of this request.
@@ -603,7 +602,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         let span = navigationSpan(navigation)
         if span != nil, let navigation { navigationSpans.removeValue(forKey: ObjectIdentifier(navigation)) }
         if let token = span?.token { span?.timing?.finish(token) }
-        let latest = span.map { $0.sequence == navigationSequence } ?? (navigationPending && (navigation == nil || provisionalNavigation == nil))
+        let latest = span.map { $0.id == navigationResult?.id } ?? (navigationPending && (navigation == nil || provisionalNavigation == nil))
         if latest {
             completedNavigationSequence = navigationSequence
             completedNavigationWasDownload = becameDownload
@@ -905,6 +904,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         // A failed provisional load can retain the current document and all its frames.
         // Live document epochs, not navigation attempts, govern frame validity.
+        if let navigation, observerStoppedNavigations.contains(navigation) { return }
         if let span = navigationSpan(navigation), span.sequence != navigationSequence { return }
         dialogs.cancelAll(code: "dialog_cancelled")
         fileChooser.stop()
@@ -941,6 +941,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         changed?()
     }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        if let navigation, observerStoppedNavigations.contains(navigation) { return }
         recordNavigation("navigation-finished", navigation: navigation)
         if finishNavigation(navigation) {
             navigationResult?.phase = .finished
@@ -978,10 +979,28 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
         failNavigation(navigation, error: error, provisional: true)
     }
     func stopLoadingByObserver() {
-        observerStoppedNavigationSequence = navigationSequence
+        if navigationPending, !terminated, let result = navigationResult {
+            let span = navigationSpans.values.first { $0.id == result.id }
+            // WebKit may deliver a terminal callback after another document has started.
+            if let navigation = span?.navigation { observerStoppedNavigations.add(navigation) }
+            let download = span?.becameDownload == true
+            if download { recordNavigation("navigation-download", navigation: span?.navigation) }
+            if finishNavigation(span?.navigation, becameDownload: download) {
+                if download {
+                    navigationResult?.phase = .download
+                } else if committedNavigationID == result.id {
+                    navigationResult?.phase = .failed
+                } else {
+                    navigationResult?.phase = .provisionalFailure
+                    navigationResult?.response = nil
+                }
+            }
+        }
         webView.stopLoading()
+        changed?()
     }
     private func failNavigation(_ navigation: WKNavigation?, error: Error, provisional: Bool) {
+        if let navigation, observerStoppedNavigations.contains(navigation) { return }
         // Unknown cancelled callbacks may belong to a superseded navigation.
         let native = error as NSError
         if navigationSpan(navigation) == nil,
@@ -993,13 +1012,6 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
             return
         }
         let failedSequence = navigationSpan(navigation)?.sequence ?? navigationSequence
-        if native.domain == NSURLErrorDomain, native.code == NSURLErrorCancelled,
-           observerStoppedNavigationSequence == failedSequence {
-            observerStoppedNavigationSequence = nil
-            _ = finishNavigation(navigation)
-            changed?()
-            return
-        }
         recordNavigation("navigation-failed", navigation: navigation, error: error)
         let latest = finishNavigation(navigation)
         // A replacement load cancels the previous request. Its late failure must not poison the new one.
@@ -1022,7 +1034,7 @@ final class Tab: NSObject, WKNavigationDelegate, WKUIDelegate {
     private func recordNavigation(_ kind: String, navigation: WKNavigation?, error: Error? = nil) {
         let span = navigationSpan(navigation)
         let start = span?.start ?? navigationStartedAt
-        let latest = span.map { $0.sequence == navigationSequence } ?? navigationPending
+        let latest = span.map { $0.id == navigationResult?.id } ?? navigationPending
         let failedURL = (error as NSError?)?.userInfo[NSURLErrorFailingURLErrorKey] as? URL
         // A failed provisional load can leave webView.url pointing at the previous document.
         let url = error == nil ? webView.url : failedURL ?? URL(string: persistedURL)
