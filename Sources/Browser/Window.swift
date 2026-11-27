@@ -838,6 +838,11 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     private var preferredAddressWidth: CGFloat { min(560, max(150, window.frame.width - 510)) }
     func windowDidResize(_ notification: Notification) { addressWidth?.constant = preferredAddressWidth }
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(toggleSidebar(_:)) {
+            menuItem.title = split.splitViewItems.first?.isCollapsed == true ? "显示侧边栏" : "隐藏侧边栏"
+        }
+        guard window.isVisible, !window.isMiniaturized, window.attachedSheet == nil else { return false }
+        if let key = NSApp.keyWindow, key !== window, menuItem.menu?.supermenu === NSApp.mainMenu { return false }
         if menuItem.action == #selector(closeCurrentTab(_:)) {
             guard window.isKeyWindow, let space = currentSpace, let tab = displayed else { return false }
             return !space.busy && space.tabs.count > 1 && (space.activity[tab.id]?.executing ?? 0) == 0
@@ -847,6 +852,9 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         if menuItem.action == #selector(focusAddress(_:)) { return address.isEnabled }
         if menuItem.action == #selector(goBack) { return canTraverse(back: true) }
         if menuItem.action == #selector(goForward) { return canTraverse(back: false) }
+        if menuItem.action == #selector(nextTab(_:)) || menuItem.action == #selector(previousTab(_:)) {
+            return (currentSpace?.tabs.count ?? 0) > 1
+        }
         if menuItem.action == #selector(findInPage(_:)), let action = NSTextFinder.Action(rawValue: menuItem.tag) {
             return pageFind.canPerform(action)
         }
@@ -1171,6 +1179,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
             downloadsSpace = nil
         }
     }
+    @objc func hideWindow(_ sender: Any?) { window.performClose(sender) }
     @objc func toggleSidebar(_ sender: Any?) { split.toggleSidebar(sender) }
     @objc func focusSpaces(_ sender: Any?) {
         if split.splitViewItems.first?.isCollapsed == true { split.toggleSidebar(sender) }

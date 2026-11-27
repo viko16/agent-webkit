@@ -50,10 +50,15 @@ final class Application: NSObject, NSApplicationDelegate {
         file.addItem(.separator())
         let close = file.addItem(withTitle: "关闭当前标签页", action: #selector(ObserverWindow.closeCurrentTab(_:)), keyEquivalent: "w")
         close.target = observer
-        let hide = file.addItem(withTitle: "隐藏观察窗口", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "W")
+        let hide = file.addItem(withTitle: "隐藏观察窗口", action: #selector(ObserverWindow.hideWindow(_:)), keyEquivalent: "W")
         hide.keyEquivalentModifierMask = [.command, .shift]
-        hide.target = observer?.window
+        hide.target = observer
         let edit = section("编辑")
+        edit.addItem(withTitle: "撤销", action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = edit.addItem(withTitle: "重做", action: Selector(("redo:")), keyEquivalent: "Z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        edit.addItem(.separator())
+        edit.addItem(withTitle: "剪切", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
         edit.addItem(withTitle: "拷贝", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         edit.addItem(withTitle: "粘贴", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         edit.addItem(withTitle: "全选", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
@@ -70,7 +75,7 @@ final class Application: NSObject, NSApplicationDelegate {
         }
         let reload = view.addItem(withTitle: "重新加载页面", action: #selector(ObserverWindow.reloadPage), keyEquivalent: "r")
         reload.target = observer
-        let sidebar = view.addItem(withTitle: "显示／隐藏侧边栏", action: #selector(ObserverWindow.toggleSidebar(_:)), keyEquivalent: "s")
+        let sidebar = view.addItem(withTitle: "隐藏侧边栏", action: #selector(ObserverWindow.toggleSidebar(_:)), keyEquivalent: "s")
         sidebar.keyEquivalentModifierMask = [.command, .control]; sidebar.target = observer
         let search = view.addItem(withTitle: "搜索 Space", action: #selector(ObserverWindow.focusSpaces(_:)), keyEquivalent: "f")
         search.keyEquivalentModifierMask = [.command, .shift]; search.target = observer
@@ -81,6 +86,9 @@ final class Application: NSObject, NSApplicationDelegate {
         let windows = section("窗口")
         windows.addItem(withTitle: "最小化", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         windows.addItem(withTitle: "缩放", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        windows.addItem(.separator())
+        let show = windows.addItem(withTitle: "显示观察窗口", action: #selector(NSWindow.makeKeyAndOrderFront(_:)), keyEquivalent: "")
+        show.target = observer?.window
         NSApp.windowsMenu = windows; NSApp.mainMenu = menu
     }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
