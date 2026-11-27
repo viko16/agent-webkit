@@ -5,8 +5,10 @@ final class SpaceCreationSheet: NSViewController, NSTextFieldDelegate {
     private let name = NSTextField()
     private let mode = NSPopUpButton()
     private let proxy = NSTextField()
+    private let proxyHint = NSTextField(wrappingLabelWithString: "仅支持本机代理，如 Whistle：http://127.0.0.1:8899")
     private let advanced = NSButton(checkboxWithTitle: "显示 TLS 高级选项", target: nil, action: nil)
     private let tls = NSPopUpButton()
+    private let tlsWarning = NSTextField(wrappingLabelWithString: "仅限受控开发环境：将跳过证书链、域名和有效期校验。")
     private let ca = NSTextField()
     private let chooseCA = NSButton(title: "选择…", target: nil, action: nil)
     private var proxyRow = NSStackView()
@@ -31,8 +33,12 @@ final class SpaceCreationSheet: NSViewController, NSTextFieldDelegate {
         mode.setAccessibilityLabel("连接方式")
         proxy.placeholderString = "http://127.0.0.1:端口"
         proxy.setAccessibilityLabel("代理地址")
+        proxyHint.font = .systemFont(ofSize: 11)
+        proxyHint.textColor = .secondaryLabelColor
         tls.addItems(withTitles: ["系统证书校验", "使用自定义 CA", "忽略证书错误"])
         tls.setAccessibilityLabel("证书策略")
+        tlsWarning.font = .systemFont(ofSize: 11)
+        tlsWarning.textColor = .systemOrange
         ca.placeholderString = "CA 证书文件的绝对路径"
         ca.setAccessibilityLabel("CA 证书路径")
         chooseCA.target = self; chooseCA.action = #selector(chooseCertificate)
@@ -69,12 +75,14 @@ final class SpaceCreationSheet: NSViewController, NSTextFieldDelegate {
         chooseCA.setContentHuggingPriority(.required, for: .horizontal)
         let divider = NSBox(); divider.boxType = .separator
         let actions = NSStackView(views: [NSView(), cancel, create])
-        for control: NSView in [title, nameRow, divider, modeRow, proxyRow, advanced, tlsRow, caRow, errorLabel, actions] {
+        for control: NSView in [title, nameRow, divider, modeRow, proxyRow, proxyHint, advanced, tlsRow, tlsWarning, caRow, errorLabel, actions] {
             stack.addArrangedSubview(control)
         }
         stack.setCustomSpacing(16, after: title)
         stack.setCustomSpacing(14, after: nameRow)
         stack.setCustomSpacing(14, after: divider)
+        stack.setCustomSpacing(4, after: proxyRow)
+        stack.setCustomSpacing(4, after: tlsRow)
         let container = NSView()
         stack.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(stack)
@@ -85,11 +93,16 @@ final class SpaceCreationSheet: NSViewController, NSTextFieldDelegate {
             stack.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -20),
             stack.widthAnchor.constraint(equalToConstant: 378)
         ])
-        for item in [nameRow, divider, modeRow, proxyRow, tlsRow, caRow, errorLabel, actions] as [NSView] {
+        for item in [nameRow, divider, modeRow, proxyRow, proxyHint, tlsRow, tlsWarning, caRow, errorLabel, actions] as [NSView] {
             item.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
         view = container
         updateFields()
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        view.window?.makeFirstResponder(name)
     }
 
     func controlTextDidChange(_ notification: Notification) { inputChanged() }
@@ -99,11 +112,16 @@ final class SpaceCreationSheet: NSViewController, NSTextFieldDelegate {
     }
     private func updateFields() {
         proxyRow.isHidden = mode.indexOfSelectedItem == 0
+        proxyHint.isHidden = proxyRow.isHidden
         tlsRow.isHidden = advanced.state != .on
+        tlsWarning.isHidden = tlsRow.isHidden || tls.indexOfSelectedItem != 2
         caRow.isHidden = tlsRow.isHidden || tls.indexOfSelectedItem != 1
-        create.isEnabled = !submitting && !name.stringValue.isEmpty && (proxyRow.isHidden || !proxy.stringValue.isEmpty)
-            && (tls.indexOfSelectedItem != 1 || !ca.stringValue.isEmpty)
-        let policy = tls.indexOfSelectedItem == 1 && ca.stringValue.isEmpty ? "需选择 CA 证书" : tls.titleOfSelectedItem
+        let trimmedName = name.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedProxy = proxy.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedCA = ca.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        create.isEnabled = !submitting && !trimmedName.isEmpty && (proxyRow.isHidden || !trimmedProxy.isEmpty)
+            && (tls.indexOfSelectedItem != 1 || !trimmedCA.isEmpty)
+        let policy = tls.indexOfSelectedItem == 1 && trimmedCA.isEmpty ? "需选择 CA 证书" : tls.titleOfSelectedItem
         advanced.title = tlsRow.isHidden && tls.indexOfSelectedItem > 0
             ? "显示 TLS 高级选项（" + (policy ?? "") + "）" : "显示 TLS 高级选项"
         preferredContentSize = view.fittingSize
@@ -122,12 +140,19 @@ final class SpaceCreationSheet: NSViewController, NSTextFieldDelegate {
     }
     @objc private func createSpace() {
         guard create.isEnabled, let submit else { return }
-        var options = ["proxy": proxyRow.isHidden ? "direct" : proxy.stringValue]
-        if tls.indexOfSelectedItem == 1 { options["ca-cert"] = ca.stringValue }
+        let spaceName = name.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        var proxyAddress = proxy.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !proxyRow.isHidden,
+           proxyAddress.range(of: #"^127\.0\.0\.1:[0-9]+$"#, options: .regularExpression) != nil {
+            proxyAddress = "http://" + proxyAddress
+            proxy.stringValue = proxyAddress
+        }
+        var options = ["proxy": proxyRow.isHidden ? "direct" : proxyAddress]
+        if tls.indexOfSelectedItem == 1 { options["ca-cert"] = ca.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) }
         if tls.indexOfSelectedItem == 2 { options["ignore-certificate-errors"] = "true" }
         errorLabel.isHidden = true
         setSubmitting(true)
-        submit(Request(command: "space.create", args: [name.stringValue], options: options))
+        submit(Request(command: "space.create", args: [spaceName], options: options))
     }
 
     func finishSubmission(error: String? = nil) {
@@ -135,6 +160,13 @@ final class SpaceCreationSheet: NSViewController, NSTextFieldDelegate {
         errorLabel.stringValue = error
         errorLabel.isHidden = false
         setSubmitting(false)
+        if error.contains("代理") || error.contains("proxy") || error.contains("127.0.0.1") {
+            if !proxyRow.isHidden { view.window?.makeFirstResponder(proxy) }
+        } else if error.contains("CA") || error.contains("证书") {
+            if !caRow.isHidden { view.window?.makeFirstResponder(ca) }
+        } else {
+            view.window?.makeFirstResponder(name)
+        }
     }
 
     private func setSubmitting(_ value: Bool) {

@@ -35,6 +35,14 @@ final class PageFindBar: NSStackView, NSSearchFieldDelegate {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.windowBackgroundColor.setFill()
+        bounds.fill()
+        NSColor.separatorColor.setFill()
+        let bottomY = isFlipped ? bounds.maxY - 1 : 0
+        NSRect(x: 0, y: bottomY, width: bounds.width, height: 1).fill(using: .sourceOver)
+    }
+
     func bind(to webView: WKWebView?, document sequence: Int?) {
         guard page !== webView || document != sequence else { return }
         if !isHidden { hide() }
