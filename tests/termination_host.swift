@@ -31,9 +31,10 @@ final class TerminationHost: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationWillTerminate(_ notification: Notification) { model?.finishDialogsForExit() }
 
-    func field<T>(_ name: String, as type: T.Type) throws -> T {
-        guard let value = Mirror(reflecting: observer!).children.first(where: { $0.label == name })?.value as? T else {
-            throw BrowserError("probe_failed", "Observer field missing: \(name)")
+    func field<Owner, T>(_ name: String, in ownerType: Owner.Type, as type: T.Type) throws -> T {
+        guard let owner = Mirror(reflecting: observer!).children.compactMap({ $0.value as? Owner }).first,
+              let value = Mirror(reflecting: owner).children.first(where: { $0.label == name })?.value as? T else {
+            throw BrowserError("probe_failed", "Observer field missing: \(ownerType).\(name)")
         }
         return value
     }
@@ -50,22 +51,22 @@ final class TerminationHost: NSObject, NSApplicationDelegate {
                 guard let row = model.spaces.firstIndex(where: { $0.record.name == request["space"] }) else {
                     throw BrowserError("probe_failed", "Unknown GUI Space")
                 }
-                let table = try field("table", as: NSTableView.self)
+                let table = try field("table", in: ObserverSidebar.self, as: NSTableView.self)
                 table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
             case "hide": observer.window.performClose(nil)
             case "show": observer.window.orderBack(nil)
             case "reload":
-                let retry = try field("retry", as: NSButton.self)
+                let retry = try field("retry", in: ObserverPageContent.self, as: NSButton.self)
                 guard retry.isEnabled else { throw BrowserError("probe_failed", "Recovery button disabled") }
                 retry.performClick(nil)
             default: break
             }
-            let banner = try field("banner", as: NSStackView.self)
-            let status = try field("status", as: NSTextField.self)
-            let text = try field("bannerText", as: NSTextField.self)
-            let retry = try field("retry", as: NSButton.self)
-            let progress = try field("progress", as: NSProgressIndicator.self)
-            let security = try field("security", as: NSTextField.self)
+            let banner = try field("banner", in: ObserverPageContent.self, as: NSStackView.self)
+            let status = try field("status", in: ObserverPageContent.self, as: NSTextField.self)
+            let text = try field("bannerText", in: ObserverPageContent.self, as: NSTextField.self)
+            let retry = try field("retry", in: ObserverPageContent.self, as: NSButton.self)
+            let progress = try field("progress", in: ObserverPageContent.self, as: NSProgressIndicator.self)
+            let security = try field("security", in: ObserverPageContent.self, as: NSTextField.self)
             let result: [String: Any] = ["id": id, "ok": true, "status": status.stringValue,
                 "security": security.stringValue, "securityHelp": security.toolTip ?? "",
                 "securityWarning": security.textColor == NSColor.systemOrange,

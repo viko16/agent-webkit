@@ -22,7 +22,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def search_fixture(out):
-    source = (ROOT / 'Sources/Browser/Window.swift').read_text()
+    # Compile the observer components beside their private, test-only probe extensions.
+    observer_sources = ('Window.swift', 'ObserverPageContent.swift', 'ObserverSidebar.swift', 'ObserverTabStrip.swift')
+    source = '\n'.join((ROOT / 'Sources/Browser' / name).read_text() for name in observer_sources)
     # Menu copy actions write to a fixture-only pasteboard.
     assert source.count("NSPasteboard.general") == source.count("let pasteboard = NSPasteboard.general") == 1
     source = source.replace('let pasteboard = NSPasteboard.general', 'let pasteboard = NSPasteboard(name: .init(model.storagePath + ".hig-test"))')
@@ -47,22 +49,22 @@ def search_fixture(out):
                 if ["new-tab", "search"].contains(request["action"] ?? ""), let sheet = self.window.attachedSheet {
                     self.window.endSheet(sheet)
                 }
-                if self.search.stringValue != query || request["action"] == "search" {
-                    self.search.stringValue = query
-                    self.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: self.search))
+                if self.sidebar.search.stringValue != query || request["action"] == "search" {
+                    self.sidebar.search.stringValue = query
+                    self.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: self.sidebar.search))
                 } else if request["action"] == "inspect" {
                     // Re-read the injected proxy settings without changing the field editor.
                     self.refresh()
                 }
                 Task { @MainActor in
                     if request["action"] == "choose" {
-                        _ = self.control(self.search, textView: NSTextView(), doCommandBy: #selector(NSResponder.insertNewline(_:)))
+                        _ = self.control(self.sidebar.search, textView: NSTextView(), doCommandBy: #selector(NSResponder.insertNewline(_:)))
                     }
                     if request["action"] == "select-row" {
-                        self.table.selectRowIndexes(IndexSet(integer: Int(request["row"]!)!), byExtendingSelection: false)
+                        self.sidebar.probeTable.selectRowIndexes(IndexSet(integer: Int(request["row"]!)!), byExtendingSelection: false)
                     }
-                    if request["action"] == "clear" { self.clearSearchButton.performClick(nil) }
-                    if request["action"] == "create-from-search" { self.createFromSearch.performClick(nil) }
+                    if request["action"] == "clear" { self.sidebar.probeClear.performClick(nil) }
+                    if request["action"] == "create-from-search" { self.sidebar.probeCreateFromSearch.performClick(nil) }
                     if request["action"] == "new-tab" {
                         self.newTab(nil)
                         while self.creatingTab { try? await Task.sleep(nanoseconds: 10_000_000) }
@@ -74,22 +76,22 @@ def search_fixture(out):
                         self.split.presentAsSheet(sheet)
                         form = sheet.probeCollapsedTLS(policy)
                     }
-                    let row = self.table.selectedRow
-                    let sidebar = self.filteredSpaces.indices.contains(row) ? self.filteredSpaces[row].record.id.uuidString : nil
+                    let row = self.sidebar.probeTable.selectedRow
+                    let sidebar = self.sidebar.probeSpaces.indices.contains(row) ? self.sidebar.probeSpaces[row].record.id.uuidString : nil
                     let response: [String: Any] = [
-                        "token": token, "query": self.search.stringValue, "action": request["action"] ?? "", "probe": probe, "form": form,
-                        "filteredSpaceIds": self.filteredSpaces.map { $0.record.id.uuidString },
+                        "token": token, "query": self.sidebar.search.stringValue, "action": request["action"] ?? "", "probe": probe, "form": form,
+                        "filteredSpaceIds": self.sidebar.probeSpaces.map { $0.record.id.uuidString },
                         "sidebarSpaceId": sidebar as Any? ?? NSNull(),
                         "savedTabSpaces": (UserDefaults.standard.dictionary(forKey: self.selectionKey) ?? [:]).keys.sorted(),
                         "selectedSpaceId": self.selectedSpace?.uuidString as Any? ?? NSNull(),
                         "displayedTabId": self.displayed?.id.uuidString as Any? ?? NSNull(),
                         "displayedURL": self.displayed?.webView.url?.absoluteString as Any? ?? NSNull(),
-                        "displayedInContent": self.displayed.map { $0.webView.superview === self.host } ?? false,
-                        "emptyVisible": !self.empty.isHidden,
-                        "noResultsVisible": !self.noSearchResults.isHidden,
+                        "displayedInContent": self.displayed.map { $0.webView.superview === self.page.host } ?? false,
+                        "emptyVisible": !self.page.probeEmpty.isHidden,
+                        "noResultsVisible": !self.sidebar.probeNoResults.isHidden,
                         "canCreateTab": self.canCreateTab,
                         "message": self.transientMessage as Any? ?? NSNull(),
-                        "spaceCount": self.spaceCount.stringValue,
+                        "spaceCount": self.sidebar.probeCount.stringValue,
                         "errorSheet": self.window.attachedSheet != nil]
                     if let result = try? JSONSerialization.data(withJSONObject: response),
                        let output = ProcessInfo.processInfo.environment["BROWSER_TEST_SEARCH_RESPONSE"] {
@@ -109,6 +111,8 @@ def search_fixture(out):
     (app / 'Contents/Info.plist').write_bytes(plistlib.dumps(info))
     sources = []
     for path in sorted((ROOT / 'Sources/Browser').glob('*.swift')):
+        if path.name in observer_sources and path.name != 'Window.swift':
+            continue
         copied = out / path.name
         if path.name != 'Window.swift':
             text = path.read_text()

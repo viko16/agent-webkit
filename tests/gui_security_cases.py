@@ -16,8 +16,8 @@ def main():
     runtime = Runtime(out, ROOT / '.build/Agent WebKit.app/Contents/MacOS/awb')
     report = dict(ok=False, checks=[], macOS=platform.mac_ver()[0],
                   commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
-                  sourceSHA256={name: hashlib.sha256((ROOT / 'Sources/Browser' / name).read_bytes()).hexdigest()
-                                for name in ['Browser.swift', 'Window.swift', 'TLS.swift']})
+                  sourceSHA256={p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                                for p in sorted((ROOT / 'Sources/Browser').glob('*.swift'))})
     try:
         host = build_host(out)
         subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',

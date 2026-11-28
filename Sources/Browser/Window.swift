@@ -42,33 +42,6 @@ private class ObserverKeyWindow: NSWindow {
     }
 }
 
-private final class ChromeBarView: NSStackView {
-    var fillColor: NSColor?
-    var tintColor: NSColor?
-    var topBorder = false
-    var bottomBorder = false
-
-    override func draw(_ dirtyRect: NSRect) {
-        if let fillColor {
-            fillColor.setFill()
-            bounds.fill()
-        }
-        if let tintColor {
-            tintColor.setFill()
-            bounds.fill(using: .sourceOver)
-        }
-        NSColor.separatorColor.setFill()
-        if topBorder {
-            let topY = isFlipped ? 0 : bounds.maxY - 1
-            NSRect(x: 0, y: topY, width: bounds.width, height: 1).fill(using: .sourceOver)
-        }
-        if bottomBorder {
-            let bottomY = isFlipped ? bounds.maxY - 1 : 0
-            NSRect(x: 0, y: bottomY, width: bounds.width, height: 1).fill(using: .sourceOver)
-        }
-    }
-}
-
 private extension NSToolbarItem.Identifier {
     static let sidebar = Self("observer.sidebar")
     static let back = Self("observer.back")
@@ -81,56 +54,34 @@ private extension NSToolbarItem.Identifier {
 }
 
 @MainActor
-final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate, NSToolbarDelegate, NSSearchFieldDelegate, NSMenuItemValidation, NSPopoverDelegate, NSMenuDelegate {
+final class ObserverWindow: NSObject, NSWindowDelegate, NSToolbarDelegate, NSSearchFieldDelegate, NSMenuItemValidation, NSPopoverDelegate {
     let model: BrowserModel
     let window: NSWindow
     private let split = NSSplitViewController()
-    private let table = NSTableView()
-    private let search = NSSearchField()
-    private let noSearchResults = NSStackView()
-    private let clearSearchButton = NSButton(title: "清除搜索", target: nil, action: nil)
-    private let createFromSearch = NSButton(title: "新建 Space", target: nil, action: nil)
-    private let host = NSView()
+    private lazy var sidebar = ObserverSidebar(owner: self,
+        select: { [weak self] in self?.selectSpace($0) },
+        isRefreshing: { [weak self] in self?.refreshing == true },
+        isCreatingTab: { [weak self] in self?.creatingTab == true },
+        createTab: { [weak self] in self?.createTab(in: $0, opening: nil) },
+        details: { [weak self] in self?.presentDetails(for: $0, relativeTo: $1, of: $2, preferredEdge: .maxX) },
+        copyID: { [weak self] in self?.copySpaceID($0) },
+        request: { [weak self] in self?.performObserverRequest($0) })
+    private let page = ObserverPageContent(actions: .init(
+        showViewport: #selector(showViewport), showBusyTab: #selector(showBusyTab),
+        showPopup: #selector(showAnnouncedPopup), dismissPopup: #selector(dismissPopupNotice),
+        startBrowsing: #selector(startBrowsing(_:)), recheckProxy: #selector(recheckSystemProxy),
+        dismissNotice: #selector(dismissPageNotice), retryNavigation: #selector(retryFailedNavigation)))
     private let address = NSTextField()
     private var addressWidth: NSLayoutConstraint?
-    private let addressHint = NSTextField(labelWithString: "")
-    private let addressHintBar = ChromeBarView()
     private var editingAddress = false
     private var addressWasEdited = false
     private var addressDraft = ""
     private let reloadButton = NSButton()
-    private let tabStack = NSStackView()
-    private let tabBar = ChromeBarView()
-    private let allTabs = NSPopUpButton(frame: .zero, pullsDown: true)
     private let pageFind = PageFindBar()
-    private let dialogArea = NSStackView()
-    private let popupNotice = ChromeBarView()
-    private let popupNoticeText = NSTextField(labelWithString: "")
     private weak var announcedPopup: Tab?
-    private let progress = NSProgressIndicator()
-    private let status = NSTextField(labelWithString: "")
-    private let busyTarget = NSButton(title: "查看执行页", target: nil, action: nil)
     private let handoff = NSButton(title: "交给 Agent", target: nil, action: nil)
     private var copiedTab: UUID?
     private var copyFeedbackExpiry: Task<Void, Never>?
-    private let security = NSTextField(labelWithString: "")
-    private let viewportButton = NSButton(title: "", target: nil, action: nil)
-    private let spaceCount = NSTextField(labelWithString: "")
-    private let empty = NSStackView()
-    private let emptyTitle = NSTextField(labelWithString: "浏览会话，各自独立")
-    private let emptyText = NSTextField(wrappingLabelWithString: "")
-    private let emptyAction = NSButton(title: "打开网页", target: nil, action: nil)
-    private let emptyCreateSpace = NSButton(title: "新建 Space…", target: nil, action: nil)
-    private let banner = ChromeBarView()
-    private let bannerText = NSTextField(wrappingLabelWithString: "")
-    private let errorTextLayout = NSLayoutManager()
-    private let errorMessageColumn = NSStackView()
-    private let errorDisclosure = NSButton(title: "展开", target: nil, action: nil)
-    private let errorScroll = NSScrollView()
-    private let fullError = NSTextView()
-    private var errorExpanded = false
-    private var errorTab: UUID?
-    private let retry = NSButton(title: "重新加载", target: nil, action: nil)
     private var refreshing = false
     private var selectedSpace: UUID? {
         didSet {
@@ -138,9 +89,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         }
     }
     private var selectedTabs: [UUID: UUID] = [:]
-    private var filteredSpaces: [Space] = []
     private weak var displayed: Tab?
-    private var tabSignature = ""
     private var transientMessage: String?
     private var transientExpiry: Task<Void, Never>?
     private struct PageActionError {
@@ -159,13 +108,18 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     private let downloadsPopover = NSPopover()
     private let downloadsRefreshToken = DownloadsRefreshToken()
     private weak var downloadsSpace: Space?
-    private let createButton = NSButton()
-    private let spaceActions = NSPopUpButton(frame: .zero, pullsDown: true)
-    private let suspensionItem = NSMenuItem()
-    private let deleteItem = NSMenuItem(title: "删除 Space…", action: nil, keyEquivalent: "")
     private var activityExpiry: Task<Void, Never>?
     private var creatingTab = false
-    private var tabWidths: [NSLayoutConstraint] = []
+    private lazy var tabStrip = ObserverTabStrip(owner: self,
+        currentSpace: { [weak self] in self?.currentSpace },
+        selectedID: { [weak self] in self?.selectedTabs[$0.record.id] },
+        selectTab: { [weak self] in self?.selectTab(at: $0, in: $1) },
+        request: { [weak self] in self?.performObserverRequest($0) },
+        copyURL: { [weak self] url in
+            guard let self, self.copyToPasteboard(url) else { return }
+            self.showTransientMessage("已复制网址")
+        },
+        handoff: { [weak self] in self?.copyHandoffCommand(space: $0, tab: $1) })
 
     init(model: BrowserModel, socketPath: String) {
         self.model = model
@@ -186,10 +140,12 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         window.toolbarStyle = .unified; window.minSize = NSSize(width: 760, height: 480)
         window.isReleasedWhenClosed = false; window.delegate = self
         split.splitView.dividerStyle = .thin
-        configureSidebar(); configureContent()
+        sidebar.install(in: split, owner: self, performSpaceAction: #selector(performSpaceMenuAction(_:)),
+                        prepareSpaceMenu: #selector(prepareSpaceMenu(_:)))
+        page.install(in: split, owner: self, tabBar: tabStrip.tabBar, pageFind: pageFind)
         window.contentViewController = split
         NSLayoutConstraint.activate([
-            spaceCount.firstBaselineAnchor.constraint(equalTo: status.firstBaselineAnchor)
+            sidebar.countBaseline.constraint(equalTo: page.statusBaseline)
         ])
         window.setContentSize(NSSize(width: 1220, height: 800))
         window.setFrameAutosaveName(selectionKey + ".frame")
@@ -197,7 +153,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         let toolbar = NSToolbar(identifier: "AgentWebKit.Observer.Toolbar")
         toolbar.delegate = self; toolbar.displayMode = .iconOnly; toolbar.allowsUserCustomization = false
         window.toolbar = toolbar
-        observerWindow.spaceSearch = search; observerWindow.locationField = address
+        observerWindow.spaceSearch = sidebar.search; observerWindow.locationField = address
         model.changed = { [weak self] in self?.refresh() }
         model.observerState = { [weak self] in
             guard let self else { return [:] }
@@ -229,233 +185,6 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     }
 
     private var currentSpace: Space? { model.spaces.first { $0.record.id == selectedSpace } }
-    private func configureSidebar() {
-        let controller = NSViewController()
-        let effect = NSVisualEffectView()
-        effect.material = .sidebar; effect.blendingMode = .behindWindow
-        controller.view = effect
-        let item = NSSplitViewItem(sidebarWithViewController: controller)
-        item.allowsFullHeightLayout = true
-        item.minimumThickness = 200; item.maximumThickness = 280
-        item.preferredThicknessFraction = 0.19
-        split.addSplitViewItem(item)
-        let heading = NSTextField(labelWithString: "Spaces")
-        heading.font = .systemFont(ofSize: 11, weight: .semibold); heading.textColor = .secondaryLabelColor
-        search.placeholderString = "搜索 Space"
-        search.textColor = .labelColor; search.font = .systemFont(ofSize: 13)
-        search.delegate = self
-        search.setAccessibilityLabel("搜索 Space")
-        let scroll = NSScrollView()
-        scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true; scroll.drawsBackground = false
-        table.addTableColumn(NSTableColumn(identifier: .init("space")))
-        table.headerView = nil; table.rowHeight = 46; table.style = .sourceList
-        table.intercellSpacing = NSSize(width: 0, height: 4)
-        table.allowsEmptySelection = true
-        table.backgroundColor = .clear
-        table.delegate = self; table.dataSource = self; table.setAccessibilityLabel("Spaces")
-        let sidebarMenu = NSMenu()
-        sidebarMenu.autoenablesItems = false
-        sidebarMenu.delegate = self
-        table.menu = sidebarMenu
-        scroll.documentView = table
-        let noMatches = NSTextField(labelWithString: "没有匹配的 Space")
-        noMatches.textColor = .secondaryLabelColor
-        clearSearchButton.target = self
-        clearSearchButton.action = #selector(clearSearch)
-        createFromSearch.target = self
-        createFromSearch.action = #selector(createSpace)
-        let searchActions = NSStackView(views: [clearSearchButton, createFromSearch])
-        noSearchResults.orientation = .vertical
-        noSearchResults.alignment = .centerX
-        noSearchResults.addArrangedSubview(noMatches)
-        noSearchResults.addArrangedSubview(searchActions)
-        spaceCount.font = .systemFont(ofSize: 12); spaceCount.textColor = .secondaryLabelColor
-        spaceCount.lineBreakMode = .byTruncatingTail
-        spaceCount.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        createButton.target = self
-        createButton.action = #selector(createSpace)
-        createButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)
-        createButton.toolTip = "新建 Space"
-        createButton.setAccessibilityLabel("新建 Space")
-        spaceActions.addItem(withTitle: "")
-        spaceActions.item(at: 0)?.image = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: nil)
-        (spaceActions.cell as? NSPopUpButtonCell)?.arrowPosition = .noArrow
-        spaceActions.toolTip = "所选 Space 的更多操作"
-        spaceActions.setAccessibilityLabel("所选 Space 的更多操作")
-        for item in [suspensionItem, deleteItem] {
-            item.target = self
-            item.action = #selector(performSpaceMenuAction(_:))
-        }
-        spaceActions.menu?.addItem(suspensionItem)
-        spaceActions.menu?.addItem(.separator())
-        spaceActions.menu?.addItem(deleteItem)
-        NotificationCenter.default.addObserver(self, selector: #selector(prepareSpaceMenu(_:)),
-                                               name: NSPopUpButton.willPopUpNotification, object: spaceActions)
-        for button in [createButton, spaceActions] {
-            button.isBordered = false
-            button.imagePosition = .imageOnly
-            button.widthAnchor.constraint(equalToConstant: 28).isActive = true
-            button.heightAnchor.constraint(equalToConstant: 28).isActive = true
-        }
-        let actions = NSStackView(views: [createButton, spaceActions])
-        actions.spacing = 2
-        [heading, search, scroll, noSearchResults, actions, spaceCount].forEach { $0.translatesAutoresizingMaskIntoConstraints = false; effect.addSubview($0) }
-        NSLayoutConstraint.activate([
-            search.topAnchor.constraint(equalTo: effect.safeAreaLayoutGuide.topAnchor, constant: 6),
-            search.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 14),
-            search.trailingAnchor.constraint(equalTo: effect.trailingAnchor, constant: -14),
-            actions.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 8),
-            actions.trailingAnchor.constraint(equalTo: search.trailingAnchor),
-            heading.centerYAnchor.constraint(equalTo: actions.centerYAnchor),
-            heading.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 20),
-            heading.trailingAnchor.constraint(lessThanOrEqualTo: actions.leadingAnchor, constant: -6),
-            scroll.topAnchor.constraint(equalTo: actions.bottomAnchor, constant: 4),
-            scroll.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 4),
-            scroll.trailingAnchor.constraint(equalTo: effect.trailingAnchor, constant: -4),
-            scroll.bottomAnchor.constraint(equalTo: spaceCount.topAnchor, constant: -8),
-            noSearchResults.centerXAnchor.constraint(equalTo: scroll.centerXAnchor),
-            noSearchResults.topAnchor.constraint(equalTo: scroll.topAnchor, constant: 12),
-            spaceCount.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 20),
-            spaceCount.trailingAnchor.constraint(lessThanOrEqualTo: effect.trailingAnchor, constant: -14)
-        ])
-    }
-
-    private func configureContent() {
-        let controller = NSViewController(); controller.view = NSView()
-        split.addSplitViewItem(NSSplitViewItem(viewController: controller))
-        let column = NSStackView()
-        column.orientation = .vertical; column.spacing = 0; column.alignment = .leading
-        column.translatesAutoresizingMaskIntoConstraints = false; controller.view.addSubview(column)
-        NSLayoutConstraint.activate([
-            column.leadingAnchor.constraint(equalTo: controller.view.leadingAnchor),
-            column.trailingAnchor.constraint(equalTo: controller.view.trailingAnchor),
-            column.topAnchor.constraint(equalTo: controller.view.safeAreaLayoutGuide.topAnchor),
-            column.bottomAnchor.constraint(equalTo: controller.view.bottomAnchor)
-        ])
-        let tabs = NSScrollView(); tabs.drawsBackground = false; tabs.hasHorizontalScroller = false
-        tabStack.orientation = .horizontal; tabStack.spacing = 6
-        tabStack.edgeInsets = NSEdgeInsets(top: 4, left: 10, bottom: 4, right: 10)
-        tabs.documentView = tabStack
-        tabs.heightAnchor.constraint(equalToConstant: 38).isActive = true
-        allTabs.addItem(withTitle: "")
-        allTabs.item(at: 0)?.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil)
-        allTabs.imagePosition = .imageOnly
-        (allTabs.cell as? NSPopUpButtonCell)?.arrowPosition = .noArrow
-        (allTabs.cell as? NSPopUpButtonCell)?.altersStateOfSelectedItem = false
-        allTabs.bezelStyle = .accessoryBarAction
-        allTabs.toolTip = "显示所有标签页"
-        allTabs.setAccessibilityLabel("显示所有标签页")
-        allTabs.widthAnchor.constraint(equalToConstant: 32).isActive = true
-        allTabs.isHidden = true
-        tabBar.orientation = .horizontal; tabBar.distribution = .fill; tabBar.spacing = 0
-        tabBar.bottomBorder = true
-        tabBar.addArrangedSubview(tabs); tabBar.addArrangedSubview(allTabs)
-        tabBar.postsFrameChangedNotifications = true
-        NotificationCenter.default.addObserver(self, selector: #selector(resizeTabs(_:)), name: NSView.frameDidChangeNotification, object: tabBar)
-        progress.style = .bar; progress.isIndeterminate = false; progress.minValue = 0; progress.maxValue = 1
-        progress.heightAnchor.constraint(equalToConstant: 2).isActive = true
-        banner.orientation = .horizontal; banner.spacing = 10
-        banner.edgeInsets = NSEdgeInsets(top: 10, left: 16, bottom: 10, right: 16)
-        banner.fillColor = .controlBackgroundColor
-        banner.tintColor = NSColor.systemOrange.withAlphaComponent(0.07)
-        banner.bottomBorder = true
-        let warning = NSImageView(image: NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: "页面需要处理")!)
-        warning.contentTintColor = .systemOrange
-        bannerText.font = .systemFont(ofSize: 12); bannerText.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        bannerText.maximumNumberOfLines = 2
-        retry.target = self; retry.action = #selector(reloadPage); retry.bezelStyle = .rounded
-        errorMessageColumn.orientation = .vertical
-        errorMessageColumn.alignment = .leading
-        errorMessageColumn.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        fullError.isEditable = false; fullError.isSelectable = true; fullError.drawsBackground = false
-        fullError.font = bannerText.font; fullError.textColor = .labelColor
-        fullError.setAccessibilityLabel("完整错误信息")
-        fullError.isVerticallyResizable = true; fullError.isHorizontallyResizable = false
-        fullError.autoresizingMask = [.width]; fullError.textContainer?.widthTracksTextView = true
-        errorScroll.documentView = fullError; errorScroll.hasVerticalScroller = true
-        errorScroll.autohidesScrollers = true; errorScroll.drawsBackground = false
-        errorScroll.heightAnchor.constraint(equalToConstant: 100).isActive = true
-        for view in [bannerText, errorScroll] as [NSView] {
-            errorMessageColumn.addArrangedSubview(view)
-            view.widthAnchor.constraint(equalTo: errorMessageColumn.widthAnchor).isActive = true
-        }
-        errorScroll.isHidden = true
-        errorDisclosure.target = self; errorDisclosure.action = #selector(toggleErrorDetails)
-        errorDisclosure.bezelStyle = .rounded; errorDisclosure.isHidden = true
-        errorDisclosure.keyEquivalent = "E"
-        errorDisclosure.keyEquivalentModifierMask = [.command, .shift]
-        errorDisclosure.toolTip = "展开或收起完整错误信息（⇧⌘E）"
-        errorDisclosure.setAccessibilityHelp(errorDisclosure.toolTip)
-        errorMessageColumn.postsFrameChangedNotifications = true
-        NotificationCenter.default.addObserver(self, selector: #selector(updateErrorDisclosure),
-            name: NSView.frameDidChangeNotification, object: errorMessageColumn)
-        [warning, errorMessageColumn, errorDisclosure, retry].forEach { banner.addArrangedSubview($0) }
-        host.setContentHuggingPriority(.defaultLow, for: .vertical)
-        host.clipsToBounds = true
-        host.heightAnchor.constraint(greaterThanOrEqualToConstant: 160).isActive = true
-        viewportButton.target = self; viewportButton.action = #selector(showViewport)
-        viewportButton.bezelStyle = .inline
-        viewportButton.toolTip = "缩放查看整个固定视口"
-        busyTarget.bezelStyle = .inline; busyTarget.target = self; busyTarget.action = #selector(showBusyTab)
-        let footer = ChromeBarView(views: [status, busyTarget, NSView(), viewportButton, security])
-        footer.orientation = .horizontal; footer.edgeInsets = NSEdgeInsets(top: 6, left: 14, bottom: 6, right: 14)
-        footer.fillColor = .windowBackgroundColor
-        footer.topBorder = true
-        footer.heightAnchor.constraint(equalToConstant: 32).isActive = true
-        for label in [status, security] {
-            label.font = .systemFont(ofSize: 12); label.textColor = .secondaryLabelColor
-            label.lineBreakMode = .byTruncatingTail; label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        }
-        dialogArea.orientation = .vertical
-        dialogArea.isHidden = true
-        let viewPopup = NSButton(title: "查看新标签页", target: self, action: #selector(showAnnouncedPopup))
-        let dismissNotice = NSButton(image: NSImage(systemSymbolName: "xmark", accessibilityDescription: "关闭提示")!,
-                                     target: self, action: #selector(dismissPopupNotice))
-        dismissNotice.isBordered = false; dismissNotice.toolTip = "关闭提示"
-        popupNoticeText.font = .systemFont(ofSize: 13)
-        popupNoticeText.lineBreakMode = .byTruncatingTail
-        popupNoticeText.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        popupNotice.orientation = .horizontal; popupNotice.spacing = 10
-        popupNotice.edgeInsets = NSEdgeInsets(top: 6, left: 16, bottom: 6, right: 16)
-        popupNotice.fillColor = .controlBackgroundColor
-        popupNotice.bottomBorder = true
-        [popupNoticeText, NSView(), viewPopup, dismissNotice].forEach { popupNotice.addArrangedSubview($0) }
-        addressHint.font = .systemFont(ofSize: 12)
-        addressHint.textColor = .systemRed
-        addressHint.alignment = .center
-        addressHint.lineBreakMode = .byTruncatingTail
-        addressHint.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        addressHint.isHidden = true
-        addressHintBar.orientation = .vertical
-        addressHintBar.alignment = .centerX
-        addressHintBar.edgeInsets = NSEdgeInsets(top: 4, left: 16, bottom: 5, right: 16)
-        addressHintBar.fillColor = .controlBackgroundColor
-        addressHintBar.tintColor = NSColor.systemRed.withAlphaComponent(0.06)
-        addressHintBar.bottomBorder = true
-        addressHintBar.addArrangedSubview(addressHint)
-        addressHint.widthAnchor.constraint(lessThanOrEqualTo: addressHintBar.widthAnchor, constant: -32).isActive = true
-        addressHintBar.isHidden = true
-        [tabBar, addressHintBar, progress, popupNotice, banner, dialogArea, pageFind, host, footer].forEach {
-            column.addArrangedSubview($0); $0.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
-        }
-        let icon = NSImageView(image: NSImage(systemSymbolName: "square.stack.3d.up", accessibilityDescription: nil)!)
-        icon.contentTintColor = .tertiaryLabelColor; icon.symbolConfiguration = .init(pointSize: 46, weight: .light)
-        emptyTitle.font = .systemFont(ofSize: 23, weight: .semibold)
-        emptyText.font = .systemFont(ofSize: 13); emptyText.textColor = .secondaryLabelColor; emptyText.alignment = .center
-        emptyAction.target = self; emptyAction.action = #selector(startBrowsing(_:)); emptyAction.bezelStyle = .rounded
-        emptyCreateSpace.target = self; emptyCreateSpace.action = #selector(createSpace); emptyCreateSpace.bezelStyle = .rounded
-        let emptyButtons = NSStackView(views: [emptyAction, emptyCreateSpace])
-        emptyButtons.orientation = .horizontal; emptyButtons.spacing = 8
-        empty.orientation = .vertical; empty.alignment = .centerX; empty.spacing = 14
-        [icon, emptyTitle, emptyText, emptyButtons].forEach { empty.addArrangedSubview($0) }
-        empty.translatesAutoresizingMaskIntoConstraints = false; host.addSubview(empty)
-        NSLayoutConstraint.activate([
-            empty.centerXAnchor.constraint(equalTo: host.centerXAnchor), empty.centerYAnchor.constraint(equalTo: host.centerYAnchor),
-            empty.widthAnchor.constraint(lessThanOrEqualTo: host.widthAnchor, constant: -48),
-            emptyText.widthAnchor.constraint(lessThanOrEqualToConstant: 440)
-        ])
-    }
-
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { toolbarDefaultItemIdentifiers(toolbar) }
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [.sidebar, .sidebarTrackingSeparator, .back, .forward, .flexibleSpace, .address, .flexibleSpace, .downloads, .copyCommand, .details, .newTab]
@@ -520,97 +249,6 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         return item
     }
 
-    func numberOfRows(in tableView: NSTableView) -> Int { filteredSpaces.count }
-    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        guard filteredSpaces.indices.contains(row) else { return nil }
-        let space = filteredSpaces[row]; let cell = NSTableCellView()
-        let waiting = space.tabs.contains { $0.dialogs.hasPending }
-        let icon = NSImageView(image: NSImage(systemSymbolName: waiting ? "exclamationmark.bubble.fill" : "square.stack",
-                                              accessibilityDescription: waiting ? "网页等待回复" : nil)!)
-        icon.contentTintColor = waiting ? .systemOrange : .controlAccentColor
-        icon.symbolConfiguration = .init(pointSize: 15, weight: .regular)
-        let title = NSTextField(labelWithString: space.record.name); title.font = .systemFont(ofSize: 13, weight: .medium)
-        let route = space.record.proxy == "direct" ? "直连" : "HTTP 代理"
-        let state = [waiting ? "等待回复" : nil, space.networkError != nil ? "网络已暂停" : nil,
-                     space.suspended ? "已休眠" : space.busy ? "运行中" : nil].compactMap { $0 }
-        let summary = (state + [route, "\(space.tabStates.count) 个标签页"]).joined(separator: " · ")
-        let subtitle = NSTextField(labelWithString: summary)
-        subtitle.font = .systemFont(ofSize: 11); subtitle.textColor = .secondaryLabelColor
-        title.lineBreakMode = .byTruncatingMiddle; subtitle.lineBreakMode = .byTruncatingTail
-        let labels = NSStackView(views: [title, subtitle]); labels.orientation = .vertical; labels.alignment = .leading; labels.spacing = 3
-        for label in [title, subtitle] {
-            label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-            label.widthAnchor.constraint(equalTo: labels.widthAnchor).isActive = true
-        }
-        [icon, labels].forEach { $0.translatesAutoresizingMaskIntoConstraints = false; cell.addSubview($0) }
-        NSLayoutConstraint.activate([
-            icon.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 8), icon.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-            icon.widthAnchor.constraint(equalToConstant: 18), labels.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8),
-            labels.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8), labels.centerYAnchor.constraint(equalTo: cell.centerYAnchor)
-        ])
-        cell.textField = title; cell.imageView = icon
-        cell.toolTip = "\(space.record.name)\n\(summary)\n\(space.record.id.uuidString)\n\(space.record.proxy)"
-        return cell
-    }
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        guard menu === table.menu else { return }
-        menu.removeAllItems()
-        let noSheet = window.attachedSheet == nil
-        let row = table.clickedRow
-        guard filteredSpaces.indices.contains(row) else {
-            let createItem = NSMenuItem(title: "新建 Space…", action: #selector(createSpace), keyEquivalent: "")
-            createItem.target = self
-            createItem.isEnabled = !model.restoring && noSheet
-            menu.addItem(createItem)
-            return
-        }
-        let space = filteredSpaces[row]
-        let canMutate = !space.busy && !model.restoring && noSheet
-        let newTabItem = NSMenuItem(title: "新建标签页", action: #selector(contextNewTab(_:)), keyEquivalent: "")
-        newTabItem.target = self; newTabItem.representedObject = space.record.id; newTabItem.isEnabled = canMutate && !creatingTab
-        menu.addItem(newTabItem)
-
-        let detailsItem = NSMenuItem(title: "Space 信息", action: #selector(contextShowDetails(_:)), keyEquivalent: "")
-        detailsItem.target = self; detailsItem.representedObject = space.record.id; detailsItem.isEnabled = noSheet
-        menu.addItem(detailsItem)
-
-        let copyIDItem = NSMenuItem(title: "复制 Space ID", action: #selector(contextCopySpaceID(_:)), keyEquivalent: "")
-        copyIDItem.target = self; copyIDItem.representedObject = space.record.id
-        menu.addItem(copyIDItem)
-
-        menu.addItem(.separator())
-
-        let suspendItem = NSMenuItem(title: space.suspended ? "恢复 Space" : "休眠 Space…", action: #selector(contextSpaceRequest(_:)), keyEquivalent: "")
-        suspendItem.target = self; suspendItem.isEnabled = canMutate
-        suspendItem.representedObject = Request(command: space.suspended ? "space.resume" : "space.suspend", args: [space.record.id.uuidString], options: [:])
-        menu.addItem(suspendItem)
-
-        menu.addItem(.separator())
-
-        let removeItem = NSMenuItem(title: "删除 Space…", action: #selector(contextSpaceRequest(_:)), keyEquivalent: "")
-        removeItem.target = self; removeItem.isEnabled = canMutate
-        removeItem.representedObject = Request(command: "space.delete", args: [space.record.id.uuidString], options: [:])
-        menu.addItem(removeItem)
-    }
-    @objc private func contextNewTab(_ sender: NSMenuItem) {
-        guard let spaceID = sender.representedObject as? UUID, !model.restoring, !creatingTab,
-              let space = model.spaces.first(where: { $0.record.id == spaceID }), !space.busy else { return }
-        createTab(in: spaceID, opening: nil)
-    }
-    @objc private func contextShowDetails(_ sender: NSMenuItem) {
-        guard let spaceID = sender.representedObject as? UUID,
-              let space = model.spaces.first(where: { $0.record.id == spaceID }) else { return }
-        if let row = filteredSpaces.firstIndex(where: { $0.record.id == spaceID }) {
-            let rect = table.rect(ofRow: row)
-            presentDetails(for: space, relativeTo: rect, of: table, preferredEdge: .maxX)
-        } else {
-            presentDetails(for: space)
-        }
-    }
-    @objc private func contextCopySpaceID(_ sender: NSMenuItem) {
-        guard let spaceID = sender.representedObject as? UUID else { return }
-        copySpaceID(spaceID)
-    }
     @objc func copyCurrentSpaceID() {
         if let id = currentSpace?.record.id { copySpaceID(id) }
     }
@@ -618,12 +256,8 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         guard copyToPasteboard(spaceID.uuidString) else { return }
         showTransientMessage("已复制 Space ID")
     }
-    @objc private func contextSpaceRequest(_ sender: NSMenuItem) {
-        guard let request = sender.representedObject as? Request else { return }
-        performObserverRequest(request)
-    }
     func controlTextDidChange(_ notification: Notification) {
-        if notification.object as? NSSearchField === search { refresh() }
+        if notification.object as? NSSearchField === sidebar.search { refresh() }
         if notification.object as? NSTextField === address {
             addressWasEdited = true
             addressDraft = address.stringValue
@@ -634,14 +268,11 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         }
     }
     private func showAddressHint(_ message: String) {
-        addressHint.stringValue = message
-        addressHint.isHidden = false
-        addressHintBar.isHidden = false
+        page.setAddressHint(message)
         address.setAccessibilityHelp(message)
     }
     private func clearAddressHint() {
-        addressHint.isHidden = true
-        addressHintBar.isHidden = true
+        page.setAddressHint(nil)
         address.setAccessibilityHelp(nil)
     }
     private func beginAddressEditing() {
@@ -672,12 +303,8 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     func windowDidResignKey(_ notification: Notification) { endAddressSession() }
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         guard !textView.hasMarkedText() else { return false }
-        if control === search, selector == #selector(NSResponder.insertNewline(_:)) {
-            if !search.stringValue.isEmpty, !filteredSpaces.isEmpty {
-                let index = filteredSpaces.indices.contains(table.selectedRow) ? table.selectedRow : 0
-                selectSpace(filteredSpaces[index])
-                window.makeFirstResponder(table)
-            }
+        if control === sidebar.search, selector == #selector(NSResponder.insertNewline(_:)) {
+            sidebar.chooseSearchResult(in: window)
             return true
         }
         if control === address, selector == #selector(NSResponder.insertNewline(_:)), currentSpace?.busy == true {
@@ -695,30 +322,15 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         clearAddressHint()
         window.makeFirstResponder(nil); finishAddressEditing(); return true
     }
-    func tableViewSelectionDidChange(_ notification: Notification) {
-        guard !refreshing else { return }
-        guard filteredSpaces.indices.contains(table.selectedRow) else { refresh(); return }
-        selectSpace(filteredSpaces[table.selectedRow])
-    }
     private func selectSpace(_ space: Space) {
         selectedSpace = space.record.id
         transientMessage = nil; saveSelection(); refresh()
-    }
-    @objc private func clearSearch() {
-        search.stringValue = ""
-        refresh()
-        window.makeFirstResponder(search)
-    }
-    @objc private func pickTab(_ sender: NSButton) {
-        guard let space = currentSpace else { return }
-        sender.state = .on
-        selectTab(at: sender.tag, in: space)
     }
     private func selectTab(at index: Int, in space: Space) {
         guard space.tabs.indices.contains(index) else { return }
         selectedTabs[space.record.id] = space.tabs[index].id
         transientMessage = nil; saveSelection(); refresh()
-        if tabStack.arrangedSubviews.indices.contains(index) { let view = tabStack.arrangedSubviews[index]; view.scrollToVisible(view.bounds) }
+        tabStrip.scrollToTab(at: index)
     }
     @objc private func showAnnouncedPopup() {
         guard let space = currentSpace, let popup = announcedPopup,
@@ -737,38 +349,20 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     func refresh() {
         guard !refreshing else { return }
         refreshing = true; defer { refreshing = false }
-        filteredSpaces = model.spaces.filter { search.stringValue.isEmpty || $0.record.name.localizedCaseInsensitiveContains(search.stringValue) }
+        sidebar.updateFilter(spaces: model.spaces)
         if currentSpace == nil, selectedSpace != model.spaces.first?.record.id {
             selectedSpace = model.spaces.first?.record.id
             saveSelection()
         }
         window.title = currentSpace.map { "\($0.record.name) — Agent WebKit" } ?? "Agent WebKit"
-        noSearchResults.isHidden = search.stringValue.isEmpty || !filteredSpaces.isEmpty
-        table.enclosingScrollView?.isHidden = !noSearchResults.isHidden
-        table.reloadData()
-        if let row = filteredSpaces.firstIndex(where: { $0.record.id == selectedSpace }) { table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false) }
-        else { table.deselectAll(nil) }
-        spaceCount.stringValue = search.stringValue.isEmpty ? "\(model.spaces.count) 个 Space · 本机服务" : "找到 \(filteredSpaces.count) 个 Space"
-        let pending = model.records.filter(\.deleting).count
-        if pending > 0 { spaceCount.stringValue += " · \(pending) 待清理" }
-        spaceCount.toolTip = spaceCount.stringValue
-        createButton.isEnabled = !model.restoring
-        createFromSearch.isEnabled = createButton.isEnabled
-        spaceActions.isEnabled = table.selectedRow >= 0 && currentSpace?.busy == false && !model.restoring
+        sidebar.refresh(model: model, selectedID: selectedSpace, currentSpace: currentSpace)
         activityExpiry?.cancel()
-        emptyAction.title = "打开网页"
-        emptyText.maximumNumberOfLines = 0
-        emptyText.toolTip = nil
-        emptyAction.isEnabled = !model.restoring && !creatingTab && currentSpace?.busy != true
-        emptyCreateSpace.isEnabled = !model.restoring
-        emptyCreateSpace.isHidden = !model.spaces.isEmpty
+        page.prepareEmptyState(restoring: model.restoring, creatingTab: creatingTab, space: currentSpace, hasSpaces: !model.spaces.isEmpty)
         guard let space = currentSpace else {
             endAddressSession()
-            displayed?.park(); displayed = nil; empty.isHidden = !search.stringValue.isEmpty
-            emptyTitle.stringValue = "浏览会话，各自独立"
-            emptyText.stringValue = "在地址栏输入网址，按回车打开。\n首次打开会创建 personal Space，使用直连和系统证书校验。"
-            tabStack.arrangedSubviews.forEach { $0.removeFromSuperview() }; tabSignature = ""
-            tabWidths = []; allTabs.isHidden = true
+            displayed?.park(); displayed = nil
+            page.showNoSpace(searching: !sidebar.search.stringValue.isEmpty)
+            tabStrip.clear()
             updateStatus(); return
         }
         let selected = selectedTabs[space.record.id]
@@ -777,24 +371,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
             selectedTabs[space.record.id] = tab.id
             saveSelection()
         }
-        let blank = space.suspended || tab?.persistedURL == "about:blank"
-        empty.isHidden = !blank
-        if space.suspended {
-            emptyTitle.stringValue = "“\(space.record.name)”已休眠"
-            let target = space.record.tabs.first { $0.id == selected } ?? space.record.tabs.first
-            let destination = target.map {
-                if let title = $0.title, !title.isEmpty { return title }
-                if $0.url == "about:blank" { return "新标签页" }
-                return URL(string: $0.url)?.observerDisplayAddress ?? "上次的页面"
-            } ?? "新标签页"
-            emptyText.stringValue = "恢复后将打开 \(space.record.tabs.count) 个标签页，回到“\(destination)”。\n网站数据已保留，未提交的表单内容已清除。"
-            emptyText.maximumNumberOfLines = 3
-            emptyText.toolTip = destination
-            emptyAction.title = "恢复 Space"
-        } else if blank {
-            emptyTitle.stringValue = "新标签页"
-            emptyText.stringValue = "在地址栏输入网址，按回车打开。\n准备好后，点「交给 Agent」复制接管命令。"
-        }
+        let blank = page.showEmptyState(in: space, tab: tab, selected: selected)
         let now = ContinuousClock.now
         if let expiry = space.activity.values.compactMap(\.recentUntil).filter({ $0 > now }).min() {
             activityExpiry = Task { @MainActor [weak self] in
@@ -803,14 +380,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
                 self?.refresh()
             }
         }
-        let signature = space.tabs.map {
-            let activity = space.activity[$0.id]
-            return "\($0.id)|\($0.webView.title ?? "")|\($0.persistedURL)|\(activity?.executing ?? 0)|\(activity?.recent == true)|\($0.dialogs.pendingCount)|\($0.downloads.hasActive)"
-        }.joined() + "\(tab?.id.uuidString ?? "")|\(space.busy)"
-        if signature != tabSignature {
-            tabSignature = signature
-            updateTabs(in: space, activeTab: tab)
-        }
+        tabStrip.refresh(in: space, activeTab: tab)
         if displayed !== tab {
             // An unfinished address belongs to the tab where it was typed.
             pageActionError = nil
@@ -820,230 +390,21 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
             if let tab {
                 tab.inputFocusConflict = { [weak self] in
                     guard let self else { return false }
-                    return self.editingAddress || (self.window.isKeyWindow && (self.search.currentEditor() != nil || self.pageFind.isEditingQuery))
+                    return self.editingAddress || (self.window.isKeyWindow && (self.sidebar.search.currentEditor() != nil || self.pageFind.isEditingQuery))
                 }
-                tab.mount(in: host)
+                tab.mount(in: page.host)
             }
         }
         tab?.webView.isHidden = blank
         // A view hidden for the blank state must become visible when parked in another Space.
-        if blank { host.addSubview(empty, positioned: .above, relativeTo: tab?.webView) }
+        if blank { page.bringEmptyStateForward(over: tab) }
         updateStatus()
     }
 
-    private func updateTabs(in space: Space, activeTab: Tab?) {
-        allTabs.menu?.items.dropFirst().forEach { allTabs.menu?.removeItem($0) }
-        let existing = tabStack.arrangedSubviews.compactMap { $0 as? PageTabView }
-        let canReuse = existing.count == space.tabs.count && zip(existing, space.tabs).allSatisfy { $0.tabID == $1.id }
-        if !canReuse {
-            tabStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-            tabWidths = []
-        }
-        for (index, candidate) in space.tabs.enumerated() {
-            let title = tabTitle(candidate)
-            let isSelected = candidate === activeTab
-            let item = NSMenuItem(title: title, action: #selector(selectListedTab(_:)), keyEquivalent: "")
-            item.target = self; item.representedObject = candidate.id
-            item.state = isSelected ? .on : .off; item.toolTip = candidate.persistedURL
-            allTabs.menu?.addItem(item)
-
-            let activity = space.activity[candidate.id]
-            let running = (activity?.executing ?? 0) > 0
-            let (symbol, activityLabel, symbolColor): (String, String, NSColor?)
-            if candidate.dialogs.hasPending { (symbol, activityLabel, symbolColor) = ("exclamationmark.bubble.fill", "网页等待回复", .systemOrange) }
-            else if running { (symbol, activityLabel, symbolColor) = ("hourglass", "正在执行操作", .controlAccentColor) }
-            else if candidate.downloads.hasActive { (symbol, activityLabel, symbolColor) = ("arrow.down.circle.fill", "正在下载", .controlAccentColor) }
-            else if activity?.recent == true { (symbol, activityLabel, symbolColor) = ("globe", "最近 5 分钟有 Agent 活动", nil) }
-            else { (symbol, activityLabel, symbolColor) = ("globe", "", nil) }
-            let lastTabHint = space.tabs.count == 1 ? "每个 Space 至少保留一个标签页。要释放页面，可休眠 Space。" : ""
-            let tooltip = [title, candidate.persistedURL, activityLabel, lastTabHint, candidate.id.uuidString].filter { !$0.isEmpty }.joined(separator: "\n")
-            let canClose = space.tabs.count > 1 && !space.busy && !running
-            let baseImage = NSImage(systemSymbolName: symbol, accessibilityDescription: activityLabel)
-            let tabImage = symbolColor.flatMap { baseImage?.withSymbolConfiguration(.init(paletteColors: [$0])) } ?? baseImage
-
-            let row: PageTabView
-            if canReuse {
-                row = existing[index]
-            } else {
-                let button = PageTabButton(title: title, target: self, action: #selector(pickTab(_:)))
-                button.setButtonType(.toggle); button.isBordered = false
-                (button.cell as? NSButtonCell)?.highlightsBy = []
-                (button.cell as? NSButtonCell)?.showsStateBy = []
-                button.setAccessibilityRole(.radioButton)
-                button.cell?.lineBreakMode = .byTruncatingTail
-                button.imagePosition = .imageLeading
-                let close = NSButton(image: NSImage(systemSymbolName: "xmark", accessibilityDescription: "关闭标签页")!, target: self, action: #selector(closeTabButton(_:)))
-                close.isBordered = false
-                close.identifier = NSUserInterfaceItemIdentifier(candidate.id.uuidString)
-                button.state = isSelected ? .on : .off
-                close.isEnabled = canClose
-                row = PageTabView(tabID: candidate.id, titleButton: button, closeButton: close)
-                let spaceID = space.record.id
-                let tabID = candidate.id
-                row.onMiddleClick = { [weak self] in self?.closeTab(spaceID: spaceID, tabID: tabID) }
-                row.contextMenuProvider = { [weak self] in self?.makeTabContextMenu(spaceID: spaceID, tabID: tabID) }
-                let width = row.widthAnchor.constraint(equalToConstant: 220)
-                width.isActive = true; tabWidths.append(width)
-                tabStack.addArrangedSubview(row)
-            }
-            let button = row.titleButton
-            button.title = title
-            button.tag = index
-            button.font = .systemFont(ofSize: 13, weight: isSelected ? .medium : .regular)
-            button.setAccessibilityValue(isSelected ? 1 : 0)
-            button.contentTintColor = isSelected ? .labelColor : .secondaryLabelColor
-            button.image = tabImage
-            button.toolTip = tooltip
-            button.setAccessibilityHelp(lastTabHint.isEmpty ? nil : lastTabHint)
-            button.setAccessibilityLabel([title, activityLabel].filter { !$0.isEmpty }.joined(separator: "，"))
-
-            let close = row.closeButton
-            close.toolTip = lastTabHint.isEmpty ? "关闭 " + title : lastTabHint
-            close.setAccessibilityLabel("关闭 " + title)
-            close.setAccessibilityHelp(lastTabHint.isEmpty ? nil : lastTabHint)
-            row.toolTip = tooltip
-            row.update(selected: isSelected, canClose: canClose)
-        }
-        resizeTabs()
-    }
-
-    private struct TabMenuTarget {
-        let spaceID: UUID
-        let tabID: UUID
-    }
-
-    private func makeTabContextMenu(spaceID: UUID, tabID: UUID) -> NSMenu? {
-        guard let space = model.spaces.first(where: { $0.record.id == spaceID }),
-              let tab = space.tabs.first(where: { $0.id == tabID }) else { return nil }
-        let menu = NSMenu()
-        menu.autoenablesItems = false
-        let target = TabMenuTarget(spaceID: spaceID, tabID: tabID)
-        let running = (space.activity[tabID]?.executing ?? 0) > 0
-        let canOperate = !space.busy && !model.restoring && window.attachedSheet == nil
-
-        let reloadItem = NSMenuItem(title: "重新加载", action: #selector(contextReloadTab(_:)), keyEquivalent: "")
-        reloadItem.target = self; reloadItem.representedObject = target; reloadItem.isEnabled = canOperate
-        menu.addItem(reloadItem)
-
-        let copyURLItem = NSMenuItem(title: "复制网址", action: #selector(contextCopyTabURL(_:)), keyEquivalent: "")
-        copyURLItem.target = self; copyURLItem.representedObject = tab.persistedURL
-        copyURLItem.isEnabled = tab.persistedURL != "about:blank"
-        menu.addItem(copyURLItem)
-
-        let handoffItem = NSMenuItem(title: "交给 Agent", action: #selector(contextHandoffTab(_:)), keyEquivalent: "")
-        handoffItem.target = self; handoffItem.representedObject = target
-        menu.addItem(handoffItem)
-
-        menu.addItem(.separator())
-
-        let closeItem = NSMenuItem(title: "关闭标签页", action: #selector(contextCloseTab(_:)), keyEquivalent: "")
-        closeItem.target = self; closeItem.representedObject = target
-        closeItem.isEnabled = space.tabs.count > 1 && canOperate && !running
-        menu.addItem(closeItem)
-
-        let closeOthersItem = NSMenuItem(title: "关闭其他标签页", action: #selector(contextCloseOtherTabs(_:)), keyEquivalent: "")
-        closeOthersItem.target = self; closeOthersItem.representedObject = target
-        closeOthersItem.isEnabled = canCloseOthers(in: space, keeping: tabID)
-        menu.addItem(closeOthersItem)
-        return menu
-    }
-
-    @objc private func contextReloadTab(_ sender: NSMenuItem) {
-        guard let target = sender.representedObject as? TabMenuTarget else { return }
-        performObserverRequest(Request(command: "reload", args: [], options: ["space": target.spaceID.uuidString, "tab": target.tabID.uuidString]))
-    }
-    @objc private func contextCopyTabURL(_ sender: NSMenuItem) {
-        guard let url = sender.representedObject as? String, copyToPasteboard(url) else { return }
-        showTransientMessage("已复制网址")
-    }
-    @objc private func contextHandoffTab(_ sender: NSMenuItem) {
-        guard let target = sender.representedObject as? TabMenuTarget,
-              let space = model.spaces.first(where: { $0.record.id == target.spaceID }),
-              let tab = space.tabs.first(where: { $0.id == target.tabID }) else { return }
-        copyHandoffCommand(space: space, tab: tab)
-    }
-    @objc private func contextCloseTab(_ sender: NSMenuItem) {
-        guard let target = sender.representedObject as? TabMenuTarget else { return }
-        closeTab(spaceID: target.spaceID, tabID: target.tabID)
-    }
-    private func canCloseOthers(in space: Space, keeping tabID: UUID) -> Bool {
-        !model.restoring && !space.busy && window.attachedSheet == nil && space.tabs.count > 1
-            && space.tabs.contains { $0.id == tabID }
-            && !space.tabs.contains { $0.id != tabID && (space.activity[$0.id]?.executing ?? 0) > 0 }
-    }
     @objc func closeOtherTabs(_ sender: NSMenuItem) {
         guard let space = currentSpace, let tab = displayed else { return }
-        closeOtherTabs(in: space, keeping: tab.id)
+        tabStrip.closeOtherTabs(in: space, keeping: tab.id)
     }
-    @objc private func contextCloseOtherTabs(_ sender: NSMenuItem) {
-        guard let target = sender.representedObject as? TabMenuTarget,
-              let space = model.spaces.first(where: { $0.record.id == target.spaceID }) else { return }
-        closeOtherTabs(in: space, keeping: target.tabID)
-    }
-    private func closeOtherTabs(in space: Space, keeping tabID: UUID) {
-        guard canCloseOthers(in: space, keeping: tabID) else { return }
-        let others = space.tabs.filter { $0.id != tabID }
-        guard !others.isEmpty else { return }
-        var impacts: [(tabID: UUID, impact: ObserverImpact?)] = []
-        var downloadCount = 0
-        var dialogCount = 0
-        var recentCount = 0
-        for tab in others {
-            do {
-                let impact = try space.observerImpact("tab.close", tabID: tab.id)
-                impacts.append((tab.id, impact))
-                if let impact {
-                    downloadCount += impact.downloads.count
-                    dialogCount += impact.dialogs.count
-                    if impact.recentActivity != nil { recentCount += 1 }
-                }
-            } catch {
-                presentFailure(failure(error))
-                return
-            }
-        }
-        func executeBatch() {
-            Task { @MainActor in
-                for entry in impacts {
-                    let request = Request(command: "tab.close", args: [], options: ["space": space.record.id.uuidString, "tab": entry.tabID.uuidString])
-                    var consent = entry.impact
-                    while true {
-                        var changedImpact: ObserverImpact?
-                        let origin = RequestOrigin.closingOtherTabs(keeping: tabID, consent: consent)
-                        let response = await self.model.handle(request, origin: origin) { changedImpact = $0 }
-                        if let impact = changedImpact {
-                            let alert = self.confirmationAlert("标签页状态已变化，继续关闭？",
-                                detail: impact.detail + "\n取消将停止本次操作，已关闭的标签页不会恢复。",
-                                action: "关闭并继续", destructive: true)
-                            guard await alert.beginSheetModal(for: self.window) == .alertFirstButtonReturn else { return }
-                            consent = impact
-                            continue
-                        }
-                        if response["ok"] as? Bool != true,
-                           (response["error"] as? [String: Any])?["code"] as? String != "tab_not_found" {
-                            self.presentFailure(response)
-                            return
-                        }
-                        break
-                    }
-                }
-                self.refresh()
-            }
-        }
-        let hasImpact = downloadCount > 0 || dialogCount > 0 || recentCount > 0
-        if hasImpact {
-            var lines = ["将关闭「\(space.record.name)」中的其余 \(others.count) 个标签页。"]
-            if downloadCount > 0 { lines.append("将中断 \(downloadCount) 项活跃下载。") }
-            if dialogCount > 0 { lines.append("将关闭 \(dialogCount) 个待处理的网页对话框。") }
-            if recentCount > 0 { lines.append("其中 \(recentCount) 个标签页在最近 5 分钟内有 Agent 操作。") }
-            confirm("关闭其他 \(others.count) 个标签页？", detail: lines.joined(separator: "\n"), action: "关闭其他标签页", destructive: true) {
-                executeBatch()
-            }
-        } else {
-            executeBatch()
-        }
-    }
-
     private func updateStatus() {
         let space = currentSpace; let tab = displayed
         pageFind.bind(to: tab?.persistedURL == "about:blank" ? nil : tab?.webView, document: tab?.navigationSequence)
@@ -1051,16 +412,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         announcedPopup = tab.flatMap { opener in
             space?.tabs.last { $0.hasUnreadPopupNotice && $0.openerTabID == opener.id }
         }
-        popupNotice.isHidden = announcedPopup == nil
-        if let popup = announcedPopup {
-            let title = popup.webView.title.flatMap { $0.isEmpty ? nil : $0 } ?? URL(string: popup.persistedURL)?.host
-            popupNoticeText.stringValue = title.map { "此网页打开了新标签页「\($0)」" } ?? "此网页打开了新标签页"
-            popupNoticeText.toolTip = popupNoticeText.stringValue
-        }
-        viewportButton.isHidden = tab?.fixedViewport == nil
-        if let size = tab?.fixedViewport {
-            viewportButton.title = "预览 \(Int(size.width)) × \(Int(size.height))"
-        }
+        page.updatePopup(announcedPopup, tab: tab)
         if infoPopover.isShown {
             if let infoSpace, !model.spaces.contains(where: { $0 === infoSpace }) { infoPopover.close() }
             else { detailsState?.objectWillChange.send() }
@@ -1076,20 +428,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
             item.image = NSImage(systemSymbolName: active ? "arrow.down.circle.fill" : "arrow.down.circle",
                                  accessibilityDescription: item.toolTip)
         }
-        let pendingDialog = tab?.dialogs.firstPending
-        let pendingCount = tab?.dialogs.pendingCount ?? 0
-        let previousDialog = dialogArea.arrangedSubviews.first as? PageDialogView
-        if previousDialog?.dialogID != pendingDialog?.id {
-            previousDialog?.removeFromSuperview()
-            if let pendingDialog, let tab {
-                let view = PageDialogView(pendingDialog, totalPending: pendingCount, store: tab.dialogs)
-                dialogArea.addArrangedSubview(view)
-                view.widthAnchor.constraint(equalTo: dialogArea.widthAnchor).isActive = true
-            }
-            dialogArea.isHidden = pendingDialog == nil
-        } else if pendingDialog != nil {
-            previousDialog?.updatePendingCount(pendingCount)
-        }
+        page.updateDialogs(for: tab)
         let url = tab?.persistedURL == "about:blank" ? "" : tab?.persistedURL ?? ""
         if !editingAddress {
             let compact: String
@@ -1107,8 +446,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         address.placeholderString = "输入网址"
         address.isEnabled = (tab != nil || model.spaces.isEmpty) && !model.restoring && !creatingTab
         let isLoading = tab?.webView.isLoading == true
-        progress.doubleValue = isLoading ? max(0.03, tab?.webView.estimatedProgress ?? 0) : 0
-        progress.alphaValue = isLoading ? 1 : 0
+        page.updateProgress(for: tab, loading: isLoading)
         if isLoading {
             reloadButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "停止加载")
             reloadButton.action = #selector(stopLoadingPage)
@@ -1122,9 +460,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
             reloadButton.setAccessibilityLabel("重新加载")
             reloadButton.isEnabled = canReload
         }
-        let runningTab = space?.tabs.first { $0.id == space?.busyTabID }
         if editingAddress, addressWasEdited, space?.busy == true { tab?.pendingAddressDraft = addressDraft }
-        busyTarget.isHidden = runningTab == nil || runningTab === tab
         handoff.isEnabled = tab != nil
         handoff.title = copiedTab != nil && copiedTab == tab?.id ? "已复制 ✓" : "交给 Agent"
         handoff.setAccessibilityLabel(copiedTab != nil && copiedTab == tab?.id ? "已复制接管命令" : "交给 Agent，复制当前页面的接管命令")
@@ -1133,72 +469,14 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         if proxyState != .blocked || checkedBlockedProxySpace != selectedSpace { checkedBlockedProxySpace = nil }
         let recheckProxy = proxyState != .ready
         let networkPaused = recheckProxy || networkError != nil
-        if pendingDialog != nil { status.stringValue = "网页等待回复" }
-        else if model.restoring { status.stringValue = "正在恢复会话…" }
-        else if networkPaused { status.stringValue = "网络连接已暂停" }
-        else if space?.busy == true {
-            let name = runningTab.map(tabTitle) ?? "当前 Space"
-            status.stringValue = editingAddress ? "「\(name)」执行中，结束后按回车打开" : "「\(name)」正在执行"
-        }
-        else if let transientMessage { status.stringValue = transientMessage }
-        else if space?.suspended == true { status.stringValue = "Space 已休眠" }
-        else if isLoading { status.stringValue = "正在加载…" }
-        else { status.stringValue = "准备就绪" }
-        status.toolTip = status.stringValue
-        let scheme = tab.flatMap { URL(string: $0.committedDocumentURL)?.scheme?.lowercased() }
-        let connection: String
-        switch scheme {
-        case "http": connection = "HTTP（未加密）"
-        case "https": connection = "HTTPS"
-        default: connection = "无网页连接"
-        }
-        let insecureHTTPS = scheme == "https" && space?.record.tls?.ignoreCertificateErrors == true
-        let warning = networkPaused ? "网络已暂停" : insecureHTTPS ? "允许证书错误" : nil
-        security.stringValue = space == nil ? "" : [connection, warning].compactMap { $0 }.joined(separator: " · ")
-        security.textColor = warning == nil ? .secondaryLabelColor : .systemOrange
-        security.toolTip = space.map { "当前页：\(connection)\nSpace 证书策略：\(certificatePolicy(of: $0))" }
+        page.updateFooter(for: space, tab: tab, restoring: model.restoring, networkPaused: networkPaused,
+                          editingAddress: editingAddress, transientMessage: transientMessage, loading: isLoading)
         if let notice = pageActionError, notice.tab != tab?.id || notice.navigation != tab?.navigationSequence ||
             (notice.clearsAfterLoad && tab?.navigationPending == false && tab?.webView.isLoading == false) {
             pageActionError = nil
         }
-        let rejection = tab?.observerDismissedRejection == true ? nil : tab?.lastNavigationRejection
-        let actionMessage = pageActionError?.message
-        let error = networkError?.localizedDescription ?? actionMessage ?? rejection?.localizedDescription ?? (tab?.unresponsive == true ? "页面未响应。重新加载可恢复标签页；上次操作可能已部分生效。" : tab?.navigationError?.localizedDescription)
-        let failedNavigation = !networkPaused && actionMessage == nil && rejection == nil && tab?.unresponsive == false && tab?.hasFailedNavigation == true
-        let target = failedNavigation ? tab?.failedNavigationTarget : nil
-        if checkedBlockedProxySpace != nil {
-            bannerText.stringValue = "系统代理仍已开启。关闭后可再次检查。"
-        } else if recheckProxy {
-            bannerText.stringValue = proxyState == .needsReload ? "系统代理设置已更改。重新检查后可恢复此页面。" : "直连已暂停。请关闭系统代理，然后重新检查。"
-        } else if actionMessage == nil && rejection?.code == "unsupported_navigation" {
-            bannerText.stringValue = "未打开此链接。浏览器支持 HTTP、HTTPS 和 about:blank，当前页面已保留。"
-        } else if let target, let error {
-            let address = target.url.observerDisplayAddress
-            let detail = error.replacingOccurrences(of: target.url.absoluteString, with: address)
-            bannerText.stringValue = "无法打开 \(address)\n\(detail)"
-        } else {
-            bannerText.stringValue = error ?? ""
-        }
-        if errorTab != tab?.id || fullError.string != bannerText.stringValue || error == nil {
-            errorExpanded = false
-            errorTab = tab?.id
-            fullError.string = bannerText.stringValue
-            fullError.scrollRangeToVisible(NSRange(location: 0, length: 0))
-        }
-        bannerText.toolTip = bannerText.stringValue
-        banner.isHidden = error == nil
-        let dismissible = rejection != nil || actionMessage != nil
-        if recheckProxy {
-            retry.title = "重新检查"; retry.action = #selector(recheckSystemProxy)
-        } else if dismissible {
-            retry.title = "忽略"; retry.action = #selector(dismissPageNotice)
-        } else {
-            retry.title = failedNavigation ? "重试此网址" : "重新加载"
-            retry.action = failedNavigation ? #selector(retryFailedNavigation) : #selector(reloadPage)
-        }
-        retry.isHidden = (networkError != nil && !recheckProxy) || (failedNavigation && target?.isGET != true)
-        updateErrorDisclosure()
-        retry.isEnabled = recheckProxy ? space != nil && space?.busy == false : dismissible || canReload
+        page.updateNotice(for: space, tab: tab, networkError: networkError, actionMessage: pageActionError?.message,
+                          proxyState: proxyState, checkedBlockedProxy: checkedBlockedProxySpace != nil, canReload: canReload)
         window.toolbar?.items.first { $0.itemIdentifier == .copyCommand }?.isEnabled = tab != nil
         window.toolbar?.items.first { $0.itemIdentifier == .details }?.isEnabled = space != nil
         window.toolbar?.items.first { $0.itemIdentifier == .downloads }?.isEnabled = space != nil
@@ -1206,58 +484,12 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         window.toolbar?.items.first { $0.itemIdentifier == .back }?.isEnabled = canTraverse(back: true)
         window.toolbar?.items.first { $0.itemIdentifier == .forward }?.isEnabled = canTraverse(back: false)
     }
-    @objc private func toggleErrorDetails() {
-        guard !errorDisclosure.isHiddenOrHasHiddenAncestor, window.attachedSheet == nil else { return }
-        errorExpanded.toggle()
-        updateErrorDisclosure()
-    }
-    @objc private func updateErrorDisclosure() {
-        // Measure at the width the compact text would have without the disclosure button.
-        let width = errorMessageColumn.bounds.width + (errorDisclosure.isHidden ? 0 : errorDisclosure.bounds.width + banner.spacing)
-        let font = bannerText.font ?? NSFont.systemFont(ofSize: 12)
-        let height = (bannerText.stringValue as NSString).boundingRect(with: NSSize(width: max(1, width), height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font]).height
-        let truncated = !banner.isHidden && width > 0 && ceil(height) > 2 * ceil(errorTextLayout.defaultLineHeight(for: font))
-        if !truncated { errorExpanded = false }
-        errorDisclosure.isHidden = !truncated
-        errorDisclosure.title = errorExpanded ? "收起" : "展开"
-        errorDisclosure.setAccessibilityLabel(errorExpanded ? "收起错误信息" : "展开完整错误信息")
-        errorDisclosure.setAccessibilityExpanded(errorExpanded)
-        errorScroll.isHidden = !errorExpanded
-        bannerText.isHidden = errorExpanded
-    }
     private var canCreateTab: Bool {
-        !model.restoring && !creatingTab && currentSpace?.busy != true && (search.stringValue.isEmpty || table.selectedRow >= 0)
+        !model.restoring && !creatingTab && currentSpace?.busy != true && (sidebar.search.stringValue.isEmpty || sidebar.hasSelection)
     }
     private var canReload: Bool { displayed != nil && currentSpace?.busy == false && !model.restoring }
     private var canStopLoading: Bool {
         displayed?.webView.isLoading == true && !model.restoring && currentSpace?.busyOrigin != .agent
-    }
-    private func tabTitle(_ tab: Tab) -> String {
-        if let title = tab.webView.title, !title.isEmpty { return title }
-        return tab.persistedURL == "about:blank" ? "新标签页" : URL(string: tab.persistedURL)?.host ?? "页面"
-    }
-    @objc private func selectListedTab(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? UUID, let space = currentSpace,
-              let index = space.tabs.firstIndex(where: { $0.id == id }) else { return }
-        selectTab(at: index, in: space)
-    }
-    @objc private func resizeTabs(_ notification: Notification? = nil) {
-        guard tabBar.bounds.width > 0, !tabWidths.isEmpty else { return }
-        let count = CGFloat(tabWidths.count)
-        let available = tabBar.bounds.width - tabStack.edgeInsets.left - tabStack.edgeInsets.right - (count - 1) * tabStack.spacing
-        let longest = tabStack.arrangedSubviews.compactMap { ($0 as? PageTabView)?.titleButton.intrinsicContentSize.width }.max() ?? 0
-        let fits = available / count >= max(140, longest + 54)
-        allTabs.isHidden = fits
-        let width = max(140, floor((available - (fits ? 0 : 32)) / count))
-        for constraint in tabWidths where constraint.constant != width { constraint.constant = width }
-        tabStack.frame.size = NSSize(width: count * width + (count - 1) * tabStack.spacing + tabStack.edgeInsets.left + tabStack.edgeInsets.right, height: 38)
-        tabStack.layoutSubtreeIfNeeded()
-        if let space = currentSpace, let selected = selectedTabs[space.record.id],
-           let index = space.tabs.firstIndex(where: { $0.id == selected }), tabStack.arrangedSubviews.indices.contains(index) {
-            let active = tabStack.arrangedSubviews[index]
-            active.scrollToVisible(active.bounds)
-        }
     }
     private var preferredAddressWidth: CGFloat { min(560, max(150, window.frame.width - 510)) }
     func windowDidResize(_ notification: Notification) { addressWidth?.constant = preferredAddressWidth }
@@ -1273,7 +505,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         let lastTab = currentSpace?.record.tabs.count == 1
         if menuItem.action == #selector(closeCurrentTab(_:)) { menuItem.title = lastTab ? "隐藏观察窗口" : "关闭当前标签页" }
         if menuItem.action == #selector(toggleSpaceSuspension(_:)) || menuItem.action == #selector(deleteCurrentSpace(_:)) {
-            bindSpaceAction(menuItem, space: currentSpace, delete: menuItem.action == #selector(deleteCurrentSpace(_:)))
+            ObserverSidebar.bindSpaceAction(menuItem, space: currentSpace, delete: menuItem.action == #selector(deleteCurrentSpace(_:)))
         }
         if menuItem.action == #selector(toggleSidebar(_:)) {
             menuItem.title = split.splitViewItems.first?.isCollapsed == true ? "显示侧边栏" : "隐藏侧边栏"
@@ -1289,10 +521,10 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         if menuItem.action == #selector(copyCommand) { return displayed != nil }
         if menuItem.action == #selector(closeOtherTabs(_:)) {
             guard let space = currentSpace, let tab = displayed else { return false }
-            return canCloseOthers(in: space, keeping: tab.id)
+            return tabStrip.canCloseOthers(in: space, keeping: tab.id)
         }
         if menuItem.action == #selector(showDetails(_:)) || menuItem.action == #selector(showDownloads) || menuItem.action == #selector(copyCurrentSpaceID) { return currentSpace != nil }
-        if menuItem.action == #selector(toggleSpaceSuspension(_:)) || menuItem.action == #selector(deleteCurrentSpace(_:)) { return spaceActions.isEnabled }
+        if menuItem.action == #selector(toggleSpaceSuspension(_:)) || menuItem.action == #selector(deleteCurrentSpace(_:)) { return sidebar.actionsEnabled }
         if menuItem.action == #selector(reloadPage) { return canReload }
         if menuItem.action == #selector(stopLoadingPage) { return canStopLoading }
         if menuItem.action == #selector(zoomIn(_:)) { return canZoom && (displayed?.webView.pageZoom ?? 1) < 3.0 }
@@ -1342,7 +574,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
             let response = await model.handle(request, origin: .observer)
             creatingTab = false
             guard response["ok"] as? Bool == true, let result = response["result"] as? [String: Any] else {
-                presentFailure(response); return
+                window.presentObserverFailure(response); return
             }
             // Target the IDs acknowledged by creation, even if the observer selection changed.
             let createdSpace = spaceID ?? (result["id"] as? String).flatMap(UUID.init(uuidString:))
@@ -1350,9 +582,9 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
             let createdTab = (result["tabId"] as? String ?? tabs?.first?["tabId"] as? String).flatMap(UUID.init(uuidString:))
             guard let createdSpace, let createdTab else { refresh(); return }
             selectedSpace = createdSpace; selectedTabs[createdSpace] = createdTab
-            search.stringValue = ""; transientMessage = nil; saveSelection()
+            sidebar.search.stringValue = ""; transientMessage = nil; saveSelection()
             refresh()
-            if let view = tabStack.arrangedSubviews.last { view.scrollToVisible(view.bounds) }
+            tabStrip.scrollToLastTab()
             if let url {
                 window.makeFirstResponder(displayed?.webView)
                 performObserverRequest(Request(command: "open", args: [url], options: ["space": createdSpace.uuidString, "tab": createdTab.uuidString]))
@@ -1442,30 +674,8 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         guard let tab = displayed, !space.busy, (space.activity[tab.id]?.executing ?? 0) == 0 else { return }
         closeTab(spaceID: space.record.id, tabID: tab.id)
     }
-    @objc private func closeTabButton(_ sender: NSButton) {
-        guard let space = currentSpace, let raw = sender.identifier?.rawValue, let tabID = UUID(uuidString: raw) else { return }
-        closeTab(spaceID: space.record.id, tabID: tabID)
-    }
     private func closeTab(spaceID: UUID, tabID: UUID) {
         performObserverRequest(Request(command: "tab.close", args: [], options: ["space": spaceID.uuidString, "tab": tabID.uuidString]))
-    }
-    private func confirm(_ title: String, detail: String, action: String, destructive: Bool = false, critical: Bool = false, perform: @escaping () -> Void) {
-        let alert = confirmationAlert(title, detail: detail, action: action, destructive: destructive, critical: critical)
-        alert.beginSheetModal(for: window) { if $0 == .alertFirstButtonReturn { perform() } }
-    }
-
-    private func confirmationAlert(_ title: String, detail: String, action: String, destructive: Bool, critical: Bool = false) -> NSAlert {
-        let alert = NSAlert()
-        alert.alertStyle = critical ? .critical : .warning
-        alert.messageText = title; alert.informativeText = detail
-        let actionButton = alert.addButton(withTitle: action)
-        if destructive {
-            actionButton.hasDestructiveAction = true
-            actionButton.keyEquivalent = ""
-        }
-        let cancelButton = alert.addButton(withTitle: "取消")
-        cancelButton.keyEquivalent = "\u{1b}"
-        return alert
     }
     @objc func createSpace() {
         guard !model.restoring, window.attachedSheet == nil else { return }
@@ -1479,7 +689,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
                     sheet.finishSubmission(error: (response["error"] as? [String: Any])?["message"] as? String ?? "创建失败，请重试。")
                     return
                 }
-                self.search.stringValue = ""
+                self.sidebar.search.stringValue = ""
                 self.selectedSpace = id
                 self.transientMessage = nil
                 self.saveSelection()
@@ -1491,19 +701,12 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     }
     @objc func toggleSpaceSuspension(_ sender: NSMenuItem) { performSpaceMenuAction(sender) }
     @objc func deleteCurrentSpace(_ sender: NSMenuItem) { performSpaceMenuAction(sender) }
-    private func bindSpaceAction(_ item: NSMenuItem, space: Space?, delete: Bool) {
-        item.title = delete ? "删除 Space…" : space?.suspended == true ? "恢复 Space" : "休眠 Space…"
-        item.representedObject = space.map {
-            Request(command: delete ? "space.delete" : $0.suspended ? "space.resume" : "space.suspend", args: [$0.record.id.uuidString], options: [:])
-        }
-    }
     @objc private func prepareSpaceMenu(_ notification: Notification) {
         guard let space = currentSpace else { return }
-        bindSpaceAction(suspensionItem, space: space, delete: false)
-        bindSpaceAction(deleteItem, space: space, delete: true)
+        sidebar.prepareActions(for: space)
     }
     @objc private func performSpaceMenuAction(_ item: NSMenuItem) {
-        guard window.attachedSheet == nil, spaceActions.isEnabled, let request = item.representedObject as? Request,
+        guard window.attachedSheet == nil, sidebar.actionsEnabled, let request = item.representedObject as? Request,
               let space = currentSpace, request.args.first == space.record.id.uuidString else { return }
         if request.command == "space.resume" && !space.suspended || request.command == "space.suspend" && space.suspended { return }
         performObserverRequest(request)
@@ -1529,13 +732,13 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
                 if request.command == "tab.close",
                    let space = model.spaces.first(where: { $0.record.id == impact.spaceID }),
                    let target = space.tabs.first(where: { $0.id.uuidString == request.options["tab"] }) {
-                    title = "关闭“\(tabTitle(target))”？"
+                    title = "关闭“\(ObserverTabStrip.title(of: target))”？"
                     let location = URL(string: target.persistedURL)?.host ?? target.persistedURL
                     detail = "\(space.record.name) · \(location)\n\(detail)"
                 }
                 let destructive = ["tab.close", "space.delete"].contains(request.command)
                 let critical = request.command == "space.delete"
-                confirm(title, detail: detail, action: action, destructive: destructive, critical: critical) {
+                window.confirmObserverAction(title, detail: detail, action: action, destructive: destructive, critical: critical) {
                     self.performObserverRequest(request, origin: .confirmed(impact))
                 }
                 return
@@ -1568,7 +771,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
                         if self.currentSpace !== targetSpace { self.selectSpace(targetSpace) }
                         if self.currentSpace === targetSpace { self.showDownloads() }
                     }
-                } else { presentFailure(response) }
+                } else { window.presentObserverFailure(response) }
                 return
             }
             transientExpiry?.cancel(); transientExpiry = nil
@@ -1578,18 +781,12 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
             refresh()
         }
     }
-    private func presentFailure(_ response: [String: Any]) {
-        let message = (response["error"] as? [String: Any])?["message"] as? String ?? "操作未完成，请重试。"
-        let alert = NSAlert(); alert.messageText = "无法完成操作"; alert.informativeText = message
-        alert.beginSheetModal(for: window)
-    }
     @objc private func dismissPageNotice() {
         if pageActionError != nil { pageActionError = nil }
         else { displayed?.observerDismissedRejection = true }
         updateStatus()
     }
-    private enum ProxyRecovery { case ready, blocked, needsReload }
-    private func proxyRecovery(_ networkError: BrowserError?) -> ProxyRecovery {
+    private func proxyRecovery(_ networkError: BrowserError?) -> ObserverPageContent.ProxyRecovery {
         if networkError?.code == "direct_system_proxy_conflict" { return .blocked }
         if (displayed?.navigationError as? BrowserError)?.code == "direct_system_proxy_conflict" { return .needsReload }
         return .ready
@@ -1673,20 +870,15 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
             self?.copiedTab = nil; self?.updateStatus()
         }
     }
-    private func certificatePolicy(of space: Space) -> String {
-        if space.record.tls?.ignoreCertificateErrors == true { return "忽略证书错误" }
-        return space.record.tls == nil ? "系统证书校验" : "系统证书及自定义 CA"
-    }
     private func showPopover(_ popover: NSPopover, toolbarItemID: NSToolbarItem.Identifier) {
         if let toolbar = window.toolbar, toolbar.isVisible,
            let item = toolbar.visibleItems?.first(where: { $0.itemIdentifier == toolbarItemID }) {
             popover.show(relativeTo: item)
-        } else if split.splitViewItems.first?.isCollapsed == false, spaceActions.window != nil, !spaceActions.isHiddenOrHasHiddenAncestor {
-            popover.show(relativeTo: spaceActions.bounds, of: spaceActions, preferredEdge: .maxX)
-        } else {
-            let anchor = NSRect(x: max(0, host.bounds.maxX - 1), y: max(0, host.bounds.maxY - 1), width: 1, height: 1)
-            popover.show(relativeTo: anchor, of: host, preferredEdge: .maxY)
+            return
         }
+        if split.splitViewItems.first?.isCollapsed == false, sidebar.showPopover(popover) { return }
+        let anchor = NSRect(x: max(0, page.host.bounds.maxX - 1), y: max(0, page.host.bounds.maxY - 1), width: 1, height: 1)
+        popover.show(relativeTo: anchor, of: page.host, preferredEdge: .maxY)
     }
     @objc func showDetails(_ sender: Any?) {
         guard let space = currentSpace else { return }
@@ -1727,7 +919,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         let content = SpaceDownloadsView(space: space, refreshToken: downloadsRefreshToken) { [weak self, weak space] message in
             guard let self, let space, self.currentSpace === space else { return }
             self.downloadsPopover.close()
-            self.presentFailure(["error": ["message": message]])
+            self.window.presentObserverFailure(["error": ["message": message]])
         }
         downloadsPopover.contentViewController = NSHostingController(rootView: content)
         showPopover(downloadsPopover, toolbarItemID: .downloads)
@@ -1745,7 +937,7 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
     @objc func toggleSidebar(_ sender: Any?) { split.toggleSidebar(sender) }
     @objc func focusSpaces(_ sender: Any?) {
         if split.splitViewItems.first?.isCollapsed == true { split.toggleSidebar(sender) }
-        window.makeFirstResponder(search)
+        window.makeFirstResponder(sidebar.search)
     }
     @objc func nextTab(_ sender: Any?) { cycleTab(1) }
     @objc func previousTab(_ sender: Any?) { cycleTab(-1) }
@@ -1753,8 +945,8 @@ final class ObserverWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate
         guard let space = currentSpace, let index = space.tabs.firstIndex(where: { $0 === displayed }) else { return }
         selectedTabs[space.record.id] = space.tabs[(index + delta + space.tabs.count) % space.tabs.count].id
         saveSelection(); refresh()
-        if let index = space.tabs.firstIndex(where: { $0 === displayed }), tabStack.arrangedSubviews.indices.contains(index) {
-            let view = tabStack.arrangedSubviews[index]; view.scrollToVisible(view.bounds)
+        if let index = space.tabs.firstIndex(where: { $0 === displayed }) {
+            tabStrip.scrollToTab(at: index)
         }
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool { saveSelection(); sender.orderOut(nil); return false }

@@ -35,8 +35,11 @@ def verify_observer_hig(cli, native, base):
     op('open', full)
     fullscreen = menu('显示', 'toggleFullScreen:')
     assert fullscreen['key'] == 'f' and fullscreen['matchingKeys'] == 1, fullscreen
+    assert probe('tab-list-menu') == dict(listed=1, enabled=1)
     assert menu('文件', 'createSpace', 'yes')['dispatched']
+    assert probe('tab-list-menu') == dict(listed=1, enabled=0)
     assert probe('create-form-input', key='escape')['handled']
+    assert probe('tab-list-menu') == dict(listed=1, enabled=1)
     menu('文件', 'createSpace', 'yes')
     assert probe('create-form-input', name=name, key='return')['handled']
     def form_error():

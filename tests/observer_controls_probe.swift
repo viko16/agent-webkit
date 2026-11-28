@@ -28,14 +28,58 @@ private final class ObserverProbeWindow: ObserverKeyWindow {
     override var isKeyWindow: Bool { dispatchAsKey || super.isKeyWindow }
 }
 
+private extension ObserverSidebar {
+    var probeTable: NSTableView { table }
+    var probeSpaces: [Space] { filteredSpaces }
+    var probeNoResults: NSView { noSearchResults }
+    var probeClear: NSButton { clearSearchButton }
+    var probeCreateFromSearch: NSButton { createFromSearch }
+    var probeCreate: NSButton { createButton }
+    var probeCount: NSTextField { spaceCount }
+    var probeActions: NSPopUpButton { spaceActions }
+}
+
+private extension ObserverTabStrip {
+    func probeRow(_ id: UUID?) -> PageTabView? {
+        tabStack.arrangedSubviews.compactMap { $0 as? PageTabView }.first {
+            $0.closeButton.identifier?.rawValue == id?.uuidString
+        }
+    }
+
+    func probeCloseOthers(_ item: NSMenuItem) -> Bool {
+        item.action == #selector(contextCloseOtherTabs(_:))
+    }
+
+    func probeTabMenu() -> [String: Any] {
+        guard let menu = allTabs.menu else { return [:] }
+        menu.update()
+        let listed = menu.items.filter { $0.action == #selector(selectListedTab(_:)) }
+        return ["listed": listed.count, "enabled": listed.filter(\.isEnabled).count]
+    }
+}
+
+private extension ObserverPageContent {
+    var probeEmpty: NSView { empty }
+    var probeEmptyText: NSTextField { emptyText }
+    var probeEmptyAction: NSButton { emptyAction }
+    var probeFullError: NSTextView { fullError }
+    var probeExpanded: Bool { errorExpanded }
+    var probeDisclosure: NSButton { errorDisclosure }
+    var probeErrorScroll: NSScrollView { errorScroll }
+    var probePopup: NSView { popupNotice }
+    var probeDialogs: NSStackView { dialogArea }
+    var probeRetry: NSButton { retry }
+    var probeHint: NSTextField { addressHint }
+    var probeStatus: NSTextField { status }
+    var probeBanner: NSTextField { bannerText }
+}
+
 extension ObserverWindow {
     private static let probeClock = ContinuousClock.now
 
     func probeControls(_ action: String, request: [String: String]) async -> [String: Any] {
         let tabID = request["tab"].flatMap(UUID.init(uuidString:))
-        let row = tabStack.arrangedSubviews.compactMap { $0 as? PageTabView }.first {
-            $0.closeButton.identifier?.rawValue == tabID?.uuidString
-        }
+        let row = tabStrip.probeRow(tabID)
         var dispatched = false
         var simulatedKey = false
         func click(_ button: NSButton?) {
@@ -48,6 +92,7 @@ extension ObserverWindow {
             return [view] + view.subviews.flatMap { controls($0) }
         }
         switch action {
+        case "tab-list-menu": return tabStrip.probeTabMenu()
         case "hig-toolbar":
             if let width = request["width"].flatMap(Double.init), let content = window.contentView {
                 window.setContentSize(NSSize(width: width, height: content.bounds.height))
@@ -67,7 +112,7 @@ extension ObserverWindow {
             return ["width": window.frame.width, "toolbarVisible": window.toolbar?.isVisible == true,
                     "overflow": installed.filter { !visible.contains($0) }.map(\.rawValue),
                     "sidebarCollapsed": split.splitViewItems.first?.isCollapsed == true,
-                    "sidebarAnchor": spaceActions.window != nil && !spaceActions.isHiddenOrHasHiddenAncestor]
+                    "sidebarAnchor": sidebar.probeActions.window != nil && !sidebar.probeActions.isHiddenOrHasHiddenAncestor]
         case "hig-menu":
             guard let menu = NSApp.mainMenu?.items.compactMap(\.submenu).first(where: { $0.title == request["section"] }),
                   let item = menu.items.first(where: { $0.action.map(NSStringFromSelector) == request["selector"] }),
@@ -89,18 +134,18 @@ extension ObserverWindow {
             window.orderBack(nil)
         case "inspect-hig":
             window.contentView?.layoutSubtreeIfNeeded()
-            return ["errorTextFocused": window.firstResponder === fullError, "title": window.title, "expanded": errorExpanded, "expandable": !errorDisclosure.isHidden,
-                    "fullError": errorScroll.isHidden ? "" : fullError.string, "selectable": fullError.isSelectable,
-                    "bounded": errorScroll.bounds.height <= 100, "editing": editingAddress, "address": address.stringValue,
+            return ["errorTextFocused": window.firstResponder === page.probeFullError, "title": window.title, "expanded": page.probeExpanded, "expandable": !page.probeDisclosure.isHidden,
+                    "fullError": page.probeErrorScroll.isHidden ? "" : page.probeFullError.string, "selectable": page.probeFullError.isSelectable,
+                    "bounded": page.probeErrorScroll.bounds.height <= 100, "editing": editingAddress, "address": address.stringValue,
                     "editor": address.currentEditor()?.string ?? "",
                     "ring": address.focusRingType != .none, "axLabel": address.cell?.accessibilityLabel() ?? "",
                     "axRole": address.cell?.accessibilityRole()?.rawValue ?? "", "axValue": address.cell?.accessibilityValue() as? String ?? "",
                     "axElement": address.cell?.isAccessibilityElement() == true, "axTitle": window.accessibilityTitle() ?? "",
                     "zoom": displayed?.webView.pageZoom ?? 0, "visible": window.isVisible]
         case "focus-error-text":
-            return ["focused": window.makeFirstResponder(fullError) && window.firstResponder === fullError]
+            return ["focused": window.makeFirstResponder(page.probeFullError) && window.firstResponder === page.probeFullError]
         case "expand-error":
-            if !errorDisclosure.isHidden { click(errorDisclosure) }
+            if !page.probeDisclosure.isHidden { click(page.probeDisclosure) }
         case "error-key":
             let probeWindow = window as? ObserverProbeWindow
             probeWindow?.dispatchAsKey = true
@@ -161,16 +206,16 @@ extension ObserverWindow {
             defer { probeWindow?.dispatchAsKey = false }
             let wasEditing = address.currentEditor() != nil
             if !wasEditing { focusSpaces(nil) }
-            let control = wasEditing ? address : search
+            let control = wasEditing ? address : sidebar.search
             let editor = control.currentEditor() as? NSTextView
             let reverse = request["reverse"] == "yes"
             editor?.doCommand(by: reverse ? #selector(NSResponder.insertBacktab(_:)) : #selector(NSResponder.insertTab(_:)))
-            return ["fromEditor": editor != nil, "toAddress": address.currentEditor() != nil, "toSearch": search.currentEditor() != nil]
+            return ["fromEditor": editor != nil, "toAddress": address.currentEditor() != nil, "toSearch": sidebar.search.currentEditor() != nil]
         case "address-backtab-entry":
             let probeWindow = window as? ObserverProbeWindow
             probeWindow?.dispatchAsKey = !window.isKeyWindow
             defer { probeWindow?.dispatchAsKey = false }
-            guard let next = search.nextValidKeyView, next !== address, window.makeFirstResponder(next) else { return ["entered": false] }
+            guard let next = sidebar.search.nextValidKeyView, next !== address, window.makeFirstResponder(next) else { return ["entered": false] }
             window.selectKeyView(preceding: next)
             return ["entered": address.currentEditor() != nil]
         case "details":
@@ -183,7 +228,7 @@ extension ObserverWindow {
                     "visible": infoPopover.isShown && infoPopover.contentViewController?.view.window?.isVisible == true]
         case "close-others":
             if let menu = row?.contextMenuProvider?(),
-               let index = menu.items.firstIndex(where: { $0.action == #selector(contextCloseOtherTabs(_:)) }),
+               let index = menu.items.firstIndex(where: { tabStrip.probeCloseOthers($0) }),
                menu.items[index].isEnabled {
                 menu.performActionForItem(at: index)
                 dispatched = true
@@ -233,10 +278,10 @@ extension ObserverWindow {
             beginAddressEditing()
             address.stringValue = editor.string
             dispatched = control(address, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:)))
-        case "resume-empty": click(emptyAction)
+        case "resume-empty": click(page.probeEmptyAction)
         case "search-return":
             guard await (window as? ObserverProbeWindow)?.prepareForegroundShortcut() == true,
-                  window.makeFirstResponder(search) else { break }
+                  window.makeFirstResponder(sidebar.search) else { break }
             let enter = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
                                          timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
                                          context: nil, characters: "\r", charactersIgnoringModifiers: "\r",
@@ -247,23 +292,23 @@ extension ObserverWindow {
             if let tabID { currentSpace?.activity[tabID]?.agentFinishedAt = .now.advanced(by: .seconds(-301)); refresh() }
         case "pick": click(row?.titleButton)
         case "view-popup":
-            if !popupNotice.isHidden { click(controls(popupNotice).compactMap { $0 as? NSButton }.first { $0.title == "查看新标签页" }) }
+            if !page.probePopup.isHidden { click(controls(page.probePopup).compactMap { $0 as? NSButton }.first { $0.title == "查看新标签页" }) }
         case "edit-prompt":
-            let prompt = controls(dialogArea).compactMap { $0 as? NSTextField }.first { $0.isEditable }
+            let prompt = controls(page.probeDialogs).compactMap { $0 as? NSTextField }.first { $0.isEditable }
             if let prompt {
                 prompt.stringValue = request["text"] ?? ""
                 prompt.delegate?.controlTextDidChange?(Notification(name: NSControl.textDidChangeNotification, object: prompt))
             }
         case "answer-dialog":
-            click(controls(dialogArea).compactMap { $0 as? NSButton }.first { $0.title == request["button"] })
+            click(controls(page.probeDialogs).compactMap { $0 as? NSButton }.first { $0.title == request["button"] })
         case "close": click(row?.closeButton)
         case "reload": click(reloadButton)
         case "retry-navigation":
-            if !retry.isHiddenOrHasHiddenAncestor { click(retry) }
-        case "create-space": click(createButton)
+            if !page.probeRetry.isHiddenOrHasHiddenAncestor { click(page.probeRetry) }
+        case "create-space": click(sidebar.probeCreate)
         case "delete", "suspend", "resume":
-            guard spaceActions.isEnabled, let menu = spaceActions.menu else { break }
-            NotificationCenter.default.post(name: NSPopUpButton.willPopUpNotification, object: spaceActions)
+            guard sidebar.probeActions.isEnabled, let menu = sidebar.probeActions.menu else { break }
+            NotificationCenter.default.post(name: NSPopUpButton.willPopUpNotification, object: sidebar.probeActions)
             if let index = menu.items.firstIndex(where: { ($0.representedObject as? Request)?.command == "space." + action }) {
                 menu.performActionForItem(at: index)
                 dispatched = true
@@ -304,23 +349,23 @@ extension ObserverWindow {
         if dispatched && !action.hasPrefix("stop") { try? await Task.sleep(for: .milliseconds(100)) }
         let activity = tabID.flatMap { currentSpace?.activity[$0] }
         let sheet = controls(window.attachedSheet?.contentView)
-        let dialog = dialogArea.arrangedSubviews.first as? PageDialogView
+        let dialog = page.probeDialogs.arrangedSubviews.first as? PageDialogView
         return ["dispatched": dispatched, "simulatedKey": simulatedKey, "visible": window.isVisible,
                 "addressEnabled": address.isEnabled, "addressDisplay": address.stringValue,
                 "findVisible": !pageFind.isHidden, "canGoForward": canTraverse(back: false),
                 "findFeedback": controls(pageFind).compactMap { ($0 as? NSTextField)?.stringValue },
-                "popupNoticeTabId": popupNotice.isHidden ? NSNull() as Any : announcedPopup?.id.uuidString as Any? ?? NSNull(),
+                "popupNoticeTabId": page.probePopup.isHidden ? NSNull() as Any : announcedPopup?.id.uuidString as Any? ?? NSNull(),
                 "downloadsSpaceId": downloadsPopover.isShown ? downloadsSpace?.record.id.uuidString as Any? ?? NSNull() : NSNull(),
                 "dialogID": dialog?.dialogID as Any? ?? NSNull(),
                 "promptText": controls(dialog).compactMap { $0 as? NSTextField }.first { $0.isEditable }?.stringValue as Any? ?? NSNull(),
                 "tabWaiting": row?.titleButton.toolTip?.contains("网页等待回复") == true,
                 "tabButtonWidth": row?.bounds.width ?? 0,
                 "lastTabHelp": row?.closeButton.toolTip ?? "",
-                "addressHint": addressHint.isHidden ? "" : addressHint.stringValue,
-                "addressValue": address.stringValue, "footer": status.stringValue,
+                "addressHint": page.probeHint.isHidden ? "" : page.probeHint.stringValue,
+                "addressValue": address.stringValue, "footer": page.probeStatus.stringValue,
                 "navigationErrorCode": (displayed?.navigationError as? BrowserError)?.code ?? "",
-                "noticeAction": retry.title, "emptyAction": emptyAction.title, "emptyText": emptyText.stringValue,
-                "bannerText": bannerText.stringValue, "retryVisible": !retry.isHiddenOrHasHiddenAncestor,
+                "noticeAction": page.probeRetry.title, "emptyAction": page.probeEmptyAction.title, "emptyText": page.probeEmptyText.stringValue,
+                "bannerText": page.probeBanner.stringValue, "retryVisible": !page.probeRetry.isHiddenOrHasHiddenAncestor,
                 "buttons": sheet.compactMap { ($0 as? NSButton)?.title },
                 "sheetText": sheet.compactMap { ($0 as? NSTextField)?.stringValue }.joined(separator: " "),
                 "executing": activity?.executing ?? 0, "recent": activity?.recent == true,
