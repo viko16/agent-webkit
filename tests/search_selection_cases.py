@@ -122,6 +122,7 @@ def search_fixture(out):
             return false
         }
 """)
+            if path.name == 'Tab.swift':
                 # Deliver a real WebKit cancellation after its replacement has finished.
                 marker = '    private func failNavigation(_ navigation: WKNavigation?, error: Error, provisional: Bool) {'
                 assert text.count(marker) == 1

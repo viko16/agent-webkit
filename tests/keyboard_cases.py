@@ -222,12 +222,12 @@ def verify_keyboard(cli, base, out, restart, site_events, nonce):
         assert input_source.count(marker) == 1
         generated.write_text(input_source.replace(marker, '        await inputHostAfterKeyState?()\n' + marker))
         sources = [generated if p.name == 'Input.swift' else p for p in sources]
-        browser_source = (root / 'Sources/Browser/Browser.swift').read_text()
+        tab_source = (root / 'Sources/Browser/Tab.swift').read_text()
         marker = '                call.finish(result)\n'
-        assert browser_source.count(marker) == 1
-        generated_browser = out / 'Browser.swift'
-        generated_browser.write_text(browser_source.replace(marker, marker + '                inputHostLateCallback?()\n'))
-        sources = [generated_browser if p.name == 'Browser.swift' else p for p in sources]
+        assert tab_source.count(marker) == 1
+        generated_tab = out / 'Tab.swift'
+        generated_tab.write_text(tab_source.replace(marker, marker + '                inputHostLateCallback?()\n'))
+        sources = [generated_tab if p.name == 'Tab.swift' else p for p in sources]
         build = subprocess.run(['swiftc', '-parse-as-library', *map(str, sources), str(root / 'tests/input_host_probe.swift'),
                                 '-o', str(executable)], capture_output=True, text=True, timeout=90)
         (out / 'input-host-build.log').write_text(build.stdout + build.stderr)
